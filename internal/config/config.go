@@ -10,6 +10,13 @@ import (
 
 type Duration struct{ time.Duration }
 
+func (d Duration) MarshalYAML() (any, error) {
+	if d.Duration == 0 {
+		return "0s", nil
+	}
+	return d.Duration.String(), nil
+}
+
 func (d *Duration) UnmarshalYAML(value *yaml.Node) error {
 	var s string
 	if err := value.Decode(&s); err != nil {
