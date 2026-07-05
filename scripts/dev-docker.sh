@@ -5,6 +5,8 @@ CONFIG_PATH="${1:-configs/bootstrap.yaml}"
 PORT="${VIBE_PROXY_PORT:-8080}"
 ADMIN_TOKEN="${VIBE_PROXY_ADMIN_TOKEN:-admin-token}"
 CONTAINER_NAME="${VIBE_PROXY_CONTAINER:-vibe-proxy-dev}"
+GO_MOD_CACHE_VOLUME="${VIBE_PROXY_GOMODCACHE_VOLUME:-vibe-proxy-gomodcache}"
+GO_BUILD_CACHE_VOLUME="${VIBE_PROXY_GOCACHE_VOLUME:-vibe-proxy-gocache}"
 TMP_CONFIG="/tmp/vibe-proxy-docker-${PORT}.yaml"
 
 if ! command -v docker >/dev/null 2>&1; then
@@ -36,6 +38,8 @@ docker run --rm \
   -p "${PORT}:8080" \
   -v "$PWD":/src \
   -v "$TMP_CONFIG":/tmp/vibe-proxy-docker.yaml:ro \
+  -v "${GO_MOD_CACHE_VOLUME}":/go/pkg/mod \
+  -v "${GO_BUILD_CACHE_VOLUME}":/root/.cache/go-build \
   -w /src \
   -e "VIBE_PROXY_ADMIN_TOKEN=${ADMIN_TOKEN}" \
   -e "ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}" \

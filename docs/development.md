@@ -57,3 +57,11 @@ http://127.0.0.1:8080/
 Stop with `Ctrl+C`.
 
 The Docker launcher rewrites the in-container listen address to `0.0.0.0:8080` so `http://127.0.0.1:8080/` works from your Mac.
+
+The Docker launcher uses named Docker volumes for Go module and build caches, so dependencies are downloaded only the first time unless the cache is cleared.
+
+To clear those caches manually:
+
+```bash
+docker volume rm vibe-proxy-gomodcache vibe-proxy-gocache
+```
