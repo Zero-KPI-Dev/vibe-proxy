@@ -1,0 +1,41 @@
+server:
+  listen: ":8080"
+  read_timeout: "30s"
+  write_timeout: "0s"
+  idle_timeout: "120s"
+
+security:
+  admin_bearer_token_env: "VIBE_PROXY_ADMIN_TOKEN"
+  master_key_env: "VIBE_PROXY_MASTER_KEY"
+
+storage:
+  sqlite_path: "./vibe-proxy.db"
+  retention_days: 14
+
+client_keys:
+  - name: "local-dev"
+    key_hash: "$2a$10$AXRkz.6y44ygdJFk6L1/IO0aRVp9zRMfXDJoBCBsroxVac/Lovvz6" # vibe-local-dev-key
+    enabled: true
+    allowed_models: ["*"]
+    rpm: 120
+
+model_routes:
+  - name: "gpt4o-to-claude"
+    match: "gpt-4o*"
+    channels: ["anthropic-primary"]
+    overrides:
+      max_tokens: 4096
+
+channels:
+  - id: "anthropic-primary"
+    name: "Anthropic Primary"
+    protocol: "anthropic_messages"
+    base_url: "https://api.anthropic.com"
+    api_key_env: "ANTHROPIC_API_KEY"
+    weight: 100
+    max_concurrency: 64
+    timeout: "120s"
+    region: "global"
+    models:
+      gpt-4o: "claude-3-5-sonnet-20241022"
+      gpt-4o-mini: "claude-3-5-haiku-20241022"
