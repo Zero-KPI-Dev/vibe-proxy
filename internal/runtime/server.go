@@ -20,6 +20,7 @@ import (
 	"github.com/a448582655/vibe-proxy/internal/protocol"
 	provideranthropic "github.com/a448582655/vibe-proxy/internal/provideradapters/anthropic"
 	provideropenai "github.com/a448582655/vibe-proxy/internal/provideradapters/openai"
+	"github.com/a448582655/vibe-proxy/internal/streamengine"
 	"github.com/a448582655/vibe-proxy/internal/telemetry"
 	"github.com/a448582655/vibe-proxy/internal/types"
 	"github.com/a448582655/vibe-proxy/internal/upstreamauth"
@@ -151,7 +152,11 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 			_ = clientAdapter.EncodeError(ctx, w, ge)
 			return
 		}
-		tracked := s.trackStream(events, tracker)
+		var streamStats streamengine.Stats
+		tracked := streamengine.Track(ctx, events, func(stats streamengine.Stats) {
+			streamStats = stats
+			tracker.Event.Usage = toTelemetryUsage(stats.Usage)
+		})
 		if err := clientAdapter.EncodeStream(ctx, w, tracked); err != nil {
 			ge := errorToIR(err)
 			tracker.Finish(ge.StatusCode, types.Usage{}, ge.Code)
@@ -160,7 +165,7 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 			}
 			return
 		}
-		tracker.Finish(http.StatusOK, trackerUsage(tracker), "")
+		tracker.Finish(http.StatusOK, toTelemetryUsage(streamStats.Usage), "")
 		return
 	}
 	out, err := providerAdapter.ParseUnary(ctx, resp)
@@ -179,25 +184,6 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tracker.Finish(http.StatusOK, toTelemetryUsage(out.Usage), "")
-}
-
-func (s *Server) trackStream(in <-chan ir.StreamEvent, tracker *telemetry.Tracker) <-chan ir.StreamEvent {
-	out := make(chan ir.StreamEvent, 32)
-	go func() {
-		defer close(out)
-		usage := ir.Usage{}
-		for ev := range in {
-			if ev.Type == ir.EventContentDelta || ev.Type == ir.EventReasoningDelta {
-				tracker.MarkToken(ev.Delta.Text)
-			}
-			if ev.Usage != nil {
-				usage = *ev.Usage
-				tracker.Event.Usage = toTelemetryUsage(usage)
-			}
-			out <- ev
-		}
-	}()
-	return out
 }
 
 func (s *Server) detectClientAdapter(r *http.Request) protocol.ClientAdapter {
@@ -334,6 +320,5 @@ func toIRError(e types.GatewayError) ir.GatewayError {
 func toTelemetryUsage(u ir.Usage) types.Usage {
 	return types.Usage{PromptTokens: u.PromptTokens, CompletionTokens: u.CompletionTokens, TotalTokens: u.TotalTokens, CacheReadTokens: u.CacheReadTokens, CacheWriteTokens: u.CacheWriteTokens, CacheHitRatio: u.CacheHitRatio}
 }
-func trackerUsage(t *telemetry.Tracker) types.Usage { return t.Snapshot().Usage }
 
 var _ = upstreamauth.Profile{}
