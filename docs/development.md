@@ -55,3 +55,5 @@ http://127.0.0.1:8080/
 ```
 
 Stop with `Ctrl+C`.
+
+The Docker launcher rewrites the in-container listen address to `0.0.0.0:8080` so `http://127.0.0.1:8080/` works from your Mac.
