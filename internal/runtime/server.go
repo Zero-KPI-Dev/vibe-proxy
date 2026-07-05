@@ -50,6 +50,12 @@ func New(cfgPath string, cfg *config.RuntimeConfig, sink telemetry.EventSink, pr
 	return s
 }
 
+func (s *Server) SetHTTPClient(client *http.Client) {
+	if client != nil {
+		s.httpClient = client
+	}
+}
+
 func (s *Server) buildSnapshot(cfg *config.RuntimeConfig) *Snapshot {
 	return &Snapshot{LoadedAt: time.Now(), Config: cfg, Resolver: modelresolver.New(cfg.ModelResolver), AdminToken: os.Getenv(cfg.Security.AdminBearerTokenEnv)}
 }
