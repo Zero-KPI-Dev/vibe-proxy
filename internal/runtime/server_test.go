@@ -5,6 +5,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -126,6 +128,36 @@ func TestRuntimeAdminValidateAndProviderTest(t *testing.T) {
 	s.Routes().ServeHTTP(testW, testReq)
 	if testW.Code != 200 || !strings.Contains(testW.Body.String(), `"ok":true`) || !strings.Contains(testW.Body.String(), `"status":204`) {
 		t.Fatalf("unexpected provider test response: %d %s", testW.Code, testW.Body.String())
+	}
+}
+
+func TestRuntimeAdminLocalConfigure(t *testing.T) {
+	t.Setenv("VIBE_PROXY_ADMIN_TOKEN", "admin-token")
+	path := filepath.Join(t.TempDir(), "bootstrap.yaml")
+	if err := os.WriteFile(path, []byte("version: vibeproxy.io/v1alpha1\nsecurity:\n  admin_bearer_token_env: VIBE_PROXY_ADMIN_TOKEN\nclient_keys: []\nproviders: {}\nmodels:\n  allow_raw: true\n  aliases: {}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.LoadRuntime(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	testPromOnce.Do(func() { testProm = metrics.New() })
+	s := New(path, cfg, metrics.MultiSink{}, testProm)
+	body := bytes.NewReader([]byte(`{"id":"newapi","type":"openai-compatible","base_url":"http://127.0.0.1:3000/v1","api_key_env":"NEW_API_KEY","models":["deepseek-v4-flash"],"alias":"vibe-chat","alias_model":"deepseek-v4-flash","default_model":"vibe-chat"}`))
+	req := httptest.NewRequest(http.MethodPost, "/admin/local/configure", body)
+	req.Header.Set("Authorization", "Bearer admin-token")
+	w := httptest.NewRecorder()
+	s.Routes().ServeHTTP(w, req)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"ok":true`) {
+		t.Fatalf("unexpected configure response: %d %s", w.Code, w.Body.String())
+	}
+	snap := s.current()
+	if _, ok := snap.Config.Providers["newapi"]; !ok {
+		t.Fatalf("provider not loaded into snapshot")
+	}
+	written, _ := os.ReadFile(path)
+	if !strings.Contains(string(written), "vibe-chat") || !strings.Contains(string(written), "NEW_API_KEY") {
+		t.Fatalf("config was not written: %s", written)
 	}
 }
 

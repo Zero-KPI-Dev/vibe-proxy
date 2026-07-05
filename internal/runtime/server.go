@@ -81,6 +81,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/admin/config/snapshot", s.adminSnapshot)
 	mux.HandleFunc("/admin/config/validate", s.adminValidateConfig)
 	mux.HandleFunc("/admin/providers/test", s.adminProviderTest)
+	mux.HandleFunc("/admin/local/configure", s.adminLocalConfigure)
 	mux.HandleFunc("/admin/requests/recent", s.adminRecentRequests)
 	mux.HandleFunc("/", s.dashboard)
 	return limitBody(recordResponse(mux), 32<<20)
@@ -316,6 +317,43 @@ func (s *Server) adminProviderTest(w http.ResponseWriter, r *http.Request) {
 	resp.Body.Close()
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{"ok": resp.StatusCode < 500, "provider": providerID, "status": resp.StatusCode, "latency_ms": latency})
+}
+
+func (s *Server) adminLocalConfigure(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+	snap := s.current()
+	if !auth.AuthorizeAdmin(r, snap.AdminToken) {
+		http.Error(w, "unauthorized", 401)
+		return
+	}
+	if s.cfgPath == "" {
+		http.Error(w, "config path is not writable", 400)
+		return
+	}
+	var input config.LocalProviderInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		http.Error(w, "invalid json", 400)
+		return
+	}
+	if input.ID == "" || input.BaseURL == "" {
+		http.Error(w, "id and base_url are required", 400)
+		return
+	}
+	if input.APIKeyEnv == "" && input.AuthType != "none" {
+		http.Error(w, "api_key_env is required unless auth_type is none", 400)
+		return
+	}
+	next, err := config.UpsertLocalProvider(s.cfgPath, input)
+	if err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	s.snapshot.Store(s.buildSnapshot(next))
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"ok": true, "loaded_at": s.current().LoadedAt, "issues": config.ValidateRuntime(next)})
 }
 
 func (s *Server) adminRecentRequests(w http.ResponseWriter, r *http.Request) {
