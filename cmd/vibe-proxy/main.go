@@ -20,6 +20,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("load config: %v", err)
 	}
+	if issues := config.ValidateRuntime(cfg); config.HasErrors(issues) {
+		log.Fatalf("invalid config: %+v", issues)
+	}
 
 	db, err := store.Open(cfg.Storage.SQLitePath)
 	if err != nil {

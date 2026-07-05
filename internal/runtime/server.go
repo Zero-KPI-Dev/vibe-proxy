@@ -79,6 +79,8 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/healthz", s.healthz)
 	mux.HandleFunc("/admin/config/reload", s.reload)
 	mux.HandleFunc("/admin/config/snapshot", s.adminSnapshot)
+	mux.HandleFunc("/admin/config/validate", s.adminValidateConfig)
+	mux.HandleFunc("/admin/providers/test", s.adminProviderTest)
 	mux.HandleFunc("/admin/requests/recent", s.adminRecentRequests)
 	mux.HandleFunc("/", s.dashboard)
 	return limitBody(recordResponse(mux), 32<<20)
@@ -260,6 +262,60 @@ func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{"loaded_at": snap.LoadedAt, "providers": providers, "model_resolver": snap.Config.ModelResolver})
+}
+
+func (s *Server) adminValidateConfig(w http.ResponseWriter, r *http.Request) {
+	snap := s.current()
+	if !auth.AuthorizeAdmin(r, snap.AdminToken) {
+		http.Error(w, "unauthorized", 401)
+		return
+	}
+	issues := config.ValidateRuntime(snap.Config)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"valid": !config.HasErrors(issues), "issues": issues})
+}
+
+func (s *Server) adminProviderTest(w http.ResponseWriter, r *http.Request) {
+	snap := s.current()
+	if !auth.AuthorizeAdmin(r, snap.AdminToken) {
+		http.Error(w, "unauthorized", 401)
+		return
+	}
+	providerID := r.URL.Query().Get("id")
+	if providerID == "" {
+		http.Error(w, "missing provider id", 400)
+		return
+	}
+	p, ok := snap.Config.Providers[providerID]
+	if !ok {
+		http.Error(w, "provider not found", 404)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.BaseURL, nil)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"ok": false, "provider": providerID, "error": "invalid_base_url"})
+		return
+	}
+	if authErr := p.Auth.Apply(req); authErr != nil {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"ok": false, "provider": providerID, "error": authErr.Code})
+		return
+	}
+	started := time.Now()
+	resp, err := s.httpClient.Do(req)
+	latency := time.Since(started).Milliseconds()
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"ok": false, "provider": providerID, "latency_ms": latency, "error": "connection_failed"})
+		return
+	}
+	io.Copy(io.Discard, io.LimitReader(resp.Body, 1024))
+	resp.Body.Close()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"ok": resp.StatusCode < 500, "provider": providerID, "status": resp.StatusCode, "latency_ms": latency})
 }
 
 func (s *Server) adminRecentRequests(w http.ResponseWriter, r *http.Request) {

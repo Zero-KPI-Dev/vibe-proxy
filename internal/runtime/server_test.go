@@ -102,6 +102,33 @@ func TestRuntimeAdminRecentRequests(t *testing.T) {
 	}
 }
 
+func TestRuntimeAdminValidateAndProviderTest(t *testing.T) {
+	t.Setenv("VIBE_PROXY_ADMIN_TOKEN", "admin-token")
+	cfg, err := config.CompileSimple(config.SimpleConfig{Security: config.SecurityConfig{AdminBearerTokenEnv: "VIBE_PROXY_ADMIN_TOKEN"}, ClientKeys: []config.ClientKeyConfig{{Name: "test", KeyHash: "$2a$10$AXRkz.6y44ygdJFk6L1/IO0aRVp9zRMfXDJoBCBsroxVac/Lovvz6", Enabled: true, AllowedModels: []string{"*"}, RPM: 1000}}, Providers: map[string]config.ProviderConfig{"mockai": {Type: "openai-compatible", BaseURL: "https://mock.openai/v1", Auth: upstreamauth.Profile{Type: "none"}, Models: []string{"raw-chat"}}}, Models: config.ModelsConfig{AllowRaw: true, Aliases: map[string]string{"vibe-fast": "mockai/raw-chat"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	testPromOnce.Do(func() { testProm = metrics.New() })
+	s := New("", cfg, metrics.MultiSink{}, testProm)
+	s.SetHTTPClient(&http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) { return jsonResponse(204, ``), nil })})
+
+	validateReq := httptest.NewRequest(http.MethodGet, "/admin/config/validate", nil)
+	validateReq.Header.Set("Authorization", "Bearer admin-token")
+	validateW := httptest.NewRecorder()
+	s.Routes().ServeHTTP(validateW, validateReq)
+	if validateW.Code != 200 || !strings.Contains(validateW.Body.String(), `"valid":true`) {
+		t.Fatalf("unexpected validate response: %d %s", validateW.Code, validateW.Body.String())
+	}
+
+	testReq := httptest.NewRequest(http.MethodPost, "/admin/providers/test?id=mockai", nil)
+	testReq.Header.Set("Authorization", "Bearer admin-token")
+	testW := httptest.NewRecorder()
+	s.Routes().ServeHTTP(testW, testReq)
+	if testW.Code != 200 || !strings.Contains(testW.Body.String(), `"ok":true`) || !strings.Contains(testW.Body.String(), `"status":204`) {
+		t.Fatalf("unexpected provider test response: %d %s", testW.Code, testW.Body.String())
+	}
+}
+
 func newTestServer(t *testing.T, rt roundTrip) *Server {
 	t.Helper()
 	cfg, err := config.CompileSimple(config.SimpleConfig{ClientKeys: []config.ClientKeyConfig{{Name: "test", KeyHash: "$2a$10$AXRkz.6y44ygdJFk6L1/IO0aRVp9zRMfXDJoBCBsroxVac/Lovvz6", Enabled: true, AllowedModels: []string{"*"}, RPM: 1000}}, Providers: map[string]config.ProviderConfig{"anthropic": {Type: "anthropic", BaseURL: "https://mock.anthropic", Auth: upstreamauth.Profile{Type: "api_key_header", Header: "x-api-key", Value: "literal:test-anthropic-key"}, Models: []string{"claude-raw"}}, "mockai": {Type: "openai-compatible", BaseURL: "https://mock.openai/v1", Auth: upstreamauth.Profile{Type: "none"}, Models: []string{"raw-chat"}}}, Models: config.ModelsConfig{AllowRaw: true, Aliases: map[string]string{"vibe-coder": "anthropic/claude-raw", "vibe-fast": "mockai/raw-chat"}}})
