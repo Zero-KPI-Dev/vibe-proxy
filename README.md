@@ -106,7 +106,7 @@ Install Go 1.22+, then:
 export VIBE_PROXY_ADMIN_TOKEN='change-me-admin-token'
 export ANTHROPIC_API_KEY='sk-ant-your-key'
 go mod tidy
-go run ./cmd/vibe-proxy -config configs/simple.yaml
+go run ./cmd/vibe-proxy -config configs/bootstrap.yaml
 ```
 
 The sample local client key in `configs/config.yaml` is documented as:
@@ -133,3 +133,21 @@ curl http://localhost:8080/v1/chat/completions \
 > Powerful core, simple surface.
 
 Internally, `vibe-proxy` should be designed like a small extensible gateway. Externally, the default local user experience should remain simple, fast, and hard to misconfigure.
+
+
+## Bootstrap Mode
+
+You can start the local control plane before configuring providers:
+
+```bash
+export VIBE_PROXY_ADMIN_TOKEN='change-me-admin-token'
+go run ./cmd/vibe-proxy -config configs/bootstrap.yaml
+```
+
+Then open:
+
+```text
+http://127.0.0.1:8080/
+```
+
+Provider editing in the UI is still evolving. For now, use the admin APIs and config files; the server can run without providers so the control plane remains reachable.

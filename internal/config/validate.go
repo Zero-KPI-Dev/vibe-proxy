@@ -22,7 +22,7 @@ func ValidateRuntime(cfg *RuntimeConfig) []ValidationIssue {
 		issues = append(issues, issue("error", "server.listen", "missing_listen", "Server listen address is required."))
 	}
 	if len(cfg.Providers) == 0 {
-		issues = append(issues, issue("error", "providers", "missing_providers", "At least one provider is required."))
+		issues = append(issues, issue("warning", "providers", "missing_providers", "No providers are configured yet; data-plane requests will fail until one is added."))
 	}
 	for id, p := range cfg.Providers {
 		path := "providers." + id

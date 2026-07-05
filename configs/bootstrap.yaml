@@ -1,0 +1,25 @@
+version: vibeproxy.io/v1alpha1
+
+server:
+  listen: 127.0.0.1:8080
+
+security:
+  admin_bearer_token_env: VIBE_PROXY_ADMIN_TOKEN
+
+storage:
+  sqlite_path: ./vibe-proxy.db
+  retention_days: 14
+
+client_keys:
+  - name: local-dev
+    key_hash: "$2a$10$AXRkz.6y44ygdJFk6L1/IO0aRVp9zRMfXDJoBCBsroxVac/Lovvz6" # vibe-local-dev-key
+    enabled: true
+    allowed_models: ["*"]
+    rpm: 120
+
+providers: {}
+
+models:
+  default: ""
+  allow_raw: true
+  aliases: {}

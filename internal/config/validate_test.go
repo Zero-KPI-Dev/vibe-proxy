@@ -37,3 +37,17 @@ func TestValidateRuntimeAcceptsSimpleConfig(t *testing.T) {
 		t.Fatalf("unexpected validation errors: %+v", issues)
 	}
 }
+
+func TestValidateRuntimeAllowsBootstrapWithoutProviders(t *testing.T) {
+	cfg, err := CompileSimple(SimpleConfig{Providers: map[string]ProviderConfig{}, Models: ModelsConfig{AllowRaw: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	issues := ValidateRuntime(cfg)
+	if HasErrors(issues) {
+		t.Fatalf("bootstrap should not have validation errors: %+v", issues)
+	}
+	if len(issues) == 0 || issues[0].Code != "missing_providers" {
+		t.Fatalf("expected missing providers warning: %+v", issues)
+	}
+}
