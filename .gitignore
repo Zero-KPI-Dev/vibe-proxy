@@ -11,3 +11,6 @@ vibe-proxy
 
 # logs
 *.log
+
+# local generated config
+.vibe-proxy/

@@ -65,3 +65,5 @@ To clear those caches manually:
 ```bash
 docker volume rm vibe-proxy-gomodcache vibe-proxy-gocache
 ```
+
+The Docker launcher writes UI changes to `.vibe-proxy/runtime.yaml` so local control-plane edits survive container restarts. Delete that file to reset from the source config.
