@@ -1,0 +1,42 @@
+version: vibeproxy.io/v1alpha1
+
+server:
+  listen: 127.0.0.1:8080
+
+security:
+  admin_bearer_token_env: VIBE_PROXY_ADMIN_TOKEN
+  master_key_env: VIBE_PROXY_MASTER_KEY
+
+storage:
+  sqlite_path: ./vibe-proxy.db
+  retention_days: 14
+
+client_keys:
+  - name: local-dev
+    key_hash: "$2a$10$AXRkz.6y44ygdJFk6L1/IO0aRVp9zRMfXDJoBCBsroxVac/Lovvz6" # vibe-local-dev-key
+    enabled: true
+    allowed_models: ["*"]
+    rpm: 120
+
+providers:
+  anthropic:
+    type: anthropic
+    api_key: env:ANTHROPIC_API_KEY
+    models:
+      - claude-3-5-sonnet-20241022
+      - claude-3-5-haiku-20241022
+
+  deepseek:
+    type: openai-compatible
+    base_url: https://api.deepseek.com/v1
+    api_key: env:DEEPSEEK_API_KEY
+    models:
+      - deepseek-chat
+      - deepseek-reasoner
+
+models:
+  default: vibe-coder
+  allow_raw: true
+  aliases:
+    vibe-coder: anthropic/claude-3-5-sonnet-20241022
+    vibe-fast: deepseek/deepseek-chat
