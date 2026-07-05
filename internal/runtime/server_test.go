@@ -24,6 +24,17 @@ type roundTrip func(*http.Request) (*http.Response, error)
 
 func (f roundTrip) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
+func TestRuntimeModelsEndpoint(t *testing.T) {
+	s := newTestServer(t, func(r *http.Request) (*http.Response, error) { return jsonResponse(200, `{}`), nil })
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	req.Header.Set("Authorization", "Bearer vibe-local-dev-key")
+	w := httptest.NewRecorder()
+	s.Routes().ServeHTTP(w, req)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"id":"vibe-coder"`) || !strings.Contains(w.Body.String(), `"id":"raw-chat"`) {
+		t.Fatalf("unexpected models response: %d %s", w.Code, w.Body.String())
+	}
+}
+
 func TestRuntimeOpenAIChatToOpenAICompatible(t *testing.T) {
 	s := newTestServer(t, func(r *http.Request) (*http.Response, error) {
 		if r.URL.String() != "https://mock.openai/v1/chat/completions" {

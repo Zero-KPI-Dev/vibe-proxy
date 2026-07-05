@@ -71,6 +71,7 @@ func (s *Server) buildSnapshot(cfg *config.RuntimeConfig) *Snapshot {
 
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/models", s.handleModels)
 	mux.HandleFunc("/v1/chat/completions", s.handle)
 	mux.HandleFunc("/v1/responses", s.handle)
 	mux.HandleFunc("/anthropic/v1/messages", s.handle)
@@ -85,6 +86,43 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/admin/requests/recent", s.adminRecentRequests)
 	mux.HandleFunc("/", s.dashboard)
 	return limitBody(recordResponse(mux), 32<<20)
+}
+
+func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		json.NewEncoder(w).Encode(map[string]any{"error": map[string]any{"message": "Method not allowed.", "type": "invalid_request_error", "code": "method_not_allowed"}})
+		return
+	}
+	snap := s.current()
+	if _, gerr := s.authenticator.AuthenticateDataPlane(r, snap.Config.ClientKeys); gerr != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(gerr.StatusCode)
+		json.NewEncoder(w).Encode(map[string]any{"error": map[string]any{"message": gerr.Message, "type": gerr.Type, "code": gerr.Code}})
+		return
+	}
+	now := time.Now().Unix()
+	seen := map[string]bool{}
+	data := []map[string]any{}
+	for alias := range snap.Config.ModelResolver.Aliases {
+		if alias == "" || seen[alias] {
+			continue
+		}
+		seen[alias] = true
+		data = append(data, map[string]any{"id": alias, "object": "model", "created": now, "owned_by": "vibe-proxy", "vibe_type": "alias"})
+	}
+	for providerID, provider := range snap.Config.Providers {
+		for _, model := range provider.Models {
+			if model == "" || seen[model] {
+				continue
+			}
+			seen[model] = true
+			data = append(data, map[string]any{"id": model, "object": "model", "created": now, "owned_by": providerID, "vibe_type": "raw"})
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"object": "list", "data": data})
 }
 
 func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
