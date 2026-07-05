@@ -10,6 +10,7 @@ import (
 	"github.com/a448582655/vibe-proxy/internal/metrics"
 	"github.com/a448582655/vibe-proxy/internal/runtime"
 	"github.com/a448582655/vibe-proxy/internal/store"
+	"github.com/a448582655/vibe-proxy/internal/telemetry"
 )
 
 func main() {
@@ -27,7 +28,8 @@ func main() {
 	defer db.Close()
 	_ = db.Retain(cfg.Storage.RetentionDays)
 	prom := metrics.New()
-	sink := metrics.MultiSink{db, prom}
+	recent := telemetry.NewRecentStore(200)
+	sink := metrics.MultiSink{db, prom, recent}
 	app := runtime.New(*cfgPath, cfg, sink, prom)
 	srv := &http.Server{Addr: cfg.Server.Listen, Handler: app.Routes(), ReadTimeout: cfg.Server.ReadTimeout.Duration, WriteTimeout: cfg.Server.WriteTimeout.Duration, IdleTimeout: cfg.Server.IdleTimeout.Duration}
 	if srv.ReadTimeout == 0 {

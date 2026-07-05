@@ -56,16 +56,36 @@ type MultiSink []telemetry.EventSink
 
 func (m MultiSink) RequestStarted(e telemetry.Event) {
 	for _, s := range m {
-		s.RequestStarted(e)
+		if s != nil {
+			s.RequestStarted(e)
+		}
 	}
 }
 func (m MultiSink) RequestFinished(e telemetry.Event) {
 	for _, s := range m {
-		s.RequestFinished(e)
+		if s != nil {
+			s.RequestFinished(e)
+		}
 	}
 }
 func (m MultiSink) Token(e telemetry.Event) {
 	for _, s := range m {
-		s.Token(e)
+		if s != nil {
+			s.Token(e)
+		}
 	}
+}
+
+func (m MultiSink) RecentStore() *telemetry.RecentStore {
+	for _, s := range m {
+		if r, ok := s.(*telemetry.RecentStore); ok {
+			return r
+		}
+		if provider, ok := s.(interface{ RecentStore() *telemetry.RecentStore }); ok {
+			if r := provider.RecentStore(); r != nil {
+				return r
+			}
+		}
+	}
+	return nil
 }

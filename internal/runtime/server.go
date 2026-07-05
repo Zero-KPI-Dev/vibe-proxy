@@ -42,11 +42,19 @@ type Server struct {
 	providerAdapters map[string]protocol.ProviderAdapter
 	metrics          *metrics.Prometheus
 	sink             telemetry.EventSink
+	recent           *telemetry.RecentStore
 	semaphore        sync.Map
 }
 
 func New(cfgPath string, cfg *config.RuntimeConfig, sink telemetry.EventSink, prom *metrics.Prometheus) *Server {
-	s := &Server{cfgPath: cfgPath, authenticator: auth.NewAuthenticator(), httpClient: &http.Client{Timeout: 0}, metrics: prom, sink: sink, clientAdapters: []protocol.ClientAdapter{clientopenai.ChatAdapter{}, clientopenai.ResponsesAdapter{}, clientanthropic.MessagesAdapter{}}, providerAdapters: map[string]protocol.ProviderAdapter{"anthropic": provideranthropic.Provider{}, "openai-compatible": provideropenai.Provider{}}}
+	var recent *telemetry.RecentStore
+	if r, ok := sink.(*telemetry.RecentStore); ok {
+		recent = r
+	}
+	if ms, ok := sink.(interface{ RecentStore() *telemetry.RecentStore }); ok {
+		recent = ms.RecentStore()
+	}
+	s := &Server{cfgPath: cfgPath, authenticator: auth.NewAuthenticator(), httpClient: &http.Client{Timeout: 0}, metrics: prom, sink: sink, recent: recent, clientAdapters: []protocol.ClientAdapter{clientopenai.ChatAdapter{}, clientopenai.ResponsesAdapter{}, clientanthropic.MessagesAdapter{}}, providerAdapters: map[string]protocol.ProviderAdapter{"anthropic": provideranthropic.Provider{}, "openai-compatible": provideropenai.Provider{}}}
 	s.snapshot.Store(s.buildSnapshot(cfg))
 	return s
 }
@@ -71,6 +79,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/healthz", s.healthz)
 	mux.HandleFunc("/admin/config/reload", s.reload)
 	mux.HandleFunc("/admin/config/snapshot", s.adminSnapshot)
+	mux.HandleFunc("/admin/requests/recent", s.adminRecentRequests)
 	mux.HandleFunc("/", s.dashboard)
 	return limitBody(recordResponse(mux), 32<<20)
 }
@@ -252,13 +261,30 @@ func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{"loaded_at": snap.LoadedAt, "providers": providers, "model_resolver": snap.Config.ModelResolver})
 }
+
+func (s *Server) adminRecentRequests(w http.ResponseWriter, r *http.Request) {
+	snap := s.current()
+	if !auth.AuthorizeAdmin(r, snap.AdminToken) {
+		http.Error(w, "unauthorized", 401)
+		return
+	}
+	limit := 50
+	if s.recent == nil {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"active": []telemetry.Event{}, "recent": []telemetry.Event{}})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"active": s.recent.Active(), "recent": s.recent.Recent(limit)})
+}
+
 func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/" {
 		http.NotFound(w, r)
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	io.WriteString(w, `<!doctype html><html><head><title>vibe-proxy</title><style>body{margin:0;background:#08090a;color:#f4f4f5;font-family:Inter,ui-sans-serif,system-ui}.wrap{max-width:1040px;margin:64px auto;padding:32px}.card{border:1px solid #27272a;background:#111113;border-radius:18px;padding:24px}.muted{color:#a1a1aa}</style></head><body><main class="wrap"><section class="card"><p class="muted">vibe-proxy local</p><h1>Agent-first LLM protocol switcher</h1><p class="muted">Use /v1/chat/completions, /v1/responses, or /anthropic/v1/messages.</p></section></main></body></html>`)
+	io.WriteString(w, dashboardHTML())
 }
 func (s *Server) notImplemented(message string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

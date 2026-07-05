@@ -11,6 +11,7 @@ import (
 
 	"github.com/a448582655/vibe-proxy/internal/config"
 	"github.com/a448582655/vibe-proxy/internal/metrics"
+	"github.com/a448582655/vibe-proxy/internal/telemetry"
 	"github.com/a448582655/vibe-proxy/internal/upstreamauth"
 )
 
@@ -70,6 +71,34 @@ func TestRuntimeAnthropicMessagesToAnthropicProvider(t *testing.T) {
 	s.Routes().ServeHTTP(w, req)
 	if w.Code != 200 || !strings.Contains(w.Body.String(), `anthropic ok`) || !strings.Contains(w.Body.String(), `"type":"message"`) {
 		t.Fatalf("unexpected response code=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestRuntimeAdminRecentRequests(t *testing.T) {
+	t.Setenv("VIBE_PROXY_ADMIN_TOKEN", "admin-token")
+	recent := telemetry.NewRecentStore(10)
+	cfg, err := config.CompileSimple(config.SimpleConfig{Security: config.SecurityConfig{AdminBearerTokenEnv: "VIBE_PROXY_ADMIN_TOKEN"}, ClientKeys: []config.ClientKeyConfig{{Name: "test", KeyHash: "$2a$10$AXRkz.6y44ygdJFk6L1/IO0aRVp9zRMfXDJoBCBsroxVac/Lovvz6", Enabled: true, AllowedModels: []string{"*"}, RPM: 1000}}, Providers: map[string]config.ProviderConfig{"mockai": {Type: "openai-compatible", BaseURL: "https://mock.openai/v1", Auth: upstreamauth.Profile{Type: "none"}, Models: []string{"raw-chat"}}}, Models: config.ModelsConfig{AllowRaw: true, Aliases: map[string]string{"vibe-fast": "mockai/raw-chat"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	testPromOnce.Do(func() { testProm = metrics.New() })
+	s := New("", cfg, metrics.MultiSink{recent}, testProm)
+	s.SetHTTPClient(&http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
+		return jsonResponse(200, `{"id":"chatcmpl_1","model":"raw-chat","choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`), nil
+	})})
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader([]byte(`{"model":"vibe-fast","messages":[{"role":"user","content":"hi"}]}`)))
+	req.Header.Set("Authorization", "Bearer vibe-local-dev-key")
+	w := httptest.NewRecorder()
+	s.Routes().ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Fatalf("request failed: %d %s", w.Code, w.Body.String())
+	}
+	adminReq := httptest.NewRequest(http.MethodGet, "/admin/requests/recent", nil)
+	adminReq.Header.Set("Authorization", "Bearer admin-token")
+	adminW := httptest.NewRecorder()
+	s.Routes().ServeHTTP(adminW, adminReq)
+	if adminW.Code != 200 || !strings.Contains(adminW.Body.String(), `"recent"`) || !strings.Contains(adminW.Body.String(), `"vibe-fast"`) {
+		t.Fatalf("unexpected admin response: %d %s", adminW.Code, adminW.Body.String())
 	}
 }
 
