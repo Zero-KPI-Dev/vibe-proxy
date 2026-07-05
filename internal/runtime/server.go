@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/a448582655/vibe-proxy/internal/auth"
+	clientanthropic "github.com/a448582655/vibe-proxy/internal/clientadapters/anthropic"
 	clientopenai "github.com/a448582655/vibe-proxy/internal/clientadapters/openai"
 	"github.com/a448582655/vibe-proxy/internal/config"
 	"github.com/a448582655/vibe-proxy/internal/ir"
@@ -44,7 +45,7 @@ type Server struct {
 }
 
 func New(cfgPath string, cfg *config.RuntimeConfig, sink telemetry.EventSink, prom *metrics.Prometheus) *Server {
-	s := &Server{cfgPath: cfgPath, authenticator: auth.NewAuthenticator(), httpClient: &http.Client{Timeout: 0}, metrics: prom, sink: sink, clientAdapters: []protocol.ClientAdapter{clientopenai.ChatAdapter{}}, providerAdapters: map[string]protocol.ProviderAdapter{"anthropic": provideranthropic.Provider{}, "openai-compatible": provideropenai.Provider{}}}
+	s := &Server{cfgPath: cfgPath, authenticator: auth.NewAuthenticator(), httpClient: &http.Client{Timeout: 0}, metrics: prom, sink: sink, clientAdapters: []protocol.ClientAdapter{clientopenai.ChatAdapter{}, clientopenai.ResponsesAdapter{}, clientanthropic.MessagesAdapter{}}, providerAdapters: map[string]protocol.ProviderAdapter{"anthropic": provideranthropic.Provider{}, "openai-compatible": provideropenai.Provider{}}}
 	s.snapshot.Store(s.buildSnapshot(cfg))
 	return s
 }
@@ -56,8 +57,9 @@ func (s *Server) buildSnapshot(cfg *config.RuntimeConfig) *Snapshot {
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/chat/completions", s.handle)
-	mux.HandleFunc("/v1/responses", s.notImplemented("OpenAI Responses API adapter is planned for this phase after OpenAI Chat pipeline migration."))
-	mux.HandleFunc("/anthropic/v1/messages", s.notImplemented("Anthropic Messages client adapter is planned after provider pipeline migration."))
+	mux.HandleFunc("/v1/responses", s.handle)
+	mux.HandleFunc("/anthropic/v1/messages", s.handle)
+	mux.HandleFunc("/v1/messages", s.handle)
 	mux.Handle("/metrics", s.metrics.Handler())
 	mux.HandleFunc("/healthz", s.healthz)
 	mux.HandleFunc("/admin/config/reload", s.reload)
@@ -264,7 +266,7 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	io.WriteString(w, `<!doctype html><html><head><title>vibe-proxy</title><style>body{margin:0;background:#08090a;color:#f4f4f5;font-family:Inter,ui-sans-serif,system-ui}.wrap{max-width:1040px;margin:64px auto;padding:32px}.card{border:1px solid #27272a;background:#111113;border-radius:18px;padding:24px}.muted{color:#a1a1aa}</style></head><body><main class="wrap"><section class="card"><p class="muted">vibe-proxy local</p><h1>Agent-first LLM protocol switcher</h1><p class="muted">Use /v1/chat/completions today. Responses and Anthropic client adapters are next.</p></section></main></body></html>`)
+	io.WriteString(w, `<!doctype html><html><head><title>vibe-proxy</title><style>body{margin:0;background:#08090a;color:#f4f4f5;font-family:Inter,ui-sans-serif,system-ui}.wrap{max-width:1040px;margin:64px auto;padding:32px}.card{border:1px solid #27272a;background:#111113;border-radius:18px;padding:24px}.muted{color:#a1a1aa}</style></head><body><main class="wrap"><section class="card"><p class="muted">vibe-proxy local</p><h1>Agent-first LLM protocol switcher</h1><p class="muted">Use /v1/chat/completions, /v1/responses, or /anthropic/v1/messages.</p></section></main></body></html>`)
 }
 func (s *Server) notImplemented(message string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
