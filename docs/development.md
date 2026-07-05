@@ -38,3 +38,20 @@ Each phase should:
 2. pass `go test ./...`
 3. be committed to `develop`
 4. not be pushed until explicitly requested
+
+
+## Docker Start
+
+If Go is not installed locally, start the control plane with Docker:
+
+```bash
+VIBE_PROXY_ADMIN_TOKEN='admin-token' ./scripts/dev-docker.sh configs/bootstrap.yaml
+```
+
+Then open:
+
+```text
+http://127.0.0.1:8080/
+```
+
+Stop with `Ctrl+C`.

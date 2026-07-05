@@ -151,3 +151,14 @@ http://127.0.0.1:8080/
 ```
 
 Provider editing in the UI is still evolving. For now, use the admin APIs and config files; the server can run without providers so the control plane remains reachable.
+
+
+## No Local Go?
+
+Use Docker:
+
+```bash
+VIBE_PROXY_ADMIN_TOKEN='admin-token' ./scripts/dev-docker.sh configs/bootstrap.yaml
+```
+
+Open `http://127.0.0.1:8080/`.
