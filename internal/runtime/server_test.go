@@ -123,7 +123,12 @@ func TestRuntimeAdminValidateAndProviderTest(t *testing.T) {
 	}
 	testPromOnce.Do(func() { testProm = metrics.New() })
 	s := New("", cfg, metrics.MultiSink{}, testProm)
-	s.SetHTTPClient(&http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) { return jsonResponse(204, ``), nil })})
+	s.SetHTTPClient(&http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
+		if r.Method != http.MethodGet || r.URL.String() != "https://mock.openai/v1/models" {
+			t.Fatalf("provider test used wrong probe target: %s %s", r.Method, r.URL.String())
+		}
+		return jsonResponse(200, `{"object":"list","data":[]}`), nil
+	})})
 
 	validateReq := httptest.NewRequest(http.MethodGet, "/admin/config/validate", nil)
 	validateReq.Header.Set("Authorization", "Bearer admin-token")
@@ -137,7 +142,28 @@ func TestRuntimeAdminValidateAndProviderTest(t *testing.T) {
 	testReq.Header.Set("Authorization", "Bearer admin-token")
 	testW := httptest.NewRecorder()
 	s.Routes().ServeHTTP(testW, testReq)
-	if testW.Code != 200 || !strings.Contains(testW.Body.String(), `"ok":true`) || !strings.Contains(testW.Body.String(), `"status":204`) {
+	if testW.Code != 200 || !strings.Contains(testW.Body.String(), `"ok":true`) || !strings.Contains(testW.Body.String(), `"status":200`) || !strings.Contains(testW.Body.String(), `"target":"https://mock.openai/v1/models"`) {
+		t.Fatalf("unexpected provider test response: %d %s", testW.Code, testW.Body.String())
+	}
+}
+
+func TestRuntimeProviderTestTreats404AsFailure(t *testing.T) {
+	t.Setenv("VIBE_PROXY_ADMIN_TOKEN", "admin-token")
+	cfg, err := config.CompileSimple(config.SimpleConfig{Security: config.SecurityConfig{AdminBearerTokenEnv: "VIBE_PROXY_ADMIN_TOKEN"}, ClientKeys: []config.ClientKeyConfig{{Name: "test", KeyHash: "$2a$10$AXRkz.6y44ygdJFk6L1/IO0aRVp9zRMfXDJoBCBsroxVac/Lovvz6", Enabled: true, AllowedModels: []string{"*"}, RPM: 1000}}, Providers: map[string]config.ProviderConfig{"mockai": {Type: "openai-compatible", BaseURL: "https://mock.openai/v1", Auth: upstreamauth.Profile{Type: "none"}, Models: []string{"raw-chat"}}}, Models: config.ModelsConfig{AllowRaw: true, Aliases: map[string]string{"vibe-fast": "mockai/raw-chat"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	testPromOnce.Do(func() { testProm = metrics.New() })
+	s := New("", cfg, metrics.MultiSink{}, testProm)
+	s.SetHTTPClient(&http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
+		return jsonResponse(404, `{"error":"not found"}`), nil
+	})})
+
+	testReq := httptest.NewRequest(http.MethodPost, "/admin/providers/test?id=mockai", nil)
+	testReq.Header.Set("Authorization", "Bearer admin-token")
+	testW := httptest.NewRecorder()
+	s.Routes().ServeHTTP(testW, testReq)
+	if testW.Code != 200 || !strings.Contains(testW.Body.String(), `"ok":false`) || !strings.Contains(testW.Body.String(), `"status":404`) {
 		t.Fatalf("unexpected provider test response: %d %s", testW.Code, testW.Body.String())
 	}
 }

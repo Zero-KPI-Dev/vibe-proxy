@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -332,7 +333,8 @@ func (s *Server) adminProviderTest(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.BaseURL, nil)
+	testURL := providerProbeURL(p)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, testURL, nil)
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{"ok": false, "provider": providerID, "error": "invalid_base_url"})
@@ -354,7 +356,19 @@ func (s *Server) adminProviderTest(w http.ResponseWriter, r *http.Request) {
 	io.Copy(io.Discard, io.LimitReader(resp.Body, 1024))
 	resp.Body.Close()
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"ok": resp.StatusCode < 500, "provider": providerID, "status": resp.StatusCode, "latency_ms": latency})
+	json.NewEncoder(w).Encode(map[string]any{"ok": resp.StatusCode >= 200 && resp.StatusCode < 400, "provider": providerID, "status": resp.StatusCode, "latency_ms": latency, "target": testURL})
+}
+
+func providerProbeURL(p config.ProviderConfig) string {
+	base := strings.TrimRight(p.BaseURL, "/")
+	switch p.Type {
+	case "openai-compatible":
+		return base + "/models"
+	case "anthropic":
+		return base + "/v1/models"
+	default:
+		return base
+	}
 }
 
 func (s *Server) adminLocalConfigure(w http.ResponseWriter, r *http.Request) {
