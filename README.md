@@ -45,6 +45,7 @@ Start here:
 - [`docs/config-schema.md`](docs/config-schema.md) — progressive configuration design
 - [`docs/streaming-engine.md`](docs/streaming-engine.md) — streaming conversion model
 - [`docs/mvp-roadmap.md`](docs/mvp-roadmap.md) — v0.1 scope and phases
+- [`docs/admin-api.md`](docs/admin-api.md) — local admin API
 - [`docs/contributing-architecture.md`](docs/contributing-architecture.md) — how contributors should extend the system
 
 ## Intended v0.1 Scope
@@ -104,7 +105,7 @@ Install Go 1.22+, then:
 export VIBE_PROXY_ADMIN_TOKEN='change-me-admin-token'
 export ANTHROPIC_API_KEY='sk-ant-your-key'
 go mod tidy
-go run ./cmd/vibe-proxy -config configs/config.yaml
+go run ./cmd/vibe-proxy -config configs/simple.yaml
 ```
 
 The sample local client key in `configs/config.yaml` is documented as:
