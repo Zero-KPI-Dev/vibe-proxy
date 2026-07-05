@@ -28,12 +28,12 @@ func TestBuildOpenAICompatibleRequest(t *testing.T) {
 }
 
 func TestParseOpenAICompatibleUnary(t *testing.T) {
-	resp := &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"id":"chatcmpl_1","model":"deepseek-chat","choices":[{"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":3,"total_tokens":5}}`))}
+	resp := &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"id":"chatcmpl_1","model":"deepseek-chat","choices":[{"message":{"role":"assistant","content":"hi","reasoning_content":"think"},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":3,"total_tokens":5}}`))}
 	out, err := Provider{}.ParseUnary(context.Background(), resp)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out.ID != "chatcmpl_1" || out.Messages[0].Content[0].Text != "hi" {
+	if out.ID != "chatcmpl_1" || out.Messages[0].Content[0].Text != "think" || out.Messages[0].Content[1].Text != "hi" {
 		t.Fatalf("unexpected response: %+v", out)
 	}
 	if out.Usage.TotalTokens != 5 {

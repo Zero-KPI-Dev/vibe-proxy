@@ -31,12 +31,12 @@ func TestBuildAnthropicRequest(t *testing.T) {
 }
 
 func TestParseAnthropicUnary(t *testing.T) {
-	resp := &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"id":"msg_1","model":"claude-test","stop_reason":"end_turn","content":[{"type":"text","text":"hi"}],"usage":{"input_tokens":3,"output_tokens":4,"cache_read_input_tokens":1,"cache_creation_input_tokens":2}}`))}
+	resp := &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"id":"msg_1","model":"claude-test","stop_reason":"end_turn","content":[{"type":"thinking","thinking":"think"},{"type":"text","text":"hi"}],"usage":{"input_tokens":3,"output_tokens":4,"cache_read_input_tokens":1,"cache_creation_input_tokens":2}}`))}
 	out, err := Provider{}.ParseUnary(context.Background(), resp)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out.ID != "msg_1" || out.Messages[0].Content[0].Text != "hi" {
+	if out.ID != "msg_1" || out.Messages[0].Content[0].Text != "think" || out.Messages[0].Content[1].Text != "hi" {
 		t.Fatalf("unexpected response: %+v", out)
 	}
 	if out.Usage.PromptTokens != 3 || out.Usage.CompletionTokens != 4 || out.Usage.CacheReadTokens != 1 || out.Usage.CacheWriteTokens != 2 {

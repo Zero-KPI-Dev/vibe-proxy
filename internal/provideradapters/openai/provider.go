@@ -103,6 +103,9 @@ func (p Provider) ParseStream(ctx context.Context, resp *http.Response) (<-chan 
 				continue
 			}
 			for _, ch := range chunk.Choices {
+				if ch.Delta.ReasoningContent != "" {
+					out <- ir.StreamEvent{Type: ir.EventReasoningDelta, Time: time.Now(), Delta: ir.ContentBlock{Type: ir.ContentReasoning, Text: ch.Delta.ReasoningContent}, Raw: []byte(data)}
+				}
 				if ch.Delta.Content != "" {
 					out <- ir.StreamEvent{Type: ir.EventContentDelta, Time: time.Now(), Delta: ir.ContentBlock{Type: ir.ContentText, Text: ch.Delta.Content}, Raw: []byte(data)}
 				}
@@ -176,8 +179,11 @@ func fromIRMessage(m ir.Message) chatMessage {
 
 func toIRMessage(m chatMessage) ir.Message {
 	msg := ir.Message{Role: ir.Role(m.Role), Name: m.Name}
-	if s, ok := m.Content.(string); ok {
-		msg.Content = []ir.ContentBlock{{Type: ir.ContentText, Text: s}}
+	if m.ReasoningContent != "" {
+		msg.Content = append(msg.Content, ir.ContentBlock{Type: ir.ContentReasoning, Text: m.ReasoningContent})
+	}
+	if s, ok := m.Content.(string); ok && s != "" {
+		msg.Content = append(msg.Content, ir.ContentBlock{Type: ir.ContentText, Text: s})
 	}
 	for _, tc := range m.ToolCalls {
 		msg.Content = append(msg.Content, ir.ContentBlock{Type: ir.ContentToolCall, ToolCall: &ir.ToolCall{ID: tc.ID, Name: tc.Function.Name, Arguments: json.RawMessage(tc.Function.Arguments)}})
@@ -216,11 +222,12 @@ type chatRequest struct {
 	Tools       []chatTool    `json:"tools,omitempty"`
 }
 type chatMessage struct {
-	Role       string         `json:"role"`
-	Content    any            `json:"content,omitempty"`
-	Name       string         `json:"name,omitempty"`
-	ToolCallID string         `json:"tool_call_id,omitempty"`
-	ToolCalls  []chatToolCall `json:"tool_calls,omitempty"`
+	Role             string         `json:"role"`
+	Content          any            `json:"content,omitempty"`
+	ReasoningContent string         `json:"reasoning_content,omitempty"`
+	Name             string         `json:"name,omitempty"`
+	ToolCallID       string         `json:"tool_call_id,omitempty"`
+	ToolCalls        []chatToolCall `json:"tool_calls,omitempty"`
 }
 type chatTool struct {
 	Type     string       `json:"type"`
@@ -252,8 +259,9 @@ type chatResponse struct {
 type streamChunk struct {
 	Choices []struct {
 		Delta struct {
-			Content   string         `json:"content"`
-			ToolCalls []chatToolCall `json:"tool_calls"`
+			Content          string         `json:"content"`
+			ReasoningContent string         `json:"reasoning_content"`
+			ToolCalls        []chatToolCall `json:"tool_calls"`
 		} `json:"delta"`
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`

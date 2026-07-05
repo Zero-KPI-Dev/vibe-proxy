@@ -173,8 +173,11 @@ func toBlocks(blocks []ir.ContentBlock) []contentBlock {
 func fromBlocks(blocks []contentBlock) []ir.ContentBlock {
 	out := []ir.ContentBlock{}
 	for _, b := range blocks {
-		if b.Type == "text" {
+		switch b.Type {
+		case "text":
 			out = append(out, ir.ContentBlock{Type: ir.ContentText, Text: b.Text})
+		case "thinking":
+			out = append(out, ir.ContentBlock{Type: ir.ContentReasoning, Text: b.Thinking})
 		}
 	}
 	return out
@@ -190,10 +193,14 @@ func flatten(blocks []ir.ContentBlock) string {
 }
 func parseTextDelta(raw json.RawMessage) string {
 	var d struct {
-		Text string `json:"text"`
+		Text     string `json:"text"`
+		Thinking string `json:"thinking"`
 	}
 	json.Unmarshal(raw, &d)
-	return d.Text
+	if d.Text != "" {
+		return d.Text
+	}
+	return d.Thinking
 }
 func parseUsage(raw json.RawMessage) ir.Usage {
 	var u anthropicUsage
@@ -226,6 +233,7 @@ type anthropicMessage struct {
 type contentBlock struct {
 	Type      string          `json:"type"`
 	Text      string          `json:"text,omitempty"`
+	Thinking  string          `json:"thinking,omitempty"`
 	Source    *source         `json:"source,omitempty"`
 	ID        string          `json:"id,omitempty"`
 	Name      string          `json:"name,omitempty"`

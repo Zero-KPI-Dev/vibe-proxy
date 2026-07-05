@@ -142,8 +142,10 @@ func toAnthropicBlocks(blocks []ir.ContentBlock) []map[string]any {
 	out := []map[string]any{}
 	for _, b := range blocks {
 		switch b.Type {
-		case ir.ContentText, ir.ContentReasoning:
+		case ir.ContentText:
 			out = append(out, map[string]any{"type": "text", "text": b.Text})
+		case ir.ContentReasoning:
+			out = append(out, map[string]any{"type": "thinking", "thinking": b.Text})
 		case ir.ContentToolCall:
 			if b.ToolCall != nil {
 				out = append(out, map[string]any{"type": "tool_use", "id": b.ToolCall.ID, "name": b.ToolCall.Name, "input": json.RawMessage(b.ToolCall.Arguments)})
