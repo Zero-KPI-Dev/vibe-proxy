@@ -1,0 +1,13 @@
+# local runtime data
+*.db
+*.db-shm
+*.db-wal
+vibe-proxy
+
+# editor / OS
+.DS_Store
+.idea/
+.vscode/
+
+# logs
+*.log

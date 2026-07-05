@@ -46,6 +46,7 @@ Start here:
 - [`docs/streaming-engine.md`](docs/streaming-engine.md) — streaming conversion model
 - [`docs/mvp-roadmap.md`](docs/mvp-roadmap.md) — v0.1 scope and phases
 - [`docs/admin-api.md`](docs/admin-api.md) — local admin API
+- [`docs/development.md`](docs/development.md) — local development and test commands
 - [`docs/contributing-architecture.md`](docs/contributing-architecture.md) — how contributors should extend the system
 
 ## Intended v0.1 Scope
