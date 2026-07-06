@@ -12,13 +12,17 @@ export interface ProviderConfig {
   models: string[]
   max_concurrency?: number
   api_key_env?: string
+  api_key_source?: "env" | "literal"
+  auth_type?: "bearer" | "api_key_header" | "none"
 }
 
 export interface ProviderFormData {
   id: string
   type: "openai-compatible" | "anthropic"
   base_url: string
-  api_key_env: string
+  api_key_env?: string
+  api_key?: string
+  api_key_source?: "env" | "literal"
   auth_type: string
   header?: string
   models: string[]

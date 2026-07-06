@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/a448582655/vibe-proxy/internal/upstreamauth"
 	"gopkg.in/yaml.v3"
 )
 
@@ -59,21 +58,10 @@ func UpdateProvider(path string, input LocalProviderInput) (*RuntimeConfig, erro
 			authType = "bearer"
 		}
 	}
-	secret := upstreamauth.SecretRef("env:" + input.APIKeyEnv)
-	auth := upstreamauth.Profile{Type: authType}
-	switch authType {
-	case "bearer":
-		auth.Token = secret
-	case "api_key_header":
-		auth.Header = input.Header
-		if auth.Header == "" {
-			auth.Header = "x-api-key"
-		}
-		auth.Value = secret
-	case "none":
-	default:
-		auth.Type = "bearer"
-		auth.Token = secret
+	existing := cfg.Providers[input.ID]
+	auth, err := buildProviderAuth(input, authType, providerType, &existing)
+	if err != nil {
+		return nil, err
 	}
 	cfg.Providers[input.ID] = ProviderConfig{
 		Type:           providerType,

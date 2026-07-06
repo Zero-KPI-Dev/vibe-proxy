@@ -67,8 +67,10 @@ export function ProviderEditPage() {
               id: provider.id,
               type: provider.type,
               base_url: provider.base_url,
+              auth_type: provider.auth_type ?? "bearer",
+              api_key_source: provider.api_key_source ?? "env",
               api_key_env: provider.api_key_env ?? "",
-              auth_type: "bearer",
+              api_key: "",
               models: (provider.models ?? []).join(", "),
               max_concurrency: provider.max_concurrency ?? 32,
             }}

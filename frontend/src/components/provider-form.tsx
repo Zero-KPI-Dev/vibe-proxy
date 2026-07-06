@@ -13,49 +13,52 @@ import {
 } from "@/components/ui/select"
 import type { ProviderFormData } from "@/lib/types"
 
-const authTypeSchema = z.enum(["bearer", "api_key_header", "none"])
-
-const providerSchema = z.discriminatedUnion("auth_type", [
-  z.object({
+const providerSchema = z
+  .object({
     id: z.string().min(1, "Provider ID is required"),
     type: z.enum(["openai-compatible", "anthropic"]),
     base_url: z.string().min(1, "Base URL is required").url("Must be a valid URL"),
-    auth_type: z.literal("bearer"),
-    api_key_env: z.string().min(1, "API key env var is required"),
-    header: z.string().optional(),
-    models: z.string().transform((s) => s.split(",").map((m) => m.trim()).filter(Boolean)),
-    alias: z.string().optional(),
-    alias_model: z.string().optional(),
-    default_model: z.string().optional(),
-    max_concurrency: z.coerce.number().int().positive().optional(),
-  }),
-  z.object({
-    id: z.string().min(1, "Provider ID is required"),
-    type: z.enum(["openai-compatible", "anthropic"]),
-    base_url: z.string().min(1, "Base URL is required").url("Must be a valid URL"),
-    auth_type: z.literal("api_key_header"),
-    api_key_env: z.string().min(1, "API key env var is required"),
-    header: z.string().min(1, "Header name is required").default("x-api-key"),
-    models: z.string().transform((s) => s.split(",").map((m) => m.trim()).filter(Boolean)),
-    alias: z.string().optional(),
-    alias_model: z.string().optional(),
-    default_model: z.string().optional(),
-    max_concurrency: z.coerce.number().int().positive().optional(),
-  }),
-  z.object({
-    id: z.string().min(1, "Provider ID is required"),
-    type: z.enum(["openai-compatible", "anthropic"]),
-    base_url: z.string().min(1, "Base URL is required").url("Must be a valid URL"),
-    auth_type: z.literal("none"),
+    auth_type: z.enum(["bearer", "api_key_header", "none"]),
+    api_key_source: z.enum(["env", "literal"]).optional(),
     api_key_env: z.string().optional(),
+    api_key: z.string().optional(),
     header: z.string().optional(),
     models: z.string().transform((s) => s.split(",").map((m) => m.trim()).filter(Boolean)),
     alias: z.string().optional(),
     alias_model: z.string().optional(),
     default_model: z.string().optional(),
     max_concurrency: z.coerce.number().int().positive().optional(),
-  }),
-])
+  })
+  .superRefine((v, ctx) => {
+    if (v.auth_type === "none") return
+    const source = v.api_key_source ?? "env"
+    if (source === "env" && !v.api_key_env) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["api_key_env"],
+        message: "API key env var is required",
+      })
+    }
+    if (source === "literal" && !v.api_key && !isEditMode()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["api_key"],
+        message: "API key is required",
+      })
+    }
+    if (v.auth_type === "api_key_header" && !v.header) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["header"],
+        message: "Header name is required",
+      })
+    }
+  })
+
+let currentFormMode: "create" | "edit" = "create"
+function isEditMode() {
+  return currentFormMode === "edit"
+}
 
 type ProviderFormValues = z.input<typeof providerSchema>
 
@@ -67,6 +70,7 @@ interface ProviderFormProps {
 }
 
 export function ProviderForm({ defaultValues, onSubmit, isPending, mode }: ProviderFormProps) {
+  currentFormMode = mode
   const {
     register,
     handleSubmit,
@@ -80,6 +84,8 @@ export function ProviderForm({ defaultValues, onSubmit, isPending, mode }: Provi
       type: "openai-compatible",
       base_url: "http://host.docker.internal:3000/v1",
       api_key_env: "",
+      api_key: "",
+      api_key_source: "env",
       auth_type: "bearer",
       models: "",
       alias: "",
@@ -92,6 +98,7 @@ export function ProviderForm({ defaultValues, onSubmit, isPending, mode }: Provi
 
   const selectedType = watch("type")
   const selectedAuth = watch("auth_type")
+  const selectedKeySource = watch("api_key_source") ?? "env"
 
   const handleFormSubmit = async (values: ProviderFormValues) => {
     // react-hook-form receives the resolver output here, so transformed fields
@@ -164,11 +171,48 @@ export function ProviderForm({ defaultValues, onSubmit, isPending, mode }: Provi
 
         {selectedAuth !== "none" && (
           <div className="space-y-2">
+            <Label htmlFor="api_key_source">Key Source</Label>
+            <Select
+              defaultValue={defaultValues?.api_key_source ?? "env"}
+              onValueChange={(v) => setValue("api_key_source", v as "env" | "literal")}
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="env">Environment variable</SelectItem>
+                <SelectItem value="literal">Paste API key locally</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        )}
+
+        {selectedAuth !== "none" && selectedKeySource === "env" && (
+          <div className="space-y-2">
             <Label htmlFor="api_key_env">API Key Env Var</Label>
             <Input id="api_key_env" placeholder="OPENAI_API_KEY" {...register("api_key_env")} />
             {errors.api_key_env && (
               <p className="text-xs text-destructive">{errors.api_key_env.message}</p>
             )}
+          </div>
+        )}
+
+        {selectedAuth !== "none" && selectedKeySource === "literal" && (
+          <div className="space-y-2">
+            <Label htmlFor="api_key">API Key</Label>
+            <Input
+              id="api_key"
+              type="password"
+              placeholder={mode === "edit" ? "Leave blank to keep current key" : "sk-..."}
+              autoComplete="off"
+              {...register("api_key")}
+            />
+            {errors.api_key && (
+              <p className="text-xs text-destructive">{errors.api_key.message}</p>
+            )}
+            <p className="text-xs text-muted-foreground">
+              Saved only in your local vibe-proxy YAML as a literal secret; it is never shown again.
+            </p>
           </div>
         )}
 

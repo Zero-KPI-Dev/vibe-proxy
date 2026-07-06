@@ -198,6 +198,45 @@ func TestRuntimeAdminLocalConfigure(t *testing.T) {
 	}
 }
 
+func TestRuntimeAdminLocalConfigureAcceptsLiteralAPIKey(t *testing.T) {
+	t.Setenv("VIBE_PROXY_ADMIN_TOKEN", "admin-token")
+	path := filepath.Join(t.TempDir(), "bootstrap.yaml")
+	if err := os.WriteFile(path, []byte("version: vibeproxy.io/v1alpha1\nsecurity:\n  admin_bearer_token_env: VIBE_PROXY_ADMIN_TOKEN\nclient_keys: []\nproviders: {}\nmodels:\n  allow_raw: true\n  aliases: {}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.LoadRuntime(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	testPromOnce.Do(func() { testProm = metrics.New() })
+	s := New(path, cfg, metrics.MultiSink{}, testProm)
+	body := bytes.NewReader([]byte(`{"id":"direct","type":"openai-compatible","base_url":"http://127.0.0.1:3000/v1","auth_type":"bearer","api_key_source":"literal","api_key":"sk-direct-secret","models":["deepseek-v4-flash"]}`))
+	req := httptest.NewRequest(http.MethodPost, "/admin/local/configure", body)
+	req.Header.Set("Authorization", "Bearer admin-token")
+	w := httptest.NewRecorder()
+	s.Routes().ServeHTTP(w, req)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"ok":true`) {
+		t.Fatalf("unexpected configure response: %d %s", w.Code, w.Body.String())
+	}
+	written, _ := os.ReadFile(path)
+	if !strings.Contains(string(written), "literal:sk-direct-secret") {
+		t.Fatalf("literal secret was not written: %s", written)
+	}
+	snapshotReq := httptest.NewRequest(http.MethodGet, "/admin/config/snapshot", nil)
+	snapshotReq.Header.Set("Authorization", "Bearer admin-token")
+	snapshotW := httptest.NewRecorder()
+	s.Routes().ServeHTTP(snapshotW, snapshotReq)
+	if snapshotW.Code != 200 {
+		t.Fatalf("unexpected snapshot response: %d %s", snapshotW.Code, snapshotW.Body.String())
+	}
+	if strings.Contains(snapshotW.Body.String(), "sk-direct-secret") {
+		t.Fatalf("snapshot leaked literal secret: %s", snapshotW.Body.String())
+	}
+	if !strings.Contains(snapshotW.Body.String(), `"api_key_source":"literal"`) {
+		t.Fatalf("snapshot did not expose key source metadata: %s", snapshotW.Body.String())
+	}
+}
+
 func TestRuntimeAdminProviderCRUD(t *testing.T) {
 	t.Setenv("VIBE_PROXY_ADMIN_TOKEN", "admin-token")
 	path := writeAdminTestConfig(t)

@@ -1,7 +1,9 @@
 package config
 
 import (
+	"fmt"
 	"os"
+	"strings"
 
 	"github.com/a448582655/vibe-proxy/internal/upstreamauth"
 	"gopkg.in/yaml.v3"
@@ -12,6 +14,8 @@ type LocalProviderInput struct {
 	Type           string   `json:"type"`
 	BaseURL        string   `json:"base_url"`
 	APIKeyEnv      string   `json:"api_key_env"`
+	APIKey         string   `json:"api_key"`
+	APIKeySource   string   `json:"api_key_source"`
 	AuthType       string   `json:"auth_type"`
 	Header         string   `json:"header"`
 	Models         []string `json:"models"`
@@ -48,21 +52,10 @@ func UpsertLocalProvider(path string, input LocalProviderInput) (*RuntimeConfig,
 			authType = "bearer"
 		}
 	}
-	secret := upstreamauth.SecretRef("env:" + input.APIKeyEnv)
-	auth := upstreamauth.Profile{Type: authType}
-	switch authType {
-	case "bearer":
-		auth.Token = secret
-	case "api_key_header":
-		auth.Header = input.Header
-		if auth.Header == "" {
-			auth.Header = "x-api-key"
-		}
-		auth.Value = secret
-	case "none":
-	default:
-		auth.Type = "bearer"
-		auth.Token = secret
+	existing := cfg.Providers[input.ID]
+	auth, err := buildProviderAuth(input, authType, providerType, &existing)
+	if err != nil {
+		return nil, err
 	}
 	cfg.Providers[input.ID] = ProviderConfig{Type: providerType, BaseURL: input.BaseURL, Auth: auth, Models: input.Models, MaxConcurrency: input.MaxConcurrency}
 	if input.Alias != "" && input.AliasModel != "" {
@@ -82,4 +75,82 @@ func UpsertLocalProvider(path string, input LocalProviderInput) (*RuntimeConfig,
 		return nil, err
 	}
 	return CompileSimple(cfg)
+}
+
+func buildProviderAuth(input LocalProviderInput, authType string, providerType string, existing *ProviderConfig) (upstreamauth.Profile, error) {
+	if authType == "" {
+		if providerType == "anthropic" {
+			authType = "api_key_header"
+		} else {
+			authType = "bearer"
+		}
+	}
+	if authType == "none" {
+		return upstreamauth.Profile{Type: "none"}, nil
+	}
+	source := input.APIKeySource
+	if source == "" {
+		if input.APIKey != "" {
+			source = "literal"
+		} else {
+			source = "env"
+		}
+	}
+	secret, err := providerSecretRef(input, source, authType, existing)
+	if err != nil {
+		return upstreamauth.Profile{}, err
+	}
+	auth := upstreamauth.Profile{Type: authType}
+	switch authType {
+	case "bearer":
+		auth.Token = secret
+	case "api_key_header":
+		auth.Header = input.Header
+		if auth.Header == "" {
+			auth.Header = "x-api-key"
+		}
+		auth.Value = secret
+	default:
+		auth.Type = "bearer"
+		auth.Token = secret
+	}
+	return auth, nil
+}
+
+func providerSecretRef(input LocalProviderInput, source string, authType string, existing *ProviderConfig) (upstreamauth.SecretRef, error) {
+	switch source {
+	case "literal":
+		if input.APIKey != "" {
+			return upstreamauth.SecretRef("literal:" + input.APIKey), nil
+		}
+		if existing != nil {
+			if preserved := existingSecretRef(*existing, authType); preserved != "" {
+				return preserved, nil
+			}
+		}
+		return "", fmt.Errorf("api_key is required when api_key_source is literal")
+	case "env", "":
+		if input.APIKeyEnv != "" {
+			return upstreamauth.SecretRef("env:" + input.APIKeyEnv), nil
+		}
+		if existing != nil {
+			if preserved := existingSecretRef(*existing, authType); strings.HasPrefix(string(preserved), "env:") {
+				return preserved, nil
+			}
+		}
+		return "", fmt.Errorf("api_key_env is required when api_key_source is env")
+	default:
+		return "", fmt.Errorf("unsupported api_key_source %q", source)
+	}
+}
+
+func existingSecretRef(provider ProviderConfig, authType string) upstreamauth.SecretRef {
+	switch authType {
+	case "bearer":
+		return provider.Auth.Token
+	case "api_key_header":
+		return provider.Auth.Value
+	default:
+		return ""
+	}
 }

@@ -314,10 +314,36 @@ func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 	}
 	providers := []map[string]any{}
 	for id, p := range snap.Config.Providers {
-		providers = append(providers, map[string]any{"id": id, "type": p.Type, "base_url": p.BaseURL, "models": p.Models, "max_concurrency": p.MaxConcurrency})
+		authType, keySource, keyEnv := providerAuthMeta(p)
+		providers = append(providers, map[string]any{"id": id, "type": p.Type, "base_url": p.BaseURL, "models": p.Models, "max_concurrency": p.MaxConcurrency, "auth_type": authType, "api_key_source": keySource, "api_key_env": keyEnv})
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{"loaded_at": snap.LoadedAt, "providers": providers, "model_resolver": snap.Config.ModelResolver})
+}
+
+func providerAuthMeta(p config.ProviderConfig) (authType string, keySource string, keyEnv string) {
+	authType = p.Auth.Type
+	if authType == "" {
+		authType = "none"
+	}
+	var ref upstreamauth.SecretRef
+	switch authType {
+	case "bearer":
+		ref = p.Auth.Token
+	case "api_key_header":
+		ref = p.Auth.Value
+	}
+	raw := string(ref)
+	switch {
+	case strings.HasPrefix(raw, "env:"):
+		return authType, "env", strings.TrimPrefix(raw, "env:")
+	case strings.HasPrefix(raw, "literal:"):
+		return authType, "literal", ""
+	case raw != "":
+		return authType, "literal", ""
+	default:
+		return authType, "", ""
+	}
 }
 
 func (s *Server) adminValidateConfig(w http.ResponseWriter, r *http.Request) {
@@ -408,10 +434,6 @@ func (s *Server) adminLocalConfigure(w http.ResponseWriter, r *http.Request) {
 	}
 	if input.ID == "" || input.BaseURL == "" {
 		http.Error(w, "id and base_url are required", 400)
-		return
-	}
-	if input.APIKeyEnv == "" && input.AuthType != "none" {
-		http.Error(w, "api_key_env is required unless auth_type is none", 400)
 		return
 	}
 	next, err := config.UpsertLocalProvider(s.cfgPath, input)
