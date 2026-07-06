@@ -1,7 +1,8 @@
-import { useState } from "react"
+import { useMemo, useState } from "react"
 import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { z } from "zod"
+import { Check, ChevronDown } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -12,6 +13,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover"
+import { cn } from "@/lib/utils"
 import { providerApi } from "@/lib/api"
 import type { ProviderFormData } from "@/lib/types"
 
@@ -104,6 +111,25 @@ export function ProviderForm({ defaultValues, onSubmit, isPending, mode }: Provi
   const selectedKeySource = watch("api_key_source") ?? "env"
   const [isFetchingModels, setIsFetchingModels] = useState(false)
   const [modelFetchMessage, setModelFetchMessage] = useState("")
+  const [availableModels, setAvailableModels] = useState<string[]>([])
+  const [modelFilter, setModelFilter] = useState("")
+  const selectedModelsText = watch("models")
+
+  const selectedModels = new Set(
+    (typeof selectedModelsText === "string" ? selectedModelsText.split(",") : selectedModelsText)
+      .map((m) => m.trim())
+      .filter(Boolean)
+  )
+  const filteredModels = useMemo(
+    () => availableModels.filter((model) =>
+      model.toLowerCase().includes(modelFilter.toLowerCase())
+    ),
+    [availableModels, modelFilter]
+  )
+
+  const writeSelectedModels = (models: Iterable<string>) => {
+    setValue("models", Array.from(models).join(", "))
+  }
 
   const handleFormSubmit = async (values: ProviderFormValues) => {
     // react-hook-form receives the resolver output here, so transformed fields
@@ -129,13 +155,44 @@ export function ProviderForm({ defaultValues, onSubmit, isPending, mode }: Provi
         setModelFetchMessage(`Could not fetch models${result.status ? ` (HTTP ${result.status})` : ""}`)
         return
       }
-      setValue("models", result.models.join(", "))
-      setModelFetchMessage(`Imported ${result.models.length} model${result.models.length === 1 ? "" : "s"}`)
+      setAvailableModels(result.models)
+      const nextSelected = new Set(selectedModels)
+      if (nextSelected.size === 0 && result.models.length === 1) {
+        nextSelected.add(result.models[0]!)
+        writeSelectedModels(nextSelected)
+      }
+      setModelFetchMessage(`Fetched ${result.models.length} model${result.models.length === 1 ? "" : "s"}. Select the ones you want to enable.`)
     } catch (e) {
       setModelFetchMessage(e instanceof Error ? e.message : "Could not fetch models")
     } finally {
       setIsFetchingModels(false)
     }
+  }
+
+  const toggleModel = (model: string, checked: boolean) => {
+    const next = new Set(selectedModels)
+    if (checked) {
+      next.add(model)
+    } else {
+      next.delete(model)
+    }
+    writeSelectedModels(next)
+  }
+
+  const selectFilteredModels = () => {
+    const next = new Set(selectedModels)
+    for (const model of filteredModels) next.add(model)
+    writeSelectedModels(next)
+  }
+
+  const clearFilteredModels = () => {
+    if (filteredModels.length === 0) {
+      writeSelectedModels([])
+      return
+    }
+    const next = new Set(selectedModels)
+    for (const model of filteredModels) next.delete(model)
+    writeSelectedModels(next)
   }
 
   return (
@@ -282,6 +339,79 @@ export function ProviderForm({ defaultValues, onSubmit, isPending, mode }: Provi
           </p>
           {modelFetchMessage && (
             <p className="text-xs text-muted-foreground">{modelFetchMessage}</p>
+          )}
+          {availableModels.length > 0 && (
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button type="button" variant="outline" className="justify-between sm:w-72">
+                    <span>
+                      Choose models · {selectedModels.size}/{availableModels.length}
+                    </span>
+                    <ChevronDown className="h-4 w-4 opacity-70" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-[min(34rem,calc(100vw-2rem))] space-y-3">
+                  <div className="space-y-1">
+                    <div className="text-sm font-medium">Select provider models</div>
+                    <div className="text-xs text-muted-foreground">
+                      Fetched models are candidates only. Check the models you want to expose through vibe-proxy.
+                    </div>
+                  </div>
+                  <Input
+                    value={modelFilter}
+                    onChange={(e) => setModelFilter(e.target.value)}
+                    placeholder="Filter models..."
+                  />
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-xs text-muted-foreground">
+                      {selectedModels.size} selected · {filteredModels.length} shown
+                    </div>
+                    <div className="flex gap-2">
+                      <Button type="button" variant="outline" size="sm" onClick={selectFilteredModels}>
+                        Select shown
+                      </Button>
+                      <Button type="button" variant="ghost" size="sm" onClick={clearFilteredModels}>
+                        Clear shown
+                      </Button>
+                    </div>
+                  </div>
+                  <div className="max-h-72 overflow-y-auto rounded-md border border-border">
+                    {filteredModels.length === 0 ? (
+                      <div className="px-3 py-6 text-center text-sm text-muted-foreground">
+                        No models match this filter.
+                      </div>
+                    ) : (
+                      filteredModels.map((model) => {
+                        const checked = selectedModels.has(model)
+                        return (
+                          <button
+                            key={model}
+                            type="button"
+                            onClick={() => toggleModel(model, !checked)}
+                            className={cn(
+                              "flex w-full cursor-pointer items-center gap-2 border-b border-border px-3 py-2 text-left text-sm last:border-b-0 hover:bg-accent",
+                              checked && "bg-accent/60"
+                            )}
+                          >
+                            <span className={cn(
+                              "flex h-4 w-4 shrink-0 items-center justify-center rounded border border-border",
+                              checked && "border-primary bg-primary text-primary-foreground"
+                            )}>
+                              {checked && <Check className="h-3 w-3" />}
+                            </span>
+                            <span className="font-mono text-xs">{model}</span>
+                          </button>
+                        )
+                      })
+                    )}
+                  </div>
+                </PopoverContent>
+              </Popover>
+              <p className="text-xs text-muted-foreground">
+                Only checked models are saved. You can still edit the text field manually.
+              </p>
+            </div>
           )}
         </div>
 
