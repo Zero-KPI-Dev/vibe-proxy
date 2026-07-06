@@ -46,30 +46,12 @@ func UpdateProvider(path string, input LocalProviderInput) (*RuntimeConfig, erro
 	if cfg.Providers == nil {
 		cfg.Providers = map[string]ProviderConfig{}
 	}
-	providerType := input.Type
-	if providerType == "" {
-		providerType = "openai-compatible"
-	}
-	authType := input.AuthType
-	if authType == "" {
-		if providerType == "anthropic" {
-			authType = "api_key_header"
-		} else {
-			authType = "bearer"
-		}
-	}
 	existing := cfg.Providers[input.ID]
-	auth, err := buildProviderAuth(input, authType, providerType, &existing)
+	provider, err := BuildLocalProvider(input, &existing)
 	if err != nil {
 		return nil, err
 	}
-	cfg.Providers[input.ID] = ProviderConfig{
-		Type:           providerType,
-		BaseURL:        input.BaseURL,
-		Auth:           auth,
-		Models:         input.Models,
-		MaxConcurrency: input.MaxConcurrency,
-	}
+	cfg.Providers[input.ID] = provider
 	out, err := yaml.Marshal(cfg)
 	if err != nil {
 		return nil, err

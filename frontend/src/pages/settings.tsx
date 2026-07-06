@@ -3,17 +3,40 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
-import { Separator } from "@/components/ui/separator"
 import { toast } from "sonner"
-import { Shield, Save } from "lucide-react"
+import { Palette, Shield, Save } from "lucide-react"
 import { setToken, getToken } from "@/lib/api"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+
+type Theme = "dark" | "light"
+
+function applyTheme(theme: Theme) {
+  localStorage.setItem("vibe_theme", theme)
+  document.documentElement.classList.toggle("light", theme === "light")
+  document.documentElement.classList.toggle("dark", theme === "dark")
+}
 
 export function SettingsPage() {
   const [adminToken, setAdminToken] = useState(getToken())
+  const [theme, setTheme] = useState<Theme>(
+    (localStorage.getItem("vibe_theme") as Theme | null) ?? "dark"
+  )
 
   const handleSaveToken = () => {
     setToken(adminToken)
     toast.success("Admin token saved")
+  }
+
+  const handleThemeChange = (next: Theme) => {
+    setTheme(next)
+    applyTheme(next)
+    toast.success(next === "light" ? "Light theme enabled" : "Dark theme enabled")
   }
 
   return (
@@ -56,6 +79,33 @@ export function SettingsPage() {
               Token is saved to localStorage and sent as a Bearer token with every admin API request.
             </p>
           </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <div className="flex items-center gap-2">
+            <Palette className="h-5 w-5 text-primary" />
+            <CardTitle className="text-base">Appearance</CardTitle>
+          </div>
+          <CardDescription>
+            Choose the control plane theme for this browser.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-2">
+          <Label htmlFor="theme">Theme</Label>
+          <Select value={theme} onValueChange={(v) => handleThemeChange(v as Theme)}>
+            <SelectTrigger id="theme">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="dark">Dark</SelectItem>
+              <SelectItem value="light">Light</SelectItem>
+            </SelectContent>
+          </Select>
+          <p className="text-xs text-muted-foreground">
+            Saved locally in your browser and applied on startup.
+          </p>
         </CardContent>
       </Card>
     </div>

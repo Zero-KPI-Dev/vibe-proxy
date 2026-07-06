@@ -167,6 +167,15 @@ export interface ProviderTestResponse {
   error?: string
 }
 
+export interface ProviderModelsResponse {
+  ok: boolean
+  models: string[]
+  status?: number
+  latency_ms?: number
+  target?: string
+  error?: string
+}
+
 export interface ConfigureResponse {
   ok: boolean
   loaded_at: string

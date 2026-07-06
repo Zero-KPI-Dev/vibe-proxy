@@ -1,3 +1,4 @@
+import { useState } from "react"
 import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { z } from "zod"
@@ -11,6 +12,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { providerApi } from "@/lib/api"
 import type { ProviderFormData } from "@/lib/types"
 
 const providerSchema = z
@@ -75,6 +77,7 @@ export function ProviderForm({ defaultValues, onSubmit, isPending, mode }: Provi
     register,
     handleSubmit,
     setValue,
+    getValues,
     watch,
     formState: { errors },
   } = useForm<ProviderFormValues>({
@@ -99,6 +102,8 @@ export function ProviderForm({ defaultValues, onSubmit, isPending, mode }: Provi
   const selectedType = watch("type")
   const selectedAuth = watch("auth_type")
   const selectedKeySource = watch("api_key_source") ?? "env"
+  const [isFetchingModels, setIsFetchingModels] = useState(false)
+  const [modelFetchMessage, setModelFetchMessage] = useState("")
 
   const handleFormSubmit = async (values: ProviderFormValues) => {
     // react-hook-form receives the resolver output here, so transformed fields
@@ -106,6 +111,31 @@ export function ProviderForm({ defaultValues, onSubmit, isPending, mode }: Provi
     // object a second time, because the Zod input schema expects models to be a
     // comma-separated string.
     await onSubmit(values as unknown as ProviderFormData)
+  }
+
+  const handleFetchModels = async () => {
+    setModelFetchMessage("")
+    setIsFetchingModels(true)
+    try {
+      const values = getValues()
+      const payload = {
+        ...values,
+        models: typeof values.models === "string"
+          ? values.models.split(",").map((m) => m.trim()).filter(Boolean)
+          : values.models,
+      } as unknown as ProviderFormData
+      const result = await providerApi.models(payload)
+      if (!result.ok) {
+        setModelFetchMessage(`Could not fetch models${result.status ? ` (HTTP ${result.status})` : ""}`)
+        return
+      }
+      setValue("models", result.models.join(", "))
+      setModelFetchMessage(`Imported ${result.models.length} model${result.models.length === 1 ? "" : "s"}`)
+    } catch (e) {
+      setModelFetchMessage(e instanceof Error ? e.message : "Could not fetch models")
+    } finally {
+      setIsFetchingModels(false)
+    }
   }
 
   return (
@@ -230,12 +260,29 @@ export function ProviderForm({ defaultValues, onSubmit, isPending, mode }: Provi
         )}
 
         <div className="space-y-2 sm:col-span-2">
-          <Label htmlFor="models">Models (comma-separated)</Label>
+          <div className="flex items-center justify-between gap-3">
+            <Label htmlFor="models">Models</Label>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={handleFetchModels}
+              disabled={isFetchingModels || !watch("base_url") || (selectedAuth !== "none" && selectedKeySource === "env" && !watch("api_key_env")) || (selectedAuth !== "none" && selectedKeySource === "literal" && !watch("api_key") && mode !== "edit")}
+            >
+              {isFetchingModels ? "Fetching..." : "Fetch Models"}
+            </Button>
+          </div>
           <Input
             id="models"
-            placeholder="gpt-4, gpt-3.5-turbo"
+            placeholder="Click Fetch Models, or enter: gpt-4, gpt-3.5-turbo"
             {...register("models")}
           />
+          <p className="text-xs text-muted-foreground">
+            Fill Base URL and auth first, then fetch available models from the provider.
+          </p>
+          {modelFetchMessage && (
+            <p className="text-xs text-muted-foreground">{modelFetchMessage}</p>
+          )}
         </div>
 
         <div className="space-y-2">

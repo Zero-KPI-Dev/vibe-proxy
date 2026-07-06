@@ -40,24 +40,12 @@ func UpsertLocalProvider(path string, input LocalProviderInput) (*RuntimeConfig,
 	if cfg.Models.Aliases == nil {
 		cfg.Models.Aliases = map[string]string{}
 	}
-	providerType := input.Type
-	if providerType == "" {
-		providerType = "openai-compatible"
-	}
-	authType := input.AuthType
-	if authType == "" {
-		if providerType == "anthropic" {
-			authType = "api_key_header"
-		} else {
-			authType = "bearer"
-		}
-	}
 	existing := cfg.Providers[input.ID]
-	auth, err := buildProviderAuth(input, authType, providerType, &existing)
+	provider, err := BuildLocalProvider(input, &existing)
 	if err != nil {
 		return nil, err
 	}
-	cfg.Providers[input.ID] = ProviderConfig{Type: providerType, BaseURL: input.BaseURL, Auth: auth, Models: input.Models, MaxConcurrency: input.MaxConcurrency}
+	cfg.Providers[input.ID] = provider
 	if input.Alias != "" && input.AliasModel != "" {
 		cfg.Models.Aliases[input.Alias] = input.ID + "/" + input.AliasModel
 	}
@@ -75,6 +63,32 @@ func UpsertLocalProvider(path string, input LocalProviderInput) (*RuntimeConfig,
 		return nil, err
 	}
 	return CompileSimple(cfg)
+}
+
+func BuildLocalProvider(input LocalProviderInput, existing *ProviderConfig) (ProviderConfig, error) {
+	providerType := input.Type
+	if providerType == "" {
+		providerType = "openai-compatible"
+	}
+	authType := input.AuthType
+	if authType == "" {
+		if providerType == "anthropic" {
+			authType = "api_key_header"
+		} else {
+			authType = "bearer"
+		}
+	}
+	auth, err := buildProviderAuth(input, authType, providerType, existing)
+	if err != nil {
+		return ProviderConfig{}, err
+	}
+	return ProviderConfig{
+		Type:           providerType,
+		BaseURL:        input.BaseURL,
+		Auth:           auth,
+		Models:         input.Models,
+		MaxConcurrency: input.MaxConcurrency,
+	}, nil
 }
 
 func buildProviderAuth(input LocalProviderInput, authType string, providerType string, existing *ProviderConfig) (upstreamauth.Profile, error) {

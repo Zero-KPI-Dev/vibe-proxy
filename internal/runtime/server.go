@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -88,6 +89,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/admin/config/validate", s.adminValidateConfig)
 	mux.HandleFunc("/admin/config/raw", s.adminRawConfig)
 	mux.HandleFunc("/admin/providers/test", s.adminProviderTest)
+	mux.HandleFunc("/admin/providers/models", s.adminProviderModels)
 	mux.HandleFunc("/admin/providers/health", s.adminProviderHealth)
 	mux.HandleFunc("/admin/providers", s.adminProviders) // GET (list), POST (create), PUT (update), DELETE (delete)
 	mux.HandleFunc("/admin/local/configure", s.adminLocalConfigure)
@@ -399,6 +401,96 @@ func (s *Server) adminProviderTest(w http.ResponseWriter, r *http.Request) {
 	resp.Body.Close()
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{"ok": resp.StatusCode >= 200 && resp.StatusCode < 400, "provider": providerID, "status": resp.StatusCode, "latency_ms": latency, "target": testURL})
+}
+
+func (s *Server) adminProviderModels(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	snap := s.current()
+	if !auth.AuthorizeAdmin(r, snap.AdminToken) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	var input config.LocalProviderInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	if input.BaseURL == "" {
+		http.Error(w, "base_url is required", http.StatusBadRequest)
+		return
+	}
+	provider, err := config.BuildLocalProvider(input, nil)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	target := providerProbeURL(provider)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		http.Error(w, "invalid provider url", http.StatusBadRequest)
+		return
+	}
+	if authErr := provider.Auth.Apply(req); authErr != nil {
+		http.Error(w, authErr.Code, http.StatusBadRequest)
+		return
+	}
+	started := time.Now()
+	resp, err := s.httpClient.Do(req)
+	latency := time.Since(started).Milliseconds()
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"ok": false, "models": []string{}, "latency_ms": latency, "target": target, "error": "connection_failed"})
+		return
+	}
+	defer resp.Body.Close()
+	limited := io.LimitReader(resp.Body, 4<<20)
+	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
+		io.Copy(io.Discard, limited)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"ok": false, "models": []string{}, "status": resp.StatusCode, "latency_ms": latency, "target": target})
+		return
+	}
+	models, err := parseProviderModels(limited)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"ok": false, "models": []string{}, "status": resp.StatusCode, "latency_ms": latency, "target": target, "error": "invalid_models_response"})
+		return
+	}
+	sort.Strings(models)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"ok": true, "models": models, "status": resp.StatusCode, "latency_ms": latency, "target": target})
+}
+
+func parseProviderModels(r io.Reader) ([]string, error) {
+	var body struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+		Models []string `json:"models"`
+	}
+	if err := json.NewDecoder(r).Decode(&body); err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	models := []string{}
+	for _, m := range body.Models {
+		if m != "" && !seen[m] {
+			seen[m] = true
+			models = append(models, m)
+		}
+	}
+	for _, item := range body.Data {
+		if item.ID != "" && !seen[item.ID] {
+			seen[item.ID] = true
+			models = append(models, item.ID)
+		}
+	}
+	return models, nil
 }
 
 func providerProbeURL(p config.ProviderConfig) string {

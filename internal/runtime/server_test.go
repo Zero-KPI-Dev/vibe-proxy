@@ -237,6 +237,38 @@ func TestRuntimeAdminLocalConfigureAcceptsLiteralAPIKey(t *testing.T) {
 	}
 }
 
+func TestRuntimeAdminProviderModelsProbeUsesUnsavedFormAuth(t *testing.T) {
+	t.Setenv("VIBE_PROXY_ADMIN_TOKEN", "admin-token")
+	cfg, err := config.CompileSimple(config.SimpleConfig{Security: config.SecurityConfig{AdminBearerTokenEnv: "VIBE_PROXY_ADMIN_TOKEN"}, Providers: map[string]config.ProviderConfig{}, Models: config.ModelsConfig{AllowRaw: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	testPromOnce.Do(func() { testProm = metrics.New() })
+	s := New("", cfg, metrics.MultiSink{}, testProm)
+	s.SetHTTPClient(&http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
+		if r.Method != http.MethodGet || r.URL.String() != "https://mock.openai/v1/models" {
+			t.Fatalf("unexpected models probe: %s %s", r.Method, r.URL.String())
+		}
+		if r.Header.Get("Authorization") != "Bearer sk-direct-secret" {
+			t.Fatalf("probe did not use form auth: %v", r.Header)
+		}
+		return jsonResponse(200, `{"object":"list","data":[{"id":"z-model"},{"id":"a-model"}]}`), nil
+	})})
+
+	req := adminJSONRequest(http.MethodPost, "/admin/providers/models", `{"id":"draft","type":"openai-compatible","base_url":"https://mock.openai/v1","auth_type":"bearer","api_key_source":"literal","api_key":"sk-direct-secret"}`)
+	w := httptest.NewRecorder()
+	s.Routes().ServeHTTP(w, req)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"ok":true`) || !strings.Contains(w.Body.String(), `"a-model"`) || !strings.Contains(w.Body.String(), `"z-model"`) {
+		t.Fatalf("unexpected provider models response: %d %s", w.Code, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), "sk-direct-secret") {
+		t.Fatalf("provider models response leaked secret: %s", w.Body.String())
+	}
+	if len(s.current().Config.Providers) != 0 {
+		t.Fatalf("models probe unexpectedly saved provider")
+	}
+}
+
 func TestRuntimeAdminProviderCRUD(t *testing.T) {
 	t.Setenv("VIBE_PROXY_ADMIN_TOKEN", "admin-token")
 	path := writeAdminTestConfig(t)

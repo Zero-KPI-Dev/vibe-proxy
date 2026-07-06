@@ -3,6 +3,7 @@ import type {
   SnapshotResponse,
   ProviderFormData,
   ProviderTestResponse,
+  ProviderModelsResponse,
   ConfigureResponse,
   ValidateConfigResponse,
   RecentRequestsResponse,
@@ -82,6 +83,12 @@ export const providerApi = {
       `/admin/providers/test?id=${encodeURIComponent(id)}`,
       { method: "POST" }
     ),
+
+  models: (data: ProviderFormData) =>
+    request<ProviderModelsResponse>("/admin/providers/models", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
 }
 
 // ---- Aliases ----
