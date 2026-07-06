@@ -1,0 +1,11 @@
+import{c as s,e as d,M as i,j as e,B as o,O as c,g as l}from"./index-BoKgSlLj.js";import{L as m,I as x}from"./label-Dvyo2TOy.js";import{C as h,b as p,c as u,d as j,a as k}from"./card-BF6yu2Wt.js";/**
+ * @license lucide-react v0.460.0 - ISC
+ *
+ * This source code is licensed under the ISC license.
+ * See the LICENSE file in the root directory of this source tree.
+ */const v=s("Save",[["path",{d:"M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z",key:"1c8476"}],["path",{d:"M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7",key:"1ydtos"}],["path",{d:"M7 3v4a1 1 0 0 0 1 1h7",key:"t51u73"}]]);/**
+ * @license lucide-react v0.460.0 - ISC
+ *
+ * This source code is licensed under the ISC license.
+ * See the LICENSE file in the root directory of this source tree.
+ */const g=s("Shield",[["path",{d:"M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z",key:"oel41y"}]]);function C(){const[a,t]=d.useState(i()),n=()=>{c(a),l.success("Admin token saved")};return e.jsxs("div",{className:"max-w-2xl space-y-6",children:[e.jsxs("div",{children:[e.jsx("h1",{className:"text-2xl font-semibold",children:"Settings"}),e.jsx("p",{className:"text-sm text-muted-foreground mt-1",children:"Global vibe-proxy settings"})]}),e.jsxs(h,{children:[e.jsxs(p,{children:[e.jsxs("div",{className:"flex items-center gap-2",children:[e.jsx(g,{className:"h-5 w-5 text-primary"}),e.jsx(u,{className:"text-base",children:"Admin Authentication"})]}),e.jsx(j,{children:"The admin bearer token is used to authenticate all admin API requests. Stored in your browser's localStorage."})]}),e.jsx(k,{className:"space-y-4",children:e.jsxs("div",{className:"space-y-2",children:[e.jsx(m,{htmlFor:"adminToken",children:"Admin Token"}),e.jsxs("div",{className:"flex gap-2",children:[e.jsx(x,{id:"adminToken",type:"password",value:a,onChange:r=>t(r.target.value),placeholder:"Enter admin token...",className:"flex-1"}),e.jsxs(o,{onClick:n,children:[e.jsx(v,{className:"h-4 w-4 mr-1"}),"Save"]})]}),e.jsx("p",{className:"text-xs text-muted-foreground",children:"Token is saved to localStorage and sent as a Bearer token with every admin API request."})]})})]})]})}export{C as SettingsPage};

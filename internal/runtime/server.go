@@ -72,6 +72,8 @@ func (s *Server) buildSnapshot(cfg *config.RuntimeConfig) *Snapshot {
 
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
+
+	// Data-plane proxy endpoints
 	mux.HandleFunc("/v1/models", s.handleModels)
 	mux.HandleFunc("/v1/chat/completions", s.handle)
 	mux.HandleFunc("/v1/responses", s.handle)
@@ -79,13 +81,27 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/v1/messages", s.handle)
 	mux.Handle("/metrics", s.metrics.Handler())
 	mux.HandleFunc("/healthz", s.healthz)
+
+	// Admin API endpoints
 	mux.HandleFunc("/admin/config/reload", s.reload)
 	mux.HandleFunc("/admin/config/snapshot", s.adminSnapshot)
 	mux.HandleFunc("/admin/config/validate", s.adminValidateConfig)
+	mux.HandleFunc("/admin/config/raw", s.adminRawConfig)
 	mux.HandleFunc("/admin/providers/test", s.adminProviderTest)
+	mux.HandleFunc("/admin/providers/health", s.adminProviderHealth)
+	mux.HandleFunc("/admin/providers", s.adminProviders) // GET (list), POST (create), PUT (update), DELETE (delete)
 	mux.HandleFunc("/admin/local/configure", s.adminLocalConfigure)
+	mux.HandleFunc("/admin/aliases/default", s.adminAliasesDefaults)
+	mux.HandleFunc("/admin/aliases", s.adminAliases)               // GET (list), POST (create)
+	mux.HandleFunc("/admin/aliases/", s.adminAliasesDelete)        // DELETE by alias name
+	mux.HandleFunc("/admin/client-keys", s.adminClientKeys)        // GET (list), POST (create)
+	mux.HandleFunc("/admin/client-keys/", s.adminClientKeysByName) // PUT (update), DELETE (delete)
 	mux.HandleFunc("/admin/requests/recent", s.adminRecentRequests)
-	mux.HandleFunc("/", s.dashboard)
+	mux.HandleFunc("/admin/metrics/summary", s.adminMetricsSummary)
+	mux.HandleFunc("/admin/metrics/history", s.adminMetricsHistory)
+
+	// SPA dashboard (must be last as catch-all)
+	mux.Handle("/", spaFallback(spaHandler(), "index.html"))
 	return limitBody(recordResponse(mux), 32<<20)
 }
 
@@ -424,14 +440,6 @@ func (s *Server) adminRecentRequests(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]any{"active": s.recent.Active(), "recent": s.recent.Recent(limit)})
 }
 
-func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/" {
-		http.NotFound(w, r)
-		return
-	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	io.WriteString(w, dashboardHTML())
-}
 func (s *Server) notImplemented(message string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		adapter := clientopenai.ChatAdapter{}

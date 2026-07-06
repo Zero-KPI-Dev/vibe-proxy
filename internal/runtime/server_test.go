@@ -198,6 +198,159 @@ func TestRuntimeAdminLocalConfigure(t *testing.T) {
 	}
 }
 
+func TestRuntimeAdminProviderCRUD(t *testing.T) {
+	t.Setenv("VIBE_PROXY_ADMIN_TOKEN", "admin-token")
+	path := writeAdminTestConfig(t)
+	cfg, err := config.LoadRuntime(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	testPromOnce.Do(func() { testProm = metrics.New() })
+	s := New(path, cfg, metrics.MultiSink{}, testProm)
+
+	createBody := `{"id":"localai","type":"openai-compatible","base_url":"http://127.0.0.1:3000/v1","auth_type":"none","models":["gpt-test"],"alias":"vibe-test","alias_model":"gpt-test","default_model":"vibe-test"}`
+	createReq := adminJSONRequest(http.MethodPost, "/admin/providers", createBody)
+	createW := httptest.NewRecorder()
+	s.Routes().ServeHTTP(createW, createReq)
+	if createW.Code != http.StatusOK || !strings.Contains(createW.Body.String(), `"ok":true`) {
+		t.Fatalf("unexpected provider create response: %d %s", createW.Code, createW.Body.String())
+	}
+	if _, ok := s.current().Config.Providers["localai"]; !ok {
+		t.Fatalf("created provider not loaded")
+	}
+
+	updateBody := `{"id":"localai","type":"openai-compatible","base_url":"http://127.0.0.1:3001/v1","auth_type":"none","models":["gpt-test-2"],"max_concurrency":7}`
+	updateReq := adminJSONRequest(http.MethodPut, "/admin/providers", updateBody)
+	updateW := httptest.NewRecorder()
+	s.Routes().ServeHTTP(updateW, updateReq)
+	if updateW.Code != http.StatusOK || s.current().Config.Providers["localai"].BaseURL != "http://127.0.0.1:3001/v1" {
+		t.Fatalf("unexpected provider update response: %d %s", updateW.Code, updateW.Body.String())
+	}
+
+	deleteReq := adminJSONRequest(http.MethodDelete, "/admin/providers", `{"id":"localai"}`)
+	deleteW := httptest.NewRecorder()
+	s.Routes().ServeHTTP(deleteW, deleteReq)
+	if deleteW.Code != http.StatusOK || strings.Contains(deleteW.Body.String(), "error") {
+		t.Fatalf("unexpected provider delete response: %d %s", deleteW.Code, deleteW.Body.String())
+	}
+	if _, ok := s.current().Config.Providers["localai"]; ok {
+		t.Fatalf("deleted provider still loaded")
+	}
+}
+
+func TestRuntimeAdminAliasAndClientKeyCRUD(t *testing.T) {
+	t.Setenv("VIBE_PROXY_ADMIN_TOKEN", "admin-token")
+	path := writeAdminTestConfig(t)
+	cfg, err := config.LoadRuntime(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	testPromOnce.Do(func() { testProm = metrics.New() })
+	s := New(path, cfg, metrics.MultiSink{}, testProm)
+
+	aliasCreate := adminJSONRequest(http.MethodPost, "/admin/aliases", `{"alias":"vibe-fast","target":"mockai/raw-chat"}`)
+	aliasCreateW := httptest.NewRecorder()
+	s.Routes().ServeHTTP(aliasCreateW, aliasCreate)
+	if aliasCreateW.Code != http.StatusOK {
+		t.Fatalf("unexpected alias create response: %d %s", aliasCreateW.Code, aliasCreateW.Body.String())
+	}
+
+	aliasList := adminJSONRequest(http.MethodGet, "/admin/aliases", "")
+	aliasListW := httptest.NewRecorder()
+	s.Routes().ServeHTTP(aliasListW, aliasList)
+	if aliasListW.Code != http.StatusOK || !strings.Contains(aliasListW.Body.String(), `"vibe-fast":"mockai/raw-chat"`) {
+		t.Fatalf("unexpected alias list response: %d %s", aliasListW.Code, aliasListW.Body.String())
+	}
+
+	defaultReq := adminJSONRequest(http.MethodPut, "/admin/aliases/default", `{"default_model":"vibe-fast","allow_raw":false}`)
+	defaultW := httptest.NewRecorder()
+	s.Routes().ServeHTTP(defaultW, defaultReq)
+	if defaultW.Code != http.StatusOK || s.current().Config.ModelResolver.DefaultModel != "vibe-fast" || s.current().Config.ModelResolver.AllowRaw {
+		t.Fatalf("unexpected alias defaults response: %d %s", defaultW.Code, defaultW.Body.String())
+	}
+
+	keyCreate := adminJSONRequest(http.MethodPost, "/admin/client-keys", `{"name":"agent","allowed_models":["vibe-fast"],"rpm":10}`)
+	keyCreateW := httptest.NewRecorder()
+	s.Routes().ServeHTTP(keyCreateW, keyCreate)
+	if keyCreateW.Code != http.StatusOK || !strings.Contains(keyCreateW.Body.String(), `"raw_key":"sk-`) {
+		t.Fatalf("unexpected client key create response: %d %s", keyCreateW.Code, keyCreateW.Body.String())
+	}
+
+	keyUpdate := adminJSONRequest(http.MethodPut, "/admin/client-keys/agent", `{"enabled":false,"allowed_models":["*"],"rpm":20}`)
+	keyUpdateW := httptest.NewRecorder()
+	s.Routes().ServeHTTP(keyUpdateW, keyUpdate)
+	if keyUpdateW.Code != http.StatusOK || s.current().Config.ClientKeys[len(s.current().Config.ClientKeys)-1].Enabled {
+		t.Fatalf("unexpected client key update response: %d %s", keyUpdateW.Code, keyUpdateW.Body.String())
+	}
+
+	keyDelete := adminJSONRequest(http.MethodDelete, "/admin/client-keys/agent", "")
+	keyDeleteW := httptest.NewRecorder()
+	s.Routes().ServeHTTP(keyDeleteW, keyDelete)
+	if keyDeleteW.Code != http.StatusOK {
+		t.Fatalf("unexpected client key delete response: %d %s", keyDeleteW.Code, keyDeleteW.Body.String())
+	}
+
+	aliasDelete := adminJSONRequest(http.MethodDelete, "/admin/aliases/vibe-fast", "")
+	aliasDeleteW := httptest.NewRecorder()
+	s.Routes().ServeHTTP(aliasDeleteW, aliasDelete)
+	if aliasDeleteW.Code != http.StatusOK {
+		t.Fatalf("unexpected alias delete response: %d %s", aliasDeleteW.Code, aliasDeleteW.Body.String())
+	}
+	if _, ok := s.current().Config.ModelResolver.Aliases["vibe-fast"]; ok {
+		t.Fatalf("deleted alias still loaded")
+	}
+}
+
+func TestRuntimeAdminRawConfigRejectsInvalidYAMLWithoutOverwriting(t *testing.T) {
+	t.Setenv("VIBE_PROXY_ADMIN_TOKEN", "admin-token")
+	path := writeAdminTestConfig(t)
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.LoadRuntime(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	testPromOnce.Do(func() { testProm = metrics.New() })
+	s := New(path, cfg, metrics.MultiSink{}, testProm)
+
+	req := adminJSONRequest(http.MethodPut, "/admin/config/raw", `{"yaml":"models:\n  aliases:\n    bad: missing-slash"}`)
+	w := httptest.NewRecorder()
+	s.Routes().ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected invalid raw config to be rejected, got %d %s", w.Code, w.Body.String())
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("invalid raw config overwrote file:\n%s", after)
+	}
+}
+
+func writeAdminTestConfig(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "bootstrap.yaml")
+	content := "version: vibeproxy.io/v1alpha1\nsecurity:\n  admin_bearer_token_env: VIBE_PROXY_ADMIN_TOKEN\nclient_keys: []\nproviders:\n  mockai:\n    type: openai-compatible\n    base_url: https://mock.openai/v1\n    auth:\n      type: none\n    models:\n      - raw-chat\nmodels:\n  allow_raw: true\n  aliases: {}\n"
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func adminJSONRequest(method, target, body string) *http.Request {
+	var reader io.Reader
+	if body != "" {
+		reader = strings.NewReader(body)
+	}
+	req := httptest.NewRequest(method, target, reader)
+	req.Header.Set("Authorization", "Bearer admin-token")
+	req.Header.Set("Content-Type", "application/json")
+	return req
+}
+
 func newTestServer(t *testing.T, rt roundTrip) *Server {
 	t.Helper()
 	cfg, err := config.CompileSimple(config.SimpleConfig{ClientKeys: []config.ClientKeyConfig{{Name: "test", KeyHash: "$2a$10$AXRkz.6y44ygdJFk6L1/IO0aRVp9zRMfXDJoBCBsroxVac/Lovvz6", Enabled: true, AllowedModels: []string{"*"}, RPM: 1000}}, Providers: map[string]config.ProviderConfig{"anthropic": {Type: "anthropic", BaseURL: "https://mock.anthropic", Auth: upstreamauth.Profile{Type: "api_key_header", Header: "x-api-key", Value: "literal:test-anthropic-key"}, Models: []string{"claude-raw"}}, "mockai": {Type: "openai-compatible", BaseURL: "https://mock.openai/v1", Auth: upstreamauth.Profile{Type: "none"}, Models: []string{"raw-chat"}}}, Models: config.ModelsConfig{AllowRaw: true, Aliases: map[string]string{"vibe-coder": "anthropic/claude-raw", "vibe-fast": "mockai/raw-chat"}}})
