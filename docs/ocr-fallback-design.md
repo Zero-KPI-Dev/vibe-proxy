@@ -189,9 +189,127 @@ Provider Adapter 是否能编码图片
 
 1. 模型级显式配置；
 2. Provider 级默认配置；
-3. `unknown`。
+3. models.dev 精确或无冲突匹配；
+4. `unknown`。
 
-### 5.3 OCR 替换图片块，而不是重写整段对话
+### 5.3 models.dev 作为能力元数据种子源
+
+用户从 Provider 获取模型列表后，vibe-proxy 应自动使用
+[`https://models.dev/api.json`](https://models.dev/api.json) 补全模型的基础信息。models.dev 当前公开的模型字段包括：
+
+- `modalities.input/output`；
+- `attachment`；
+- `reasoning`；
+- `tool_call`；
+- `structured_output`；
+- `temperature`；
+- context/input/output limits；
+- release/updated/status；
+- cost。
+
+OCR 路由首期只消费 `modalities.input` 中是否包含 `image`，但内部 Catalog 类型应保留其他常用能力，避免后续为工具调用、上下文窗口或结构化输出重新设计模型元数据。
+
+models.dev 是外部社区目录，不是上游 Provider 的运行时承诺，因此定位为 **seed metadata**：
+
+- 可以替用户完成大多数公开模型的初始能力填写；
+- 不能覆盖本地显式配置；
+- 不命中、歧义或字段冲突时保持 `unknown`；
+- 私有模型、重命名模型和裁剪能力的中转站仍可本地覆盖；
+- 数据面不在每次请求时访问 models.dev。
+
+建议内部模型信息：
+
+```go
+type ModelInfo struct {
+    ProviderID       string
+    ModelID          string
+    Name             string
+    InputModalities  []string
+    OutputModalities []string
+    Attachment       *bool
+    Reasoning        *bool
+    ToolCall         *bool
+    StructuredOutput *bool
+    Temperature      *bool
+    ContextLimit     *int64
+    InputLimit       *int64
+    OutputLimit      *int64
+    Status            string
+    ReleaseDate       string
+    LastUpdated       string
+}
+
+type CapabilitySource string
+
+const (
+    SourceModelOverride  CapabilitySource = "model_override"
+    SourceProviderDefault CapabilitySource = "provider_default"
+    SourceModelsDev      CapabilitySource = "models_dev"
+    SourceUnknown        CapabilitySource = "unknown"
+)
+```
+
+#### 5.3.1 匹配规则
+
+Provider 可能是 OpenAI、Anthropic 等官方入口，也可能是 new-api 这类聚合入口，不能只按 vibe-proxy Provider ID 匹配。匹配顺序为：
+
+1. Provider 配置中的 `catalog_provider` + 精确 model ID；
+2. 模型名为 `catalog-provider/model-id` 时按前缀精确匹配；
+3. Provider ID 与 models.dev Provider ID 一致时精确匹配；
+4. Provider base URL 与 catalog API 地址或内置官方地址一致时精确匹配；
+5. 全 Catalog 中 model ID 唯一时匹配；
+6. 全 Catalog 中存在多个同 ID 项，但 OCR 所需能力完全一致时，生成 consensus match；
+7. 多个候选的相关能力存在冲突时返回 `ambiguous`，图片能力保持 `unknown`。
+
+首期禁止：
+
+- 模糊字符串相似度自动匹配；
+- 自动删除日期、尺寸等模型名后缀；
+- 仅凭 `vision`、`vl`、`4o` 等名称片段判定；
+- 在不确定时把任意一个候选当成真值。
+
+控制面可以展示候选项供用户确认，但未经确认的 fuzzy match 不进入数据面。
+
+#### 5.3.2 缓存与刷新
+
+models.dev API 当前数据量为数 MiB，不应成为启动或热路径依赖。Catalog Service 采用：
+
+- 首次在用户获取 Provider 模型或手动点击刷新时 lazy fetch；
+- 使用 `ETag` + `If-None-Match` 条件请求；
+- 默认每 24 小时后台刷新一次；
+- 网络失败时继续使用本地 stale cache；
+- 没有 cache 时仍允许 vibe-proxy 正常启动；
+- 下载 timeout、响应大小上限和 JSON schema 校验；
+- 原始 cache 原子写入 SQLite 同目录；
+- 内存中使用不可变索引并原子替换；
+- Catalog 刷新失败不影响 LLM 数据面。
+
+本地 cache 记录：
+
+```go
+type CatalogState struct {
+    SourceURL string
+    ETag      string
+    FetchedAt time.Time
+    Stale     bool
+    Providers int
+    Models    int
+    Error     string
+}
+```
+
+不把整个 models.dev JSON 写进 vibe-proxy YAML，避免配置文件膨胀。
+
+#### 5.3.3 供应链和准确性边界
+
+- 只允许 HTTPS 官方 URL，除非用户在高级配置中显式替换；
+- Catalog 数据只用于能力和展示，不包含可执行代码；
+- limits 和 cost 属于参考值，不作为第一版强制计费依据；
+- `supported` 仍可被 Provider/模型本地配置覆盖为 `unsupported`；
+- 遥测记录 `capability_source` 和匹配状态，方便定位目录错误；
+- Catalog 更新不会修改用户 YAML，只更新外部 cache。
+
+### 5.4 OCR 替换图片块，而不是重写整段对话
 
 处理后的请求仍是 Canonical IR。每个 `ContentImage` 在原消息、原位置被替换为一个 `ContentText`：
 
@@ -207,7 +325,7 @@ Provider Adapter 是否能编码图片
 
 这比把所有 OCR 结果统一追加到最后更能保留多图片、多轮对话中的语义位置。
 
-### 5.4 OCR 文本与安全指令分离
+### 5.5 OCR 文本与安全指令分离
 
 - OCR 提取文本仍放在原 `user` 消息中；
 - OCR 文本绝不作为 `system` 或 `developer` 内容；
@@ -216,7 +334,7 @@ Provider Adapter 是否能编码图片
 
 安全说明不是“相信标签即可防注入”，而是降低把图片文字误当成系统指令的风险。
 
-### 5.5 默认关闭新行为
+### 5.6 默认关闭新行为
 
 配置中没有 `multimodal`，或 `enabled: false` 时：
 
@@ -582,22 +700,31 @@ providers:
     type: openai-compatible
     base_url: http://127.0.0.1:3000/v1
     api_key: env:NEWAPI_KEY
+    catalog_provider: ""  # 聚合入口保持自动匹配；官方入口可显式填写 openai/anthropic
     models:
       - deepseek-chat
       - qwen-vl
+```
+
+该配置表达：
+
+- Provider 模型列表由 new-api 获取；
+- vibe-proxy 自动按模型 ID 从 models.dev 补全 capabilities；
+- 未命中或存在冲突的模型保持 unknown，并在 UI 中提示；
+- 文本模型收到图片时先 OCR；
+- 没配置 Vision fallback，所以 OCR 不可用时明确报错。
+
+如果该 MaaS 对公开模型能力做了裁剪，可增加本地覆盖：
+
+```yaml
+providers:
+  newapi:
     default_capabilities:
       image_input: unsupported
     model_capabilities:
       qwen-vl:
         image_input: supported
 ```
-
-该配置表达：
-
-- newapi 下默认模型均为文本模型；
-- `qwen-vl` 是例外，明确支持图片；
-- 文本模型收到图片时先 OCR；
-- 没配置 Vision fallback，所以 OCR 不可用时明确报错。
 
 ### 12.2 高级配置
 
@@ -639,6 +766,8 @@ multimodal:
 - `vision_fallback_model` 必须可解析；
 - Vision fallback target 必须显式支持图片；
 - Provider 默认能力和模型 override 必须是合法三态；
+- `catalog_provider` 必须存在于当前 models.dev cache；没有 cache 时只产生 warning；
+- Catalog 本地覆盖优先级必须高于外部元数据；
 - OCR literal/encrypted 密钥不能出现在 admin snapshot。
 
 ## 13. Runtime Snapshot 与热更新
@@ -742,16 +871,33 @@ Warning: 299 vibe-proxy "Image input was degraded to OCR text"
 Provider 表单增加：
 
 - Provider 默认图片能力：`自动/未知`、`仅文本`、`支持图片`；
-- 获取模型后的模型列表允许按模型覆盖；
+- 获取模型后自动查询 models.dev，并显示 `Text`、`Vision`、`Tools`、`Reasoning`、context 等 badge；
+- 每个 badge 显示来源：`models.dev`、`Provider 默认`、`本地覆盖`或`未知`；
+- 模型列表允许按模型覆盖；
+- 歧义模型允许从 models.dev 候选 Provider 中确认一个 `catalog_provider`；
 - 大多数模型继承 Provider 默认值，不要求逐项设置。
 
 典型无 Vision MaaS 的操作只需：
 
-1. Provider 默认能力选择“仅文本”；
+1. 获取模型，自动匹配 models.dev；
 2. Settings 中启用 OCR；
-3. 填 OCR endpoint 并测试。
+3. 填 OCR endpoint 并测试；
+4. 只有 models.dev 未命中或 MaaS 能力被裁剪时才手动覆盖。
 
-### 16.3 Recent Requests
+### 16.3 模型目录状态
+
+Settings 或 Provider 页面提供轻量状态：
+
+- 数据来源：models.dev；
+- 最近更新时间；
+- cache 是否过期；
+- 已加载 Provider/模型数量；
+- `刷新模型目录`按钮；
+- 最近刷新错误。
+
+不要求用户管理定时任务，也不在每次打开页面时强制下载。
+
+### 16.4 Recent Requests
 
 请求行增加 badge：
 
@@ -781,7 +927,24 @@ Provider 表单增加：
 
 ## 18. 测试策略
 
-### 18.1 Capability 单元测试
+### 18.1 Model Catalog 测试
+
+- 解析真实 API 结构的最小 fixture；
+- Provider scoped exact match；
+- prefixed model match；
+- global unique match；
+- 多候选能力一致时 consensus；
+- 多候选能力冲突时 ambiguous/unknown；
+- 本地模型 override 高于 Provider 默认和 models.dev；
+- Provider 默认高于 models.dev；
+- ETag/304 条件刷新；
+- 网络失败读取 stale disk cache；
+- 无 cache/网络失败不阻止服务启动；
+- 响应大小和 invalid JSON 防护；
+- cache 原子写入；
+- admin snapshot 不包含不必要的完整 Catalog。
+
+### 18.2 Capability 单元测试
 
 - 模型 override 高于 Provider 默认；
 - Provider 默认高于 unknown；
@@ -790,7 +953,7 @@ Provider 表单增加：
 - Vision fallback 必须显式 supported；
 - hot reload 使用新 capability snapshot。
 
-### 18.2 IR 检测与转换测试
+### 18.3 IR 检测与转换测试
 
 - OpenAI Chat `image_url`；
 - OpenAI Responses `input_image`；
@@ -802,7 +965,7 @@ Provider 表单增加：
 - 原始 request 不被修改；
 - 转换后 request 不再包含图片。
 
-### 18.3 图片安全测试
+### 18.4 图片安全测试
 
 - 合法 data URL；
 - 非法 base64；
@@ -815,7 +978,7 @@ Provider 表单增加：
 - OCR 响应过大；
 - OCR 文本截断。
 
-### 18.4 OCR Provider 契约测试
+### 18.5 OCR Provider 契约测试
 
 所有 provider 共享测试：
 
@@ -828,7 +991,7 @@ Provider 表单增加：
 - invalid JSON；
 - auth profile 正确应用且不泄漏。
 
-### 18.5 路由矩阵测试
+### 18.6 路由矩阵测试
 
 | 图片 | 模型能力 | OCR | OCR 结果 | Vision fallback | 结果 |
 | --- | --- | --- | --- | --- | --- |
@@ -841,7 +1004,7 @@ Provider 表单增加：
 | 有 | unsupported | disabled | - | 可用 | vision_fallback |
 | 有 | unsupported | disabled | - | 无 | error |
 
-### 18.6 E2E 测试
+### 18.7 E2E 测试
 
 用 mock OCR 和 mock LLM upstream 跑完整 HTTP：
 
@@ -857,6 +1020,25 @@ Provider 表单增加：
 10. 普通文本回归测试完全不调用 OCR。
 
 ## 19. 分阶段实施
+
+### Phase O0：models.dev 模型能力目录
+
+内容：
+
+- 增加 Model Catalog 类型、matcher 和不可变内存索引；
+- 增加 models.dev HTTP client、ETag、磁盘 cache 和 stale fallback；
+- Provider 模型获取结果自动附加能力摘要；
+- 增加目录 status/refresh/lookup 管理 API；
+- 控制面模型列表展示能力 badge 和来源；
+- 保留 Provider 默认与模型级本地覆盖。
+
+验收：
+
+- 用户获取公开模型后无需逐项填写 Vision 能力；
+- 聚合 Provider 的唯一/一致模型可以自动匹配；
+- 歧义和未知模型不会被猜测；
+- models.dev 不可用时 Provider 模型获取和数据面仍正常；
+- 本地覆盖不会被 Catalog 刷新覆盖。
 
 ### Phase O1：能力与预处理骨架
 
@@ -934,6 +1116,8 @@ Provider 表单增加：
 以下条件全部满足，才认为 OCR fallback 可交付：
 
 - [ ] OpenAI Chat、OpenAI Responses、Anthropic Messages 都能识别图片输入；
+- [ ] Provider 模型可从 models.dev 自动补全基础能力，外部目录不可用时可离线降级；
+- [ ] Catalog 歧义模型保持 unknown，本地覆盖始终优先；
 - [ ] 模型能力是显式三态，不依赖模型名；
 - [ ] Vision 模型原样透传图片；
 - [ ] text-only 模型可通过 OCR 调用原文本模型；
@@ -954,12 +1138,13 @@ vibe-proxy 不需要先成为一个庞大的多模态平台。正确的第一步
 
 推荐按以下顺序开发：
 
-1. 三态模型能力；
-2. Canonical IR 级图片检测和预处理接口；
-3. 通用 HTTP OCR provider；
-4. OCR 文本安全注入和 cache；
-5. OCR 失败后的可选 Vision fallback；
-6. 遥测和简洁控制面；
-7. 最后再提供可选本地 RapidOCR sidecar。
+1. models.dev Catalog、匹配、缓存和本地覆盖；
+2. 三态模型能力；
+3. Canonical IR 级图片检测和预处理接口；
+4. 通用 HTTP OCR provider；
+5. OCR 文本安全注入和 cache；
+6. OCR 失败后的可选 Vision fallback；
+7. 遥测和简洁控制面；
+8. 最后再提供可选本地 RapidOCR sidecar。
 
 这样既能满足“后端没有 Vision 模型时有限识别图片文字”的核心需求，也不会让普通文本请求、现有 Provider 或本地使用体验承担不必要复杂度。
