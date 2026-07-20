@@ -62,7 +62,11 @@
     "model": "Model",
     "provider": "Provider",
     "status": "Status",
-    "tokens": "Tokens"
+    "tokens": "Tokens",
+    "ocrFallback": "OCR fallback",
+    "visionFallback": "Vision fallback",
+    "imageRejected": "Image rejected",
+    "ocrDetails": "{{images}} image(s), {{hits}} cache hit(s), {{latency}} ms"
   },
   "providers": {
     "title": "Providers",

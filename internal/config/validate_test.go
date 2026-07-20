@@ -118,3 +118,37 @@ func TestValidateRuntimeRejectsUnsafeOCRConfig(t *testing.T) {
 	}
 	t.Fatalf("missing endpoint issue: %+v", issues)
 }
+
+func TestValidateRuntimeRequiresExplicitVisionFallbackCapability(t *testing.T) {
+	base := SimpleConfig{
+		Multimodal: MultimodalConfig{Enabled: true, VisionFallbackModel: "vibe-vision"},
+		Providers: map[string]ProviderConfig{"vision": {
+			Type:    "openai-compatible",
+			BaseURL: "https://vision.example/v1",
+			Auth:    upstreamauth.Profile{Type: "none"},
+			Models:  []string{"vision-model"},
+			DefaultCapabilities: modelcapability.ModelCapabilities{
+				ImageInput: modelcapability.SupportSupported,
+			},
+		}},
+		Models: ModelsConfig{Aliases: map[string]string{"vibe-vision": "vision/vision-model"}},
+	}
+	cfg, err := CompileSimple(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if issues := ValidateRuntime(cfg); HasErrors(issues) {
+		t.Fatalf("valid Vision fallback rejected: %+v", issues)
+	}
+	provider := base.Providers["vision"]
+	provider.DefaultCapabilities.ImageInput = modelcapability.SupportUnknown
+	base.Providers["vision"] = provider
+	cfg, err = CompileSimple(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	issues := ValidateRuntime(cfg)
+	if !HasErrors(issues) {
+		t.Fatalf("expected explicit Vision capability error: %+v", issues)
+	}
+}

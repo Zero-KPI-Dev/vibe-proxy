@@ -5,6 +5,10 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/a448582655/vibe-proxy/internal/ir"
+	"github.com/a448582655/vibe-proxy/internal/modelcapability"
+	"github.com/a448582655/vibe-proxy/internal/modelresolver"
 )
 
 type ValidationIssue struct {
@@ -73,6 +77,7 @@ func ValidateRuntime(cfg *RuntimeConfig) []ValidationIssue {
 		}
 	}
 	issues = append(issues, validateMultimodal(cfg.Multimodal)...)
+	issues = append(issues, validateVisionFallback(cfg)...)
 	return issues
 }
 
@@ -84,13 +89,19 @@ func validateMultimodal(cfg MultimodalConfig) []ValidationIssue {
 	if cfg.Strategy != "ocr_then_vision" {
 		issues = append(issues, issue("error", "multimodal.strategy", "unsupported_multimodal_strategy", "Only ocr_then_vision is supported."))
 	}
-	if cfg.OCR.Provider != "http" {
-		issues = append(issues, issue("error", "multimodal.ocr.provider", "unsupported_ocr_provider", "The first OCR release requires provider: http."))
+	hasOCR := cfg.OCR.Provider != "" || cfg.OCR.Endpoint != ""
+	if !hasOCR && cfg.VisionFallbackModel == "" {
+		issues = append(issues, issue("error", "multimodal", "missing_multimodal_fallback", "An HTTP OCR endpoint or Vision fallback model is required when multimodal fallback is enabled."))
 	}
-	if cfg.OCR.Endpoint == "" {
-		issues = append(issues, issue("error", "multimodal.ocr.endpoint", "missing_ocr_endpoint", "OCR endpoint is required when multimodal fallback is enabled."))
-	} else if endpoint, err := url.Parse(cfg.OCR.Endpoint); err != nil || endpoint.Host == "" || (endpoint.Scheme != "http" && endpoint.Scheme != "https") {
-		issues = append(issues, issue("error", "multimodal.ocr.endpoint", "invalid_ocr_endpoint", "OCR endpoint must be an absolute HTTP or HTTPS URL."))
+	if hasOCR {
+		if cfg.OCR.Provider != "http" {
+			issues = append(issues, issue("error", "multimodal.ocr.provider", "unsupported_ocr_provider", "The first OCR release requires provider: http."))
+		}
+		if cfg.OCR.Endpoint == "" {
+			issues = append(issues, issue("error", "multimodal.ocr.endpoint", "missing_ocr_endpoint", "OCR endpoint is required when OCR fallback is configured."))
+		} else if endpoint, err := url.Parse(cfg.OCR.Endpoint); err != nil || endpoint.Host == "" || (endpoint.Scheme != "http" && endpoint.Scheme != "https") {
+			issues = append(issues, issue("error", "multimodal.ocr.endpoint", "invalid_ocr_endpoint", "OCR endpoint must be an absolute HTTP or HTTPS URL."))
+		}
 	}
 	if cfg.OCR.Timeout.Duration <= 0 || cfg.OCR.Timeout.Duration > 2*time.Minute {
 		issues = append(issues, issue("error", "multimodal.ocr.timeout", "invalid_ocr_timeout", "OCR timeout must be greater than zero and no more than 2 minutes."))
@@ -113,10 +124,33 @@ func validateMultimodal(cfg MultimodalConfig) []ValidationIssue {
 	if cfg.OCR.MaxTextCharsPerImage <= 0 || cfg.OCR.MaxTextCharsPerImage > 50000 || cfg.OCR.MaxTextCharsTotal < cfg.OCR.MaxTextCharsPerImage || cfg.OCR.MaxTextCharsTotal > 200000 {
 		issues = append(issues, issue("error", "multimodal.ocr.max_text_chars_total", "invalid_ocr_text_limit", "OCR text limits are invalid or exceed the hard limit."))
 	}
-	if cfg.OCR.Cache.IsEnabled() && (cfg.OCR.Cache.MaxEntries <= 0 || cfg.OCR.Cache.MaxEntries > 4096 || cfg.OCR.Cache.TTL.Duration <= 0) {
+	if hasOCR && cfg.OCR.Cache.IsEnabled() && (cfg.OCR.Cache.MaxEntries <= 0 || cfg.OCR.Cache.MaxEntries > 4096 || cfg.OCR.Cache.TTL.Duration <= 0) {
 		issues = append(issues, issue("error", "multimodal.ocr.cache", "invalid_ocr_cache", "OCR cache requires a positive TTL and 1 to 4096 entries."))
 	}
 	return issues
+}
+
+func validateVisionFallback(cfg *RuntimeConfig) []ValidationIssue {
+	if cfg == nil || !cfg.Multimodal.Enabled || cfg.Multimodal.VisionFallbackModel == "" {
+		return nil
+	}
+	resolver := modelresolver.New(cfg.ModelResolver)
+	target, resolveErr := resolver.Resolve(&ir.Request{RequestedModel: cfg.Multimodal.VisionFallbackModel})
+	if resolveErr != nil {
+		return []ValidationIssue{issue("error", "multimodal.vision_fallback_model", "vision_fallback_invalid", "Vision fallback model cannot be resolved.")}
+	}
+	provider, ok := cfg.Providers[target.ProviderID]
+	if !ok {
+		return []ValidationIssue{issue("error", "multimodal.vision_fallback_model", "vision_fallback_invalid", "Vision fallback provider is not configured.")}
+	}
+	support := provider.DefaultCapabilities.ImageInput
+	if model, exists := provider.ModelCapabilities[target.Model]; exists && model.ImageInput != "" {
+		support = model.ImageInput
+	}
+	if support != modelcapability.SupportSupported {
+		return []ValidationIssue{issue("error", "multimodal.vision_fallback_model", "vision_fallback_invalid", "Vision fallback model must be explicitly marked image_input: supported.")}
+	}
+	return nil
 }
 
 func HasErrors(issues []ValidationIssue) bool {

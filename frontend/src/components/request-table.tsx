@@ -33,7 +33,29 @@ export function RequestTable({ events }: RequestTableProps) {
             <TableCell className="font-medium">{e.client_name}</TableCell>
             <TableCell className="font-mono text-xs">{e.virtual_model}</TableCell>
             <TableCell className="font-mono text-xs">{e.channel_id}</TableCell>
-            <TableCell>{statusBadge(e.status_code)}</TableCell>
+            <TableCell>
+              <div className="flex flex-wrap items-center gap-1.5">
+                {statusBadge(e.status_code)}
+                {e.transformation?.multimodal_route === "ocr_fallback" && (
+                  <Badge
+                    variant="warning"
+                    title={t("requestTable.ocrDetails", {
+                      images: e.transformation.ocr_processed ?? 0,
+                      hits: e.transformation.ocr_cache_hits ?? 0,
+                      latency: e.transformation.ocr_latency_ms ?? 0,
+                    })}
+                  >
+                    {t("requestTable.ocrFallback")}
+                  </Badge>
+                )}
+                {e.transformation?.multimodal_route === "vision_fallback" && (
+                  <Badge variant="secondary">{t("requestTable.visionFallback")}</Badge>
+                )}
+                {e.transformation?.multimodal_route === "rejected" && e.transformation.ocr_failure_code && (
+                  <Badge variant="destructive">{t("requestTable.imageRejected")}</Badge>
+                )}
+              </div>
+            </TableCell>
             <TableCell className="text-right tabular-nums">
               {e.usage?.total_tokens ?? 0}
             </TableCell>

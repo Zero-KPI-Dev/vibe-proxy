@@ -239,6 +239,13 @@ position, is escaped and marked as untrusted user data, and is never included in
 logs. Provider authentication uses the same auth profile and secret-reference forms as
 LLM providers.
 
+If `vision_fallback_model` is configured, OCR errors, empty text, or confidence below the
+threshold switch to that target while preserving the original image request. The target
+must resolve to a different provider/model and must be explicitly marked
+`image_input: supported`; catalog inference alone is not accepted for this safety-critical
+fallback. The client key is still authorized against the originally requested public
+model.
+
 ## Agent Profiles
 
 Agent profiles are optional. They help with local multi-agent workflows.

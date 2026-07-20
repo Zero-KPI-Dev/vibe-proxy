@@ -94,7 +94,8 @@ func TestRuntimeOCRFallbackForAllClientProtocolsAndCache(t *testing.T) {
 		t.Fatal(err)
 	}
 	testPromOnce.Do(func() { testProm = metrics.New() })
-	s := New("", cfg, metrics.MultiSink{}, testProm)
+	recent := telemetry.NewRecentStore(20)
+	s := New("", cfg, metrics.MultiSink{recent}, testProm)
 	var ocrCalls atomic.Int32
 	s.SetOCRHTTPClient(&http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
 		ocrCalls.Add(1)
@@ -135,6 +136,9 @@ func TestRuntimeOCRFallbackForAllClientProtocolsAndCache(t *testing.T) {
 		if w.Code != http.StatusOK {
 			t.Fatalf("%s failed: %d %s", item.path, w.Code, w.Body.String())
 		}
+		if w.Header().Get("X-Vibe-Proxy-Image-Fallback") != "ocr" || w.Header().Get("X-Vibe-Proxy-OCR-Images") != "1" || !strings.Contains(w.Header().Get("Warning"), "degraded to OCR text") {
+			t.Fatalf("missing OCR response headers for %s: %v", item.path, w.Header())
+		}
 	}
 	remoteReq := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"vibe-fast","messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"https://example.com/private.png"}}]}]}`))
 	remoteReq.Header.Set("Authorization", "Bearer vibe-local-dev-key")
@@ -145,6 +149,72 @@ func TestRuntimeOCRFallbackForAllClientProtocolsAndCache(t *testing.T) {
 	}
 	if ocrCalls.Load() != 1 || upstreamCalls.Load() != 4 {
 		t.Fatalf("unexpected call counts: OCR=%d upstream=%d", ocrCalls.Load(), upstreamCalls.Load())
+	}
+	var sawOCR, sawCache, sawRejected bool
+	for _, event := range recent.Recent(20) {
+		if event.Transformation == nil {
+			continue
+		}
+		switch event.Transformation.MultimodalRoute {
+		case "ocr_fallback":
+			sawOCR = event.Transformation.OCRProcessed == 1 && event.Transformation.OCRProvider == "http"
+			if event.Transformation.OCRCacheHits == 1 {
+				sawCache = true
+			}
+		case "rejected":
+			if event.Transformation.OCRFailureCode == "ocr_remote_image_disabled" {
+				sawRejected = true
+			}
+		}
+	}
+	if !sawOCR || !sawCache || !sawRejected {
+		t.Fatalf("missing structured OCR telemetry: %+v", recent.Recent(20))
+	}
+}
+
+func TestRuntimeFallsBackFromOCRToVisionProvider(t *testing.T) {
+	cfg, err := config.CompileSimple(config.SimpleConfig{
+		ClientKeys: []config.ClientKeyConfig{{Name: "test", KeyHash: "$2a$10$AXRkz.6y44ygdJFk6L1/IO0aRVp9zRMfXDJoBCBsroxVac/Lovvz6", Enabled: true, AllowedModels: []string{"*"}, RPM: 1000}},
+		Multimodal: config.MultimodalConfig{Enabled: true, VisionFallbackModel: "vibe-vision", OCR: config.OCRConfig{Provider: "http", Endpoint: "http://ocr.local/v1/ocr", Auth: upstreamauth.Profile{Type: "none"}}},
+		Providers: map[string]config.ProviderConfig{
+			"text":   {Type: "openai-compatible", BaseURL: "https://text.example/v1", Auth: upstreamauth.Profile{Type: "none"}, Models: []string{"text-model"}, DefaultCapabilities: modelcapability.ModelCapabilities{ImageInput: modelcapability.SupportUnsupported}},
+			"vision": {Type: "openai-compatible", BaseURL: "https://vision.example/v1", Auth: upstreamauth.Profile{Type: "none"}, Models: []string{"vision-model"}, DefaultCapabilities: modelcapability.ModelCapabilities{ImageInput: modelcapability.SupportSupported}},
+		},
+		Models: config.ModelsConfig{AllowRaw: true, Aliases: map[string]string{"vibe-fast": "text/text-model", "vibe-vision": "vision/vision-model"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if issues := config.ValidateRuntime(cfg); config.HasErrors(issues) {
+		t.Fatalf("invalid test config: %+v", issues)
+	}
+	recent := telemetry.NewRecentStore(10)
+	testPromOnce.Do(func() { testProm = metrics.New() })
+	s := New("", cfg, metrics.MultiSink{recent}, testProm)
+	s.SetOCRHTTPClient(&http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
+		return jsonResponse(200, `{"results":[{"index":0,"text":"uncertain","confidence":0.1}]}`), nil
+	})})
+	s.SetHTTPClient(&http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
+		if r.URL.String() != "https://vision.example/v1/chat/completions" {
+			t.Fatalf("request did not switch to Vision provider: %s", r.URL.String())
+		}
+		body, _ := io.ReadAll(r.Body)
+		if !strings.Contains(string(body), `"model":"vision-model"`) || !strings.Contains(string(body), `"image_url"`) {
+			t.Fatalf("Vision fallback did not preserve original image: %s", body)
+		}
+		return jsonResponse(200, `{"id":"chatcmpl_vision","model":"vision-model","choices":[{"message":{"role":"assistant","content":"vision ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}}`), nil
+	})})
+	encoded := base64.StdEncoding.EncodeToString([]byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52})
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"vibe-fast","messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,`+encoded+`"}}]}]}`))
+	req.Header.Set("Authorization", "Bearer vibe-local-dev-key")
+	w := httptest.NewRecorder()
+	s.Routes().ServeHTTP(w, req)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "vision ok") || w.Header().Get("X-Vibe-Proxy-Image-Fallback") != "vision" {
+		t.Fatalf("unexpected Vision fallback response: %d %v %s", w.Code, w.Header(), w.Body.String())
+	}
+	events := recent.Recent(10)
+	if len(events) != 1 || events[0].Transformation == nil || events[0].Transformation.MultimodalRoute != "vision_fallback" || events[0].Transformation.OriginalProvider != "text" || events[0].Transformation.EffectiveProvider != "vision" || events[0].Transformation.OCRFailureCode != "ocr_no_usable_text" {
+		t.Fatalf("unexpected Vision telemetry: %+v", events)
 	}
 }
 

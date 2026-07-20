@@ -131,3 +131,38 @@ func TestProcessorRejectsLowConfidenceOCR(t *testing.T) {
 		t.Fatalf("unexpected low confidence error: %v", err)
 	}
 }
+
+func TestProcessorFallsBackToExplicitVisionTarget(t *testing.T) {
+	provider := &fakeOCRProvider{confidence: 0.2}
+	resolver := modelresolver.New(modelresolver.Config{Aliases: map[string]modelresolver.Alias{"vibe-vision": {Provider: "vision", Model: "vision-model"}}, Providers: []modelresolver.Provider{{ID: "vision", Type: "openai-compatible", BaseURL: "https://vision.example/v1", Models: []string{"vision-model"}}}})
+	processor := &Processor{
+		Enabled:             true,
+		OCR:                 provider,
+		MinConfidence:       0.8,
+		MinTextChars:        1,
+		ImageLimits:         ImageLimits{MaxImages: 1, MaxImageBytes: 1024, MaxTotalImageBytes: 1024},
+		TextLimits:          TextLimits{PerImage: 100, Total: 100},
+		VisionFallbackModel: "vibe-vision",
+		Resolver:            resolver,
+		Providers: map[string]config.ProviderConfig{"vision": {
+			Type:                "openai-compatible",
+			BaseURL:             "https://vision.example/v1",
+			DefaultCapabilities: modelcapability.ModelCapabilities{ImageInput: modelcapability.SupportSupported},
+		}},
+		AdapterCapabilities: func(string) (protocol.Capabilities, bool) { return protocol.Capabilities{Vision: true}, true },
+	}
+	encoded := base64.StdEncoding.EncodeToString(onePixelPNG)
+	req := &ir.Request{Messages: []ir.Message{{Role: ir.RoleUser, Content: []ir.ContentBlock{{Type: ir.ContentImage, Image: &ir.ImageContent{URL: "data:image/png;base64," + encoded}}}}}}
+	original := modelresolver.Target{ProviderID: "text", ProviderType: "openai-compatible", Model: "text-model"}
+	route := preprocess.RouteContext{Target: original, ProviderConfig: config.ProviderConfig{DefaultCapabilities: modelcapability.ModelCapabilities{ImageInput: modelcapability.SupportUnsupported}}, AdapterCapabilities: protocol.Capabilities{Vision: true}}
+	result, err := processor.Prepare(context.Background(), req, route)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Target.ProviderID != "vision" || result.Target.Model != "vision-model" || ScanImages(result.Request).Count != 1 {
+		t.Fatalf("unexpected Vision fallback: target=%+v request=%+v", result.Target, result.Request)
+	}
+	if len(result.Decisions) != 1 || result.Decisions[0].Route != string(RouteVisionFallback) || result.Decisions[0].Reason != "ocr_no_usable_text" {
+		t.Fatalf("unexpected fallback decision: %+v", result.Decisions)
+	}
+}

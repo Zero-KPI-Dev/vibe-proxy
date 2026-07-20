@@ -241,8 +241,18 @@ LLM provider concurrency is acquired:
 5. replace image blocks in-place with escaped, explicitly untrusted OCR text;
 6. return a protocol-native error before the LLM call when OCR is unsafe or unusable.
 
+When a separately configured Vision fallback exists, unusable OCR switches the effective
+target without re-running the preprocessor. The fallback must be different from the
+original target, explicitly support image input, and use an adapter that can transport
+images. The original image-bearing Canonical IR is retained for that call.
+
 The original Canonical IR is not mutated. Remote image fetching is not part of the first
 OCR release.
+
+Telemetry stores a structured transformation summary with routing and aggregate OCR
+metadata. It intentionally excludes images, image locations, OCR text, and secrets. Local
+SQLite migration adds a JSON summary column while Recent Requests exposes the same typed
+object to the control plane.
 
 ### 8. Telemetry Pipeline
 

@@ -105,3 +105,18 @@ GET /admin/requests/recent
 ```
 
 Returns active and recent request telemetry for local debugging.
+
+Image handling is reported as a structured `transformation` summary. It contains the
+multimodal route, original/effective targets, capability source, image count, OCR provider,
+latency, confidence and cache hits. It never contains image bytes, image URLs, OCR text, or
+OCR credentials.
+
+Successful OCR responses also include:
+
+```text
+X-Vibe-Proxy-Image-Fallback: ocr
+X-Vibe-Proxy-OCR-Images: 2
+Warning: 299 vibe-proxy "Image input was degraded to OCR text"
+```
+
+Vision fallback responses use `X-Vibe-Proxy-Image-Fallback: vision`.

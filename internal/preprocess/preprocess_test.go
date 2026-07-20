@@ -2,6 +2,7 @@ package preprocess
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/a448582655/vibe-proxy/internal/ir"
@@ -13,11 +14,25 @@ type testProcessor struct {
 	text string
 }
 
+type failingProcessor struct{}
+
+func (failingProcessor) Name() string { return "failing" }
+func (failingProcessor) Prepare(_ context.Context, req *ir.Request, route RouteContext) (Result, error) {
+	return Result{Request: req, Target: route.Target, Decisions: []Decision{{Processor: "failing", Route: "rejected"}}}, errors.New("rejected")
+}
+
 func (p testProcessor) Name() string { return p.name }
 func (p testProcessor) Prepare(_ context.Context, req *ir.Request, route RouteContext) (Result, error) {
 	copy := *req
 	copy.Metadata = map[string]string{"step": p.text}
 	return Result{Request: &copy, Target: route.Target, Decisions: []Decision{{Processor: p.name, Route: p.text}}}, nil
+}
+
+func TestPipelinePreservesDecisionOnError(t *testing.T) {
+	result, err := New(failingProcessor{}).Prepare(context.Background(), &ir.Request{}, RouteContext{Target: modelresolver.Target{ProviderID: "provider"}})
+	if err == nil || len(result.Decisions) != 1 || result.Decisions[0].Route != "rejected" {
+		t.Fatalf("error decision was lost: result=%+v err=%v", result, err)
+	}
 }
 
 func TestPipelineRunsProcessorsInOrder(t *testing.T) {

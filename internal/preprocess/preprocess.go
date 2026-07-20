@@ -56,9 +56,6 @@ func (p *Pipeline) Prepare(ctx context.Context, req *ir.Request, route RouteCont
 		stepRoute := route
 		stepRoute.Target = result.Target
 		step, err := processor.Prepare(ctx, result.Request, stepRoute)
-		if err != nil {
-			return result, err
-		}
 		if step.Request != nil {
 			result.Request = step.Request
 		}
@@ -66,6 +63,9 @@ func (p *Pipeline) Prepare(ctx context.Context, req *ir.Request, route RouteCont
 			result.Target = step.Target
 		}
 		result.Decisions = append(result.Decisions, step.Decisions...)
+		if err != nil {
+			return result, err
+		}
 	}
 	return result, nil
 }

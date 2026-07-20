@@ -16,6 +16,7 @@ import (
 	"github.com/a448582655/vibe-proxy/internal/modelresolver"
 	"github.com/a448582655/vibe-proxy/internal/ocr"
 	"github.com/a448582655/vibe-proxy/internal/preprocess"
+	"github.com/a448582655/vibe-proxy/internal/protocol"
 )
 
 type RouteMode string
@@ -42,22 +43,36 @@ type Decision struct {
 }
 
 type Processor struct {
-	Enabled       bool
-	Catalog       *modelcatalog.Service
-	OCR           ocr.Provider
-	OCRTimeout    time.Duration
-	MinConfidence float64
-	MinTextChars  int
-	ImageLimits   ImageLimits
-	TextLimits    TextLimits
-	Cache         *OCRCache
-	cachePrefix   string
+	Enabled             bool
+	Catalog             *modelcatalog.Service
+	OCR                 ocr.Provider
+	OCRTimeout          time.Duration
+	MinConfidence       float64
+	MinTextChars        int
+	ImageLimits         ImageLimits
+	TextLimits          TextLimits
+	Cache               *OCRCache
+	cachePrefix         string
+	VisionFallbackModel string
+	Resolver            *modelresolver.Resolver
+	Providers           map[string]config.ProviderConfig
+	AdapterCapabilities func(providerType string) (protocol.Capabilities, bool)
 }
 
-func NewProcessor(cfg config.MultimodalConfig, catalog *modelcatalog.Service, client *http.Client) *Processor {
+type ProcessorOptions struct {
+	Config              config.MultimodalConfig
+	Catalog             *modelcatalog.Service
+	Client              *http.Client
+	Resolver            *modelresolver.Resolver
+	Providers           map[string]config.ProviderConfig
+	AdapterCapabilities func(providerType string) (protocol.Capabilities, bool)
+}
+
+func NewProcessor(opts ProcessorOptions) *Processor {
+	cfg := opts.Config
 	processor := &Processor{
 		Enabled:       cfg.Enabled,
-		Catalog:       catalog,
+		Catalog:       opts.Catalog,
 		OCRTimeout:    cfg.OCR.Timeout.Duration,
 		MinConfidence: cfg.OCR.MinConfidence,
 		MinTextChars:  cfg.OCR.MinTextChars,
@@ -67,12 +82,16 @@ func NewProcessor(cfg config.MultimodalConfig, catalog *modelcatalog.Service, cl
 			MaxTotalImageBytes: cfg.OCR.MaxTotalImageBytes,
 			RemoteImages:       cfg.OCR.RemoteImages,
 		},
-		TextLimits: TextLimits{PerImage: cfg.OCR.MaxTextCharsPerImage, Total: cfg.OCR.MaxTextCharsTotal},
+		TextLimits:          TextLimits{PerImage: cfg.OCR.MaxTextCharsPerImage, Total: cfg.OCR.MaxTextCharsTotal},
+		VisionFallbackModel: cfg.VisionFallbackModel,
+		Resolver:            opts.Resolver,
+		Providers:           opts.Providers,
+		AdapterCapabilities: opts.AdapterCapabilities,
 	}
 	if !cfg.Enabled || cfg.OCR.Provider != "http" || cfg.OCR.Endpoint == "" {
 		return processor
 	}
-	processor.OCR = ocr.NewHTTPProvider(ocr.HTTPOptions{Endpoint: cfg.OCR.Endpoint, Auth: cfg.OCR.Auth, Client: client})
+	processor.OCR = ocr.NewHTTPProvider(ocr.HTTPOptions{Endpoint: cfg.OCR.Endpoint, Auth: cfg.OCR.Auth, Client: opts.Client})
 	if cfg.OCR.Cache.IsEnabled() {
 		processor.Cache = NewOCRCache(cfg.OCR.Cache.MaxEntries, cfg.OCR.Cache.TTL.Duration)
 	}
@@ -120,6 +139,16 @@ func (p *Processor) Decide(req *ir.Request, route preprocess.RouteContext) Decis
 			decision.Mode = RouteOCRFallback
 			decision.Reason = "model_does_not_support_images"
 			decision.Degraded = true
+		} else if p.VisionFallbackModel != "" {
+			fallback, err := p.resolveVisionFallback(req, route.Target)
+			if err != nil {
+				decision.Mode = RouteRejected
+				decision.Reason = "vision_fallback_invalid"
+			} else {
+				decision.Mode = RouteVisionFallback
+				decision.Reason = "ocr_unavailable"
+				decision.EffectiveTarget = fallback
+			}
 		} else {
 			decision.Mode = RouteRejected
 			decision.Reason = "multimodal_unsupported"
@@ -142,8 +171,29 @@ func (p *Processor) Prepare(ctx context.Context, req *ir.Request, route preproce
 	result := preprocess.Result{Request: req, Target: route.Target}
 	if decision.Mode != RouteRejected {
 		if decision.Mode == RouteOCRFallback {
+			attributes["ocr_provider"] = p.OCR.Name()
 			processed, hits, latency, minConfidence, err := p.applyOCR(ctx, req)
 			if err != nil {
+				attributes["ocr_error_code"] = gatewayErrorCode(err)
+				attributes["ocr_latency_ms"] = latency.Milliseconds()
+				attributes["ocr_cache_hits"] = hits
+				if minConfidence != nil {
+					attributes["ocr_min_confidence"] = *minConfidence
+				}
+				if p.VisionFallbackModel != "" {
+					fallback, fallbackErr := p.resolveVisionFallback(req, route.Target)
+					if fallbackErr != nil {
+						attributes["vision_fallback_error"] = "invalid_target"
+						result.Decisions = []preprocess.Decision{{Processor: p.Name(), Route: string(RouteRejected), Reason: "vision_fallback_invalid", Attributes: attributes}}
+						return result, ir.GatewayError{StatusCode: 500, Kind: "multimodal_error", Code: "vision_fallback_invalid", Message: "The configured Vision fallback model is invalid or does not explicitly support image input."}
+					}
+					result.Target = fallback
+					attributes["effective_provider"] = fallback.ProviderID
+					attributes["effective_model"] = fallback.Model
+					result.Decisions = []preprocess.Decision{{Processor: p.Name(), Route: string(RouteVisionFallback), Reason: gatewayErrorCode(err), Attributes: attributes}}
+					return result, nil
+				}
+				result.Decisions = []preprocess.Decision{{Processor: p.Name(), Route: string(RouteRejected), Reason: gatewayErrorCode(err), Attributes: attributes}}
 				return result, err
 			}
 			result.Request = processed
@@ -154,6 +204,10 @@ func (p *Processor) Prepare(ctx context.Context, req *ir.Request, route preproce
 			if minConfidence != nil {
 				attributes["ocr_min_confidence"] = *minConfidence
 			}
+		} else if decision.Mode == RouteVisionFallback {
+			result.Target = decision.EffectiveTarget
+			attributes["effective_provider"] = decision.EffectiveTarget.ProviderID
+			attributes["effective_model"] = decision.EffectiveTarget.Model
 		}
 		result.Decisions = []preprocess.Decision{{Processor: p.Name(), Route: string(decision.Mode), Reason: decision.Reason, Attributes: attributes}}
 		return result, nil
@@ -162,7 +216,50 @@ func (p *Processor) Prepare(ctx context.Context, req *ir.Request, route preproce
 	if decision.Reason == "image_transport_unsupported" {
 		status = 500
 	}
+	result.Decisions = []preprocess.Decision{{Processor: p.Name(), Route: string(decision.Mode), Reason: decision.Reason, Attributes: attributes}}
 	return result, ir.GatewayError{StatusCode: status, Kind: "multimodal_error", Code: decision.Reason, Message: multimodalErrorMessage(decision.Reason)}
+}
+
+func (p *Processor) resolveVisionFallback(req *ir.Request, original modelresolver.Target) (modelresolver.Target, error) {
+	if p.VisionFallbackModel == "" || p.Resolver == nil {
+		return modelresolver.Target{}, ir.GatewayError{Code: "vision_fallback_invalid"}
+	}
+	copy := *req
+	copy.RequestedModel = p.VisionFallbackModel
+	target, resolveErr := p.Resolver.Resolve(&copy)
+	if resolveErr != nil || target.ProviderID == "" || (target.ProviderID == original.ProviderID && target.Model == original.Model) {
+		return modelresolver.Target{}, ir.GatewayError{Code: "vision_fallback_invalid"}
+	}
+	provider, ok := p.Providers[target.ProviderID]
+	if !ok {
+		return modelresolver.Target{}, ir.GatewayError{Code: "vision_fallback_invalid"}
+	}
+	var catalog *modelcatalog.Snapshot
+	if p.Catalog != nil {
+		catalog = p.Catalog.Snapshot()
+	}
+	capability := ResolveCapabilities(target.ProviderID, target.Model, provider, catalog)
+	if capability.Capabilities.ImageInput != modelcapability.SupportSupported {
+		return modelresolver.Target{}, ir.GatewayError{Code: "vision_fallback_invalid"}
+	}
+	if p.AdapterCapabilities == nil {
+		return modelresolver.Target{}, ir.GatewayError{Code: "vision_fallback_invalid"}
+	}
+	adapter, ok := p.AdapterCapabilities(target.ProviderType)
+	if !ok || !adapter.Vision {
+		return modelresolver.Target{}, ir.GatewayError{Code: "vision_fallback_invalid"}
+	}
+	return target, nil
+}
+
+func gatewayErrorCode(err error) string {
+	if gateway, ok := err.(ir.GatewayError); ok {
+		return gateway.Code
+	}
+	if provider, ok := err.(ocr.Error); ok {
+		return provider.Code
+	}
+	return "ocr_unavailable"
 }
 
 func (p *Processor) applyOCR(ctx context.Context, req *ir.Request) (*ir.Request, int, time.Duration, *float64, error) {
@@ -243,6 +340,9 @@ func normalizeOCRError(err error) error {
 func multimodalErrorMessage(code string) string {
 	if code == "image_transport_unsupported" {
 		return "The selected provider adapter cannot encode image input."
+	}
+	if code == "vision_fallback_invalid" {
+		return "The configured Vision fallback model is invalid or does not support image input."
 	}
 	return "The selected model does not support image input and no fallback is configured."
 }

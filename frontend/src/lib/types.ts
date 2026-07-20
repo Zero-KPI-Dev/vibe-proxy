@@ -100,6 +100,24 @@ export interface RequestEvent {
   status_code: number
   error_code?: string
   usage: Usage
+  transformation?: TransformationSummary
+}
+
+export interface TransformationSummary {
+  multimodal_route?: string
+  capability_source?: string
+  catalog_match?: string
+  input_images?: number
+  original_provider?: string
+  original_model?: string
+  effective_provider?: string
+  effective_model?: string
+  ocr_provider?: string
+  ocr_processed?: number
+  ocr_cache_hits?: number
+  ocr_latency_ms?: number
+  ocr_min_confidence?: number
+  ocr_failure_code?: string
 }
 
 export interface RecentRequestsResponse {

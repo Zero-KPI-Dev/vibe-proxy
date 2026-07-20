@@ -2,6 +2,8 @@ package store
 
 import (
 	"database/sql"
+	"encoding/json"
+	"strings"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -44,9 +46,17 @@ cache_read_tokens INTEGER,
 cache_write_tokens INTEGER,
 cache_hit_ratio REAL,
 input_labels_json TEXT,
-output_labels_json TEXT
+output_labels_json TEXT,
+transformation_json TEXT
 );`)
-	return err
+	if err != nil {
+		return err
+	}
+	_, alterErr := s.db.Exec(`ALTER TABLE request_logs ADD COLUMN transformation_json TEXT`)
+	if alterErr != nil && !strings.Contains(strings.ToLower(alterErr.Error()), "duplicate column") {
+		return alterErr
+	}
+	return nil
 }
 
 func (s *SQLite) RequestStarted(e telemetry.Event) {}
@@ -60,11 +70,21 @@ func (s *SQLite) RequestFinished(e telemetry.Event) {
 	if e.CompletedAt != nil {
 		completed = *e.CompletedAt
 	}
-	_, _ = s.db.Exec(`INSERT OR REPLACE INTO request_logs VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+	var transformation string
+	if e.Transformation != nil {
+		raw, _ := json.Marshal(e.Transformation)
+		transformation = string(raw)
+	}
+	_, _ = s.db.Exec(`INSERT OR REPLACE INTO request_logs (
+request_id,client_name,virtual_model,upstream_model,channel_id,protocol_in,protocol_out,
+started_at,first_token_at,completed_at,ttft_ms,tpot_ms,tps,status_code,error_code,
+prompt_tokens,completion_tokens,total_tokens,cache_read_tokens,cache_write_tokens,cache_hit_ratio,
+input_labels_json,output_labels_json,transformation_json
+) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		e.RequestID, e.ClientName, e.VirtualModel, e.UpstreamModel, e.ChannelID, e.ProtocolIn, e.ProtocolOut,
 		e.StartedAt, first, completed, e.TTFTMillis, e.TPOTMillis, e.TPS, e.StatusCode, e.ErrorCode,
 		e.Usage.PromptTokens, e.Usage.CompletionTokens, e.Usage.TotalTokens, e.Usage.CacheReadTokens,
-		e.Usage.CacheWriteTokens, e.Usage.CacheHitRatio, e.InputLabelsJSON, e.OutputLabelsJSON)
+		e.Usage.CacheWriteTokens, e.Usage.CacheHitRatio, e.InputLabelsJSON, e.OutputLabelsJSON, transformation)
 }
 
 func (s *SQLite) Retain(days int) error {

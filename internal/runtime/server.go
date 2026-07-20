@@ -97,11 +97,26 @@ func modelCatalogCachePath(cfgPath string, cfg *config.RuntimeConfig) string {
 }
 
 func (s *Server) buildSnapshot(cfg *config.RuntimeConfig) *Snapshot {
+	resolver := modelresolver.New(cfg.ModelResolver)
+	processor := multimodal.NewProcessor(multimodal.ProcessorOptions{
+		Config:    cfg.Multimodal,
+		Catalog:   s.catalog,
+		Client:    s.ocrHTTPClient,
+		Resolver:  resolver,
+		Providers: cfg.Providers,
+		AdapterCapabilities: func(providerType string) (protocol.Capabilities, bool) {
+			adapter, ok := s.providerAdapters[providerType]
+			if !ok {
+				return protocol.Capabilities{}, false
+			}
+			return adapter.Capabilities(), true
+		},
+	})
 	return &Snapshot{
 		LoadedAt:      time.Now(),
 		Config:        cfg,
-		Resolver:      modelresolver.New(cfg.ModelResolver),
-		Preprocessors: preprocess.New(multimodal.NewProcessor(cfg.Multimodal, s.catalog, s.ocrHTTPClient)),
+		Resolver:      resolver,
+		Preprocessors: preprocess.New(processor),
 		AdminToken:    os.Getenv(cfg.Security.AdminBearerTokenEnv),
 	}
 }
@@ -224,13 +239,18 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 		_ = clientAdapter.EncodeError(r.Context(), w, ir.GatewayError{StatusCode: 501, Kind: "config_error", Code: "provider_adapter_not_found", Message: "Provider adapter is not available."})
 		return
 	}
+	originalTarget := target
+	tracker := telemetry.NewTracker(telemetry.Event{RequestID: creq.ID, ClientName: client.Name, VirtualModel: creq.RequestedModel, UpstreamModel: target.Model, ChannelID: target.ProviderID, ProtocolIn: string(clientAdapter.Protocol()), ProtocolOut: string(providerAdapter.Protocol()), StartedAt: time.Now()}, s.sink)
 	prepared, err := snap.Preprocessors.Prepare(r.Context(), creq, preprocess.RouteContext{
 		Target:              target,
 		ProviderConfig:      providerCfg,
 		AdapterCapabilities: providerAdapter.Capabilities(),
 	})
 	if err != nil {
-		_ = clientAdapter.EncodeError(r.Context(), w, errorToIR(err))
+		ge := errorToIR(err)
+		tracker.Event.Transformation = transformationSummary(prepared.Decisions, originalTarget, prepared.Target)
+		tracker.Finish(ge.StatusCode, types.Usage{}, ge.Code)
+		_ = clientAdapter.EncodeError(r.Context(), w, ge)
 		return
 	}
 	creq = prepared.Request
@@ -240,23 +260,35 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 		creq.ResolvedModel = target.Model
 		providerCfg, ok = snap.Config.Providers[target.ProviderID]
 		if !ok {
-			_ = clientAdapter.EncodeError(r.Context(), w, ir.GatewayError{StatusCode: 503, Kind: "config_error", Code: "provider_not_found", Message: "Preprocessor target provider is not configured."})
+			ge := ir.GatewayError{StatusCode: 503, Kind: "config_error", Code: "provider_not_found", Message: "Preprocessor target provider is not configured."}
+			tracker.Event.Transformation = transformationSummary(prepared.Decisions, originalTarget, target)
+			tracker.Finish(ge.StatusCode, types.Usage{}, ge.Code)
+			_ = clientAdapter.EncodeError(r.Context(), w, ge)
 			return
 		}
 		providerAdapter = s.providerAdapters[target.ProviderType]
 		if providerAdapter == nil {
-			_ = clientAdapter.EncodeError(r.Context(), w, ir.GatewayError{StatusCode: 501, Kind: "config_error", Code: "provider_adapter_not_found", Message: "Preprocessor target adapter is not available."})
+			ge := ir.GatewayError{StatusCode: 501, Kind: "config_error", Code: "provider_adapter_not_found", Message: "Preprocessor target adapter is not available."}
+			tracker.Event.Transformation = transformationSummary(prepared.Decisions, originalTarget, target)
+			tracker.Finish(ge.StatusCode, types.Usage{}, ge.Code)
+			_ = clientAdapter.EncodeError(r.Context(), w, ge)
 			return
 		}
 	}
+	tracker.Event.UpstreamModel = target.Model
+	tracker.Event.ChannelID = target.ProviderID
+	tracker.Event.ProtocolOut = string(providerAdapter.Protocol())
+	tracker.Event.Transformation = transformationSummary(prepared.Decisions, originalTarget, target)
+	applyTransformationHeaders(w, tracker.Event.Transformation)
 	if !s.acquire(target.ProviderID, providerCfg.MaxConcurrency) {
-		_ = clientAdapter.EncodeError(r.Context(), w, ir.GatewayError{StatusCode: 429, Kind: "rate_limit_error", Code: "provider_busy", Message: "Selected provider is busy.", RetryAfter: "1"})
+		ge := ir.GatewayError{StatusCode: 429, Kind: "rate_limit_error", Code: "provider_busy", Message: "Selected provider is busy.", RetryAfter: "1"}
+		tracker.Finish(ge.StatusCode, types.Usage{}, ge.Code)
+		_ = clientAdapter.EncodeError(r.Context(), w, ge)
 		return
 	}
 	defer s.release(target.ProviderID)
 	ctx, cancel := context.WithTimeout(r.Context(), providerCfg.Timeout.Duration)
 	defer cancel()
-	tracker := telemetry.NewTracker(telemetry.Event{RequestID: creq.ID, ClientName: client.Name, VirtualModel: creq.RequestedModel, UpstreamModel: target.Model, ChannelID: target.ProviderID, ProtocolIn: string(clientAdapter.Protocol()), ProtocolOut: string(providerAdapter.Protocol()), StartedAt: time.Now()}, s.sink)
 	upReq, err := providerAdapter.BuildRequest(ctx, creq, target)
 	if err != nil {
 		ge := errorToIR(err)

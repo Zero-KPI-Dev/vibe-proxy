@@ -62,7 +62,11 @@
     "model": "模型",
     "provider": "服务商",
     "status": "状态",
-    "tokens": "Token"
+    "tokens": "Token",
+    "ocrFallback": "OCR 降级",
+    "visionFallback": "视觉降级",
+    "imageRejected": "图片已拒绝",
+    "ocrDetails": "{{images}} 张图片，{{hits}} 次缓存命中，耗时 {{latency}} 毫秒"
   },
   "providers": {
     "title": "服务商",
