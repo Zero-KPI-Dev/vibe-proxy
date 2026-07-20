@@ -29,28 +29,29 @@ import { TIME_RANGES } from "@/lib/constants"
 import { cn } from "@/lib/utils"
 import { Activity, Gauge, Coins, AlertTriangle, BarChart3 } from "lucide-react"
 import type { MetricPoint } from "@/lib/types"
-
-const rangeLabels: Record<string, string> = {
-  "1h": "Last hour",
-  "6h": "Last 6 hours",
-  "24h": "Last 24 hours",
-  "7d": "Last 7 days",
-}
+import { useTranslation } from "react-i18next"
 
 export function ObservabilityPage() {
+  const { t, i18n } = useTranslation()
   const [range, setRange] = useState("1h")
   const { data: history, isLoading } = useMetricsHistory(range)
   const { data: summary, isLoading: loadingSummary } = useMetricsSummary()
 
   const points = history?.points ?? []
+  const rangeLabels: Record<string, string> = {
+    "1h": t("observability.lastHour"),
+    "6h": t("observability.last6Hours"),
+    "24h": t("observability.last24Hours"),
+    "7d": t("observability.last7Days"),
+  }
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold">Observability</h1>
+          <h1 className="text-2xl font-semibold">{t("observability.title")}</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Monitor proxy performance and usage
+            {t("observability.description")}
           </p>
         </div>
         <div className="flex items-center gap-1 rounded-lg border border-border p-1">
@@ -73,25 +74,25 @@ export function ObservabilityPage() {
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <MetricCard
-          label="Total Requests"
+          label={t("observability.totalRequests")}
           value={summary?.total_requests ?? 0}
           loading={loadingSummary}
           icon={<Activity className="h-4 w-4" />}
         />
         <MetricCard
-          label="Prompt Tokens"
+          label={t("observability.promptTokens")}
           value={summary?.today_tokens?.prompt ?? 0}
           loading={loadingSummary}
           icon={<Gauge className="h-4 w-4" />}
         />
         <MetricCard
-          label="Completion Tokens"
+          label={t("observability.completionTokens")}
           value={summary?.today_tokens?.completion ?? 0}
           loading={loadingSummary}
           icon={<Coins className="h-4 w-4" />}
         />
         <MetricCard
-          label="Total Today"
+          label={t("observability.totalToday")}
           value={summary?.today_tokens?.total ?? 0}
           loading={loadingSummary}
           icon={<BarChart3 className="h-4 w-4" />}
@@ -100,23 +101,23 @@ export function ObservabilityPage() {
 
       <Tabs defaultValue="requests">
         <TabsList>
-          <TabsTrigger value="requests">Request Volume</TabsTrigger>
-          <TabsTrigger value="latency">Latency</TabsTrigger>
-          <TabsTrigger value="tokens">Token Usage</TabsTrigger>
-          <TabsTrigger value="errors">Errors</TabsTrigger>
+          <TabsTrigger value="requests">{t("observability.requestVolume")}</TabsTrigger>
+          <TabsTrigger value="latency">{t("observability.latency")}</TabsTrigger>
+          <TabsTrigger value="tokens">{t("observability.tokenUsage")}</TabsTrigger>
+          <TabsTrigger value="errors">{t("observability.errors")}</TabsTrigger>
         </TabsList>
 
         <TabsContent value="requests">
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">Request Volume</CardTitle>
+              <CardTitle className="text-base">{t("observability.requestVolume")}</CardTitle>
               <CardDescription>{rangeLabels[range]}</CardDescription>
             </CardHeader>
             <CardContent>
               {isLoading ? (
                 <Skeleton className="h-[300px] w-full" />
               ) : points.length === 0 ? (
-                <EmptyState title="No data" description="No request data available for this period." />
+                <EmptyState title={t("observability.noData")} description={t("observability.noRequestData")} />
               ) : (
                 <ResponsiveContainer width="100%" height={300}>
                   <AreaChart data={points}>
@@ -133,8 +134,8 @@ export function ObservabilityPage() {
                       tickFormatter={(v: string) => {
                         const d = new Date(v)
                         return range === "1h"
-                          ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-                          : d.toLocaleDateString([], { month: "short", day: "numeric", hour: "2-digit" })
+                          ? d.toLocaleTimeString(i18n.language, { hour: "2-digit", minute: "2-digit" })
+                          : d.toLocaleDateString(i18n.language, { month: "short", day: "numeric", hour: "2-digit" })
                       }}
                     />
                     <YAxis tick={{ fontSize: 12, fill: "#8b93a7" }} />
@@ -163,14 +164,14 @@ export function ObservabilityPage() {
         <TabsContent value="latency">
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">Latency (TTFT)</CardTitle>
-              <CardDescription>{rangeLabels[range]} — Percentile distribution</CardDescription>
+              <CardTitle className="text-base">{t("observability.latencyTitle")}</CardTitle>
+              <CardDescription>{t("observability.percentiles", { range: rangeLabels[range] })}</CardDescription>
             </CardHeader>
             <CardContent>
               {isLoading ? (
                 <Skeleton className="h-[300px] w-full" />
               ) : points.length === 0 ? (
-                <EmptyState title="No data" description="No latency data available for this period." />
+                <EmptyState title={t("observability.noData")} description={t("observability.noLatencyData")} />
               ) : (
                 <ResponsiveContainer width="100%" height={300}>
                   <LineChart data={points}>
@@ -181,8 +182,8 @@ export function ObservabilityPage() {
                       tickFormatter={(v: string) => {
                         const d = new Date(v)
                         return range === "1h"
-                          ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-                          : d.toLocaleDateString([], { month: "short", day: "numeric" })
+                          ? d.toLocaleTimeString(i18n.language, { hour: "2-digit", minute: "2-digit" })
+                          : d.toLocaleDateString(i18n.language, { month: "short", day: "numeric" })
                       }}
                     />
                     <YAxis
@@ -211,14 +212,14 @@ export function ObservabilityPage() {
         <TabsContent value="tokens">
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">Token Usage</CardTitle>
+              <CardTitle className="text-base">{t("observability.tokenUsage")}</CardTitle>
               <CardDescription>{rangeLabels[range]}</CardDescription>
             </CardHeader>
             <CardContent>
               {isLoading ? (
                 <Skeleton className="h-[300px] w-full" />
               ) : points.length === 0 ? (
-                <EmptyState title="No data" description="No token usage data available for this period." />
+                <EmptyState title={t("observability.noData")} description={t("observability.noTokenData")} />
               ) : (
                 <ResponsiveContainer width="100%" height={300}>
                   <BarChart data={points}>
@@ -229,8 +230,8 @@ export function ObservabilityPage() {
                       tickFormatter={(v: string) => {
                         const d = new Date(v)
                         return range === "1h"
-                          ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-                          : d.toLocaleDateString([], { month: "short", day: "numeric" })
+                          ? d.toLocaleTimeString(i18n.language, { hour: "2-digit", minute: "2-digit" })
+                          : d.toLocaleDateString(i18n.language, { month: "short", day: "numeric" })
                       }}
                     />
                     <YAxis tick={{ fontSize: 12, fill: "#8b93a7" }} />
@@ -243,8 +244,8 @@ export function ObservabilityPage() {
                       }}
                     />
                     <Legend />
-                    <Bar dataKey="tokens_prompt" stackId="a" fill="#9b8cff" name="Prompt" />
-                    <Bar dataKey="tokens_completion" stackId="a" fill="#38bdf8" name="Completion" />
+                    <Bar dataKey="tokens_prompt" stackId="a" fill="#9b8cff" name={t("observability.prompt")} />
+                    <Bar dataKey="tokens_completion" stackId="a" fill="#38bdf8" name={t("observability.completion")} />
                   </BarChart>
                 </ResponsiveContainer>
               )}
@@ -255,14 +256,14 @@ export function ObservabilityPage() {
         <TabsContent value="errors">
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">Error Rate</CardTitle>
+              <CardTitle className="text-base">{t("observability.errorRate")}</CardTitle>
               <CardDescription>{rangeLabels[range]}</CardDescription>
             </CardHeader>
             <CardContent>
               {isLoading ? (
                 <Skeleton className="h-[300px] w-full" />
               ) : points.length === 0 ? (
-                <EmptyState title="No data" description="No error data available for this period." />
+                <EmptyState title={t("observability.noData")} description={t("observability.noErrorData")} />
               ) : (
                 <ResponsiveContainer width="100%" height={300}>
                   <AreaChart data={points}>
@@ -279,8 +280,8 @@ export function ObservabilityPage() {
                       tickFormatter={(v: string) => {
                         const d = new Date(v)
                         return range === "1h"
-                          ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-                          : d.toLocaleDateString([], { month: "short", day: "numeric" })
+                          ? d.toLocaleTimeString(i18n.language, { hour: "2-digit", minute: "2-digit" })
+                          : d.toLocaleDateString(i18n.language, { month: "short", day: "numeric" })
                       }}
                     />
                     <YAxis tick={{ fontSize: 12, fill: "#8b93a7" }} />
@@ -321,6 +322,7 @@ function MetricCard({
   loading: boolean
   icon: React.ReactNode
 }) {
+  const { i18n } = useTranslation()
   return (
     <Card>
       <CardContent className="flex items-center gap-4 p-4">
@@ -330,7 +332,7 @@ function MetricCard({
         <div className="flex-1 min-w-0">
           <p className="text-sm text-muted-foreground truncate">{label}</p>
           <p className="text-2xl font-semibold tabular-nums">
-            {loading ? "..." : value.toLocaleString()}
+            {loading ? "..." : value.toLocaleString(i18n.language)}
           </p>
         </div>
       </CardContent>

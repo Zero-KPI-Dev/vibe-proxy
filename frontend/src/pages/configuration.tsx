@@ -10,12 +10,15 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { toast } from "sonner"
 import { FileCode, RefreshCw, CheckCircle2, AlertCircle, Eye, Edit3 } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { useTranslation } from "react-i18next"
+import type { ConfigValidationIssue } from "@/lib/types"
 
 export function ConfigurationPage() {
+  const { t } = useTranslation()
   const qc = useQueryClient()
   const [yamlContent, setYamlContent] = useState("")
   const [hasChanges, setHasChanges] = useState(false)
-  const [validation, setValidation] = useState<{ valid: boolean; issues: unknown[] } | null>(null)
+  const [validation, setValidation] = useState<{ valid: boolean; issues: ConfigValidationIssue[] } | null>(null)
   const [preview, setPreview] = useState(false)
 
   const { data, isLoading, refetch } = useQuery({
@@ -37,15 +40,18 @@ export function ConfigurationPage() {
       qc.invalidateQueries({ queryKey: ["providers"] })
       setHasChanges(false)
       if (res.issues && res.issues.length > 0) {
-        setValidation({ valid: false, issues: res.issues })
-        toast.warning("Config saved with issues")
+        setValidation({
+          valid: !res.issues.some((issue) => issue.level === "error"),
+          issues: res.issues,
+        })
+        toast.warning(t("configuration.savedWithIssues"))
       } else {
         setValidation({ valid: true, issues: [] })
-        toast.success("Config saved and reloaded")
+        toast.success(t("configuration.saved"))
       }
     },
     onError: (e: Error) => {
-      toast.error(`Failed to save: ${e.message}`)
+      toast.error(t("configuration.saveFailed", { error: e.message }))
     },
   })
 
@@ -57,33 +63,38 @@ export function ConfigurationPage() {
     try {
       const res = await configApi.validate()
       setValidation(res)
-      if (res.valid) {
-        toast.success("Config is valid")
+      if (res.valid && res.issues.length > 0) {
+        toast.warning(t("configuration.validWithWarnings", { count: res.issues.length }))
+      } else if (res.valid) {
+        toast.success(t("configuration.valid"))
       } else {
-        toast.error(`Config has ${res.issues.length} issue(s)`)
+        toast.error(t("configuration.issueCount", { count: res.issues.length }))
       }
     } catch (e) {
-      toast.error(`Validation failed: ${(e as Error).message}`)
+      toast.error(t("configuration.validationFailed", { error: (e as Error).message }))
     }
   }
 
   const handleReload = async () => {
     try {
       await configApi.reload()
-      toast.success("Config reloaded")
+      toast.success(t("configuration.reloaded"))
       refetch()
     } catch (e) {
-      toast.error(`Reload failed: ${(e as Error).message}`)
+      toast.error(t("configuration.reloadFailed", { error: (e as Error).message }))
     }
   }
+
+  const validationHasIssues = (validation?.issues.length ?? 0) > 0
+  const validationHasErrors = validation?.issues.some((issue) => issue.level === "error") ?? false
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold">Configuration</h1>
+          <h1 className="text-2xl font-semibold">{t("configuration.title")}</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            View and edit vibe-proxy YAML configuration
+            {t("configuration.description")}
           </p>
         </div>
         <div className="flex gap-2">
@@ -93,25 +104,25 @@ export function ConfigurationPage() {
             onClick={() => setPreview(!preview)}
           >
             {preview ? (
-              <><Edit3 className="h-4 w-4 mr-1" /> Edit</>
+              <><Edit3 className="h-4 w-4 mr-1" /> {t("common.edit")}</>
             ) : (
-              <><Eye className="h-4 w-4 mr-1" /> Preview</>
+              <><Eye className="h-4 w-4 mr-1" /> {t("common.preview")}</>
             )}
           </Button>
           <Button variant="outline" size="sm" onClick={handleValidate}>
             <CheckCircle2 className="h-4 w-4 mr-1" />
-            Validate
+            {t("common.validate")}
           </Button>
           <Button variant="outline" size="sm" onClick={handleReload}>
             <RefreshCw className="h-4 w-4 mr-1" />
-            Reload
+            {t("common.reload")}
           </Button>
           <Button
             size="sm"
             onClick={handleSave}
             disabled={!hasChanges || saveMutation.isPending || preview}
           >
-            {saveMutation.isPending ? "Saving..." : "Save & Reload"}
+            {saveMutation.isPending ? t("common.saving") : t("configuration.saveReload")}
           </Button>
         </div>
       </div>
@@ -119,33 +130,48 @@ export function ConfigurationPage() {
       {validation && (
         <Card
           className={
-            validation.valid
+            validation.valid && !validationHasIssues
               ? "border-green-500/30 bg-green-500/5"
-              : "border-red-500/30 bg-red-500/5"
+              : validationHasErrors
+                ? "border-red-500/30 bg-red-500/5"
+                : "border-yellow-500/30 bg-yellow-500/5"
           }
         >
           <CardContent className="p-4 flex items-start gap-3">
-            {validation.valid ? (
+            {validation.valid && !validationHasIssues ? (
               <CheckCircle2 className="h-5 w-5 text-green-400 mt-0.5 shrink-0" />
             ) : (
-              <AlertCircle className="h-5 w-5 text-red-400 mt-0.5 shrink-0" />
+              <AlertCircle className={cn(
+                "h-5 w-5 mt-0.5 shrink-0",
+                validationHasErrors ? "text-red-400" : "text-yellow-400"
+              )} />
             )}
             <div className="text-sm">
-              <p className={validation.valid ? "text-green-400" : "text-red-400"}>
-                {validation.valid ? "Configuration is valid" : "Configuration has issues"}
+              <p className={cn(
+                validation.valid && !validationHasIssues && "text-green-400",
+                validationHasErrors && "text-red-400",
+                validation.valid && validationHasIssues && "text-yellow-400"
+              )}>
+                {validationHasErrors
+                  ? t("configuration.validationIssues")
+                  : validationHasIssues
+                    ? t("configuration.validationValidWithWarnings")
+                    : t("configuration.validationValid")}
               </p>
-              {!validation.valid && (
+              {validationHasIssues && (
                 <ul className="mt-1 space-y-1">
-                  {(validation.issues as Array<{ severity?: string; field?: string; message?: string }>).map(
+                  {validation.issues.map(
                     (issue, i) => (
                       <li key={i} className="text-muted-foreground">
-                        {issue.severity === "error" ? (
-                          <Badge variant="destructive" className="mr-1">ERROR</Badge>
+                        {issue.level === "error" ? (
+                          <Badge variant="destructive" className="mr-1">{t("configuration.error")}</Badge>
                         ) : (
-                          <Badge variant="warning" className="mr-1">WARN</Badge>
+                          <Badge variant="warning" className="mr-1">{t("configuration.warning")}</Badge>
                         )}
-                        {issue.field && <code className="text-xs mr-1">{issue.field}:</code>}
-                        {issue.message}
+                        {issue.path && <code className="text-xs mr-1">{issue.path}:</code>}
+                        {t(`configuration.issueMessages.${issue.code}`, {
+                          defaultValue: issue.message,
+                        })}
                       </li>
                     )
                   )}
@@ -191,7 +217,7 @@ export function ConfigurationPage() {
                 setHasChanges(e.target.value !== (data?.yaml ?? ""))
               }}
               className="min-h-[500px] font-mono text-sm border-0 rounded-none focus-visible:ring-0 resize-y"
-              placeholder="Loading configuration..."
+              placeholder={t("configuration.loading")}
             />
           )}
         </CardContent>

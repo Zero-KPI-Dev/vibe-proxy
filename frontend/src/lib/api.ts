@@ -14,6 +14,7 @@ import type {
   MetricsHistoryResponse,
   ProviderHealthResponse,
   RawConfigResponse,
+  ConfigValidationIssue,
 } from "./types"
 
 export function getToken(): string {
@@ -156,7 +157,7 @@ export const configApi = {
     }),
   raw: () => request<RawConfigResponse>("/admin/config/raw"),
   saveRaw: (yaml: string) =>
-    request<{ ok: boolean; issues: unknown[]; loaded_at: string }>("/admin/config/raw", {
+    request<{ ok: boolean; issues: ConfigValidationIssue[]; loaded_at: string }>("/admin/config/raw", {
       method: "PUT",
       body: JSON.stringify({ yaml }),
     }),

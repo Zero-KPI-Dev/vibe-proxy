@@ -2,6 +2,8 @@ import { useMemo, useState } from "react"
 import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { z } from "zod"
+import type { TFunction } from "i18next"
+import { useTranslation } from "react-i18next"
 import { Check, ChevronDown } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -22,11 +24,13 @@ import { cn } from "@/lib/utils"
 import { providerApi } from "@/lib/api"
 import type { ProviderFormData } from "@/lib/types"
 
-const providerSchema = z
+const createProviderSchema = (t: TFunction, mode: "create" | "edit") => z
   .object({
-    id: z.string().min(1, "Provider ID is required"),
+    id: z.string().min(1, t("providerForm.validation.providerIdRequired")),
     type: z.enum(["openai-compatible", "anthropic"]),
-    base_url: z.string().min(1, "Base URL is required").url("Must be a valid URL"),
+    base_url: z.string()
+      .min(1, t("providerForm.validation.baseUrlRequired"))
+      .url(t("providerForm.validation.validUrl")),
     auth_type: z.enum(["bearer", "api_key_header", "none"]),
     api_key_source: z.enum(["env", "literal"]).optional(),
     api_key_env: z.string().optional(),
@@ -45,31 +49,26 @@ const providerSchema = z
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["api_key_env"],
-        message: "API key env var is required",
+        message: t("providerForm.validation.apiKeyEnvRequired"),
       })
     }
-    if (source === "literal" && !v.api_key && !isEditMode()) {
+    if (source === "literal" && !v.api_key && mode !== "edit") {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["api_key"],
-        message: "API key is required",
+        message: t("providerForm.validation.apiKeyRequired"),
       })
     }
     if (v.auth_type === "api_key_header" && !v.header) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["header"],
-        message: "Header name is required",
+        message: t("providerForm.validation.headerRequired"),
       })
     }
   })
 
-let currentFormMode: "create" | "edit" = "create"
-function isEditMode() {
-  return currentFormMode === "edit"
-}
-
-type ProviderFormValues = z.input<typeof providerSchema>
+type ProviderFormValues = z.input<ReturnType<typeof createProviderSchema>>
 
 interface ProviderFormProps {
   defaultValues?: Partial<ProviderFormValues>
@@ -79,7 +78,8 @@ interface ProviderFormProps {
 }
 
 export function ProviderForm({ defaultValues, onSubmit, isPending, mode }: ProviderFormProps) {
-  currentFormMode = mode
+  const { t } = useTranslation()
+  const providerSchema = useMemo(() => createProviderSchema(t, mode), [mode, t])
   const {
     register,
     handleSubmit,
@@ -152,7 +152,9 @@ export function ProviderForm({ defaultValues, onSubmit, isPending, mode }: Provi
       } as unknown as ProviderFormData
       const result = await providerApi.models(payload)
       if (!result.ok) {
-        setModelFetchMessage(`Could not fetch models${result.status ? ` (HTTP ${result.status})` : ""}`)
+        setModelFetchMessage(t("providerForm.fetchFailed", {
+          status: result.status ? ` (HTTP ${result.status})` : "",
+        }))
         return
       }
       setAvailableModels(result.models)
@@ -161,9 +163,9 @@ export function ProviderForm({ defaultValues, onSubmit, isPending, mode }: Provi
         nextSelected.add(result.models[0]!)
         writeSelectedModels(nextSelected)
       }
-      setModelFetchMessage(`Fetched ${result.models.length} model${result.models.length === 1 ? "" : "s"}. Select the ones you want to enable.`)
+      setModelFetchMessage(t("providerForm.fetched", { count: result.models.length }))
     } catch (e) {
-      setModelFetchMessage(e instanceof Error ? e.message : "Could not fetch models")
+      setModelFetchMessage(e instanceof Error ? e.message : t("providerForm.fetchFailed", { status: "" }))
     } finally {
       setIsFetchingModels(false)
     }
@@ -199,7 +201,7 @@ export function ProviderForm({ defaultValues, onSubmit, isPending, mode }: Provi
     <form onSubmit={handleSubmit(handleFormSubmit)} className="space-y-6">
       <div className="grid gap-4 sm:grid-cols-2">
         <div className="space-y-2">
-          <Label htmlFor="id">Provider ID</Label>
+          <Label htmlFor="id">{t("providerForm.providerId")}</Label>
           <Input
             id="id"
             placeholder="my-provider"
@@ -210,7 +212,7 @@ export function ProviderForm({ defaultValues, onSubmit, isPending, mode }: Provi
         </div>
 
         <div className="space-y-2">
-          <Label htmlFor="type">Protocol</Label>
+          <Label htmlFor="type">{t("providerForm.protocol")}</Label>
           <Select
             defaultValue={defaultValues?.type ?? "openai-compatible"}
             onValueChange={(v) => setValue("type", v as "openai-compatible" | "anthropic")}
@@ -226,7 +228,7 @@ export function ProviderForm({ defaultValues, onSubmit, isPending, mode }: Provi
         </div>
 
         <div className="space-y-2 sm:col-span-2">
-          <Label htmlFor="base_url">Base URL</Label>
+          <Label htmlFor="base_url">{t("providerForm.baseUrl")}</Label>
           <Input
             id="base_url"
             placeholder={
@@ -240,7 +242,7 @@ export function ProviderForm({ defaultValues, onSubmit, isPending, mode }: Provi
         </div>
 
         <div className="space-y-2">
-          <Label htmlFor="auth_type">Auth Type</Label>
+          <Label htmlFor="auth_type">{t("providerForm.authType")}</Label>
           <Select
             defaultValue={defaultValues?.auth_type ?? "bearer"}
             onValueChange={(v) => setValue("auth_type", v as "bearer" | "api_key_header" | "none")}
@@ -249,16 +251,16 @@ export function ProviderForm({ defaultValues, onSubmit, isPending, mode }: Provi
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="bearer">Bearer Token</SelectItem>
-              <SelectItem value="api_key_header">API Key Header</SelectItem>
-              <SelectItem value="none">None</SelectItem>
+              <SelectItem value="bearer">{t("providerForm.bearerToken")}</SelectItem>
+              <SelectItem value="api_key_header">{t("providerForm.apiKeyHeader")}</SelectItem>
+              <SelectItem value="none">{t("providerForm.none")}</SelectItem>
             </SelectContent>
           </Select>
         </div>
 
         {selectedAuth !== "none" && (
           <div className="space-y-2">
-            <Label htmlFor="api_key_source">Key Source</Label>
+            <Label htmlFor="api_key_source">{t("providerForm.keySource")}</Label>
             <Select
               defaultValue={defaultValues?.api_key_source ?? "env"}
               onValueChange={(v) => setValue("api_key_source", v as "env" | "literal")}
@@ -267,8 +269,8 @@ export function ProviderForm({ defaultValues, onSubmit, isPending, mode }: Provi
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="env">Environment variable</SelectItem>
-                <SelectItem value="literal">Paste API key locally</SelectItem>
+                <SelectItem value="env">{t("providerForm.environmentVariable")}</SelectItem>
+                <SelectItem value="literal">{t("providerForm.pasteKey")}</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -276,7 +278,7 @@ export function ProviderForm({ defaultValues, onSubmit, isPending, mode }: Provi
 
         {selectedAuth !== "none" && selectedKeySource === "env" && (
           <div className="space-y-2">
-            <Label htmlFor="api_key_env">API Key Env Var</Label>
+            <Label htmlFor="api_key_env">{t("providerForm.apiKeyEnv")}</Label>
             <Input id="api_key_env" placeholder="OPENAI_API_KEY" {...register("api_key_env")} />
             {errors.api_key_env && (
               <p className="text-xs text-destructive">{errors.api_key_env.message}</p>
@@ -286,11 +288,11 @@ export function ProviderForm({ defaultValues, onSubmit, isPending, mode }: Provi
 
         {selectedAuth !== "none" && selectedKeySource === "literal" && (
           <div className="space-y-2">
-            <Label htmlFor="api_key">API Key</Label>
+            <Label htmlFor="api_key">{t("providerForm.apiKey")}</Label>
             <Input
               id="api_key"
               type="password"
-              placeholder={mode === "edit" ? "Leave blank to keep current key" : "sk-..."}
+              placeholder={mode === "edit" ? t("providerForm.keepCurrentKey") : "sk-..."}
               autoComplete="off"
               {...register("api_key")}
             />
@@ -298,27 +300,27 @@ export function ProviderForm({ defaultValues, onSubmit, isPending, mode }: Provi
               <p className="text-xs text-destructive">{errors.api_key.message}</p>
             )}
             <p className="text-xs text-muted-foreground">
-              Saved only in your local vibe-proxy YAML as a literal secret; it is never shown again.
+              {t("providerForm.literalKeyHelp")}
             </p>
           </div>
         )}
 
         {selectedAuth === "api_key_header" && (
           <div className="space-y-2">
-            <Label htmlFor="header">Header Name</Label>
+            <Label htmlFor="header">{t("providerForm.headerName")}</Label>
             <Input id="header" placeholder="x-api-key" {...register("header")} />
             {errors.header && (
               <p className="text-xs text-destructive">{errors.header.message}</p>
             )}
             <p className="text-xs text-muted-foreground">
-              Custom header name for API key authentication
+              {t("providerForm.headerHelp")}
             </p>
           </div>
         )}
 
         <div className="space-y-2 sm:col-span-2">
           <div className="flex items-center justify-between gap-3">
-            <Label htmlFor="models">Models</Label>
+            <Label htmlFor="models">{t("providerForm.models")}</Label>
             <Button
               type="button"
               variant="secondary"
@@ -326,16 +328,16 @@ export function ProviderForm({ defaultValues, onSubmit, isPending, mode }: Provi
               onClick={handleFetchModels}
               disabled={isFetchingModels || !watch("base_url") || (selectedAuth !== "none" && selectedKeySource === "env" && !watch("api_key_env")) || (selectedAuth !== "none" && selectedKeySource === "literal" && !watch("api_key") && mode !== "edit")}
             >
-              {isFetchingModels ? "Fetching..." : "Fetch Models"}
+              {isFetchingModels ? t("providerForm.fetchingModels") : t("providerForm.fetchModels")}
             </Button>
           </div>
           <Input
             id="models"
-            placeholder="Click Fetch Models, or enter: gpt-4, gpt-3.5-turbo"
+            placeholder={t("providerForm.modelsPlaceholder")}
             {...register("models")}
           />
           <p className="text-xs text-muted-foreground">
-            Fill Base URL and auth first, then fetch available models from the provider.
+            {t("providerForm.modelsHelp")}
           </p>
           {modelFetchMessage && (
             <p className="text-xs text-muted-foreground">{modelFetchMessage}</p>
@@ -346,40 +348,46 @@ export function ProviderForm({ defaultValues, onSubmit, isPending, mode }: Provi
                 <PopoverTrigger asChild>
                   <Button type="button" variant="outline" className="justify-between sm:w-72">
                     <span>
-                      Choose models · {selectedModels.size}/{availableModels.length}
+                      {t("providerForm.chooseModels", {
+                        selected: selectedModels.size,
+                        total: availableModels.length,
+                      })}
                     </span>
                     <ChevronDown className="h-4 w-4 opacity-70" />
                   </Button>
                 </PopoverTrigger>
                 <PopoverContent className="w-[min(34rem,calc(100vw-2rem))] space-y-3">
                   <div className="space-y-1">
-                    <div className="text-sm font-medium">Select provider models</div>
+                    <div className="text-sm font-medium">{t("providerForm.selectProviderModels")}</div>
                     <div className="text-xs text-muted-foreground">
-                      Fetched models are candidates only. Check the models you want to expose through vibe-proxy.
+                      {t("providerForm.candidateHelp")}
                     </div>
                   </div>
                   <Input
                     value={modelFilter}
                     onChange={(e) => setModelFilter(e.target.value)}
-                    placeholder="Filter models..."
+                    placeholder={t("providerForm.filterModels")}
                   />
                   <div className="flex items-center justify-between gap-2">
                     <div className="text-xs text-muted-foreground">
-                      {selectedModels.size} selected · {filteredModels.length} shown
+                      {t("providerForm.selectionSummary", {
+                        selected: selectedModels.size,
+                        shown: filteredModels.length,
+                      })}
                     </div>
                     <div className="flex gap-2">
                       <Button type="button" variant="outline" size="sm" onClick={selectFilteredModels}>
-                        Select shown
+                        {t("providerForm.selectShown")}
                       </Button>
                       <Button type="button" variant="ghost" size="sm" onClick={clearFilteredModels}>
-                        Clear shown
+                        {t("providerForm.clearShown")}
                       </Button>
                     </div>
                   </div>
                   <div className="max-h-72 overflow-y-auto rounded-md border border-border">
                     {filteredModels.length === 0 ? (
                       <div className="px-3 py-6 text-center text-sm text-muted-foreground">
-                        No models match this filter.
+                        {t("providerForm.noMatches")}
                       </div>
                     ) : (
                       filteredModels.map((model) => {
@@ -409,14 +417,14 @@ export function ProviderForm({ defaultValues, onSubmit, isPending, mode }: Provi
                 </PopoverContent>
               </Popover>
               <p className="text-xs text-muted-foreground">
-                Only checked models are saved. You can still edit the text field manually.
+                {t("providerForm.selectedHelp")}
               </p>
             </div>
           )}
         </div>
 
         <div className="space-y-2">
-          <Label htmlFor="max_concurrency">Max Concurrency</Label>
+          <Label htmlFor="max_concurrency">{t("providerForm.maxConcurrency")}</Label>
           <Input
             id="max_concurrency"
             type="number"
@@ -426,18 +434,18 @@ export function ProviderForm({ defaultValues, onSubmit, isPending, mode }: Provi
       </div>
 
       <div className="border-t border-border pt-4">
-        <h3 className="text-sm font-medium mb-4">Alias Configuration (optional)</h3>
+        <h3 className="text-sm font-medium mb-4">{t("providerForm.aliasConfiguration")}</h3>
         <div className="grid gap-4 sm:grid-cols-3">
           <div className="space-y-2">
-            <Label htmlFor="alias">Alias</Label>
+            <Label htmlFor="alias">{t("providerForm.alias")}</Label>
             <Input id="alias" placeholder="vibe-chat" {...register("alias")} />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="alias_model">Alias Target</Label>
+            <Label htmlFor="alias_model">{t("providerForm.aliasTarget")}</Label>
             <Input id="alias_model" placeholder="gpt-4" {...register("alias_model")} />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="default_model">Default Model</Label>
+            <Label htmlFor="default_model">{t("providerForm.defaultModel")}</Label>
             <Input id="default_model" placeholder="vibe-chat" {...register("default_model")} />
           </div>
         </div>
@@ -445,7 +453,11 @@ export function ProviderForm({ defaultValues, onSubmit, isPending, mode }: Provi
 
       <div className="flex gap-2">
         <Button type="submit" disabled={isPending}>
-          {isPending ? "Saving..." : mode === "create" ? "Create Provider" : "Save Changes"}
+          {isPending
+            ? t("common.saving")
+            : mode === "create"
+              ? t("providerForm.createProvider")
+              : t("providerForm.saveChanges")}
         </Button>
       </div>
     </form>

@@ -33,8 +33,10 @@ import { EmptyState } from "@/components/empty-state"
 import { toast } from "sonner"
 import { KeyRound, Plus, Trash2, Copy, Check, Pencil } from "lucide-react"
 import type { ClientKey } from "@/lib/types"
+import { useTranslation } from "react-i18next"
 
 export function ClientKeysPage() {
+  const { t } = useTranslation()
   const { data, isLoading, refetch } = useClientKeys()
   const createKey = useCreateClientKey()
   const updateKey = useUpdateClientKey()
@@ -66,27 +68,32 @@ export function ClientKeysPage() {
       setNewName("")
       setNewRpm("60")
       setNewModels("")
-      toast.success("Client key created")
+      toast.success(t("clientKeys.created"))
     } catch (e) {
-      toast.error(`Failed to create key: ${e instanceof Error ? e.message : "Unknown error"}`)
+      toast.error(t("clientKeys.createFailed", {
+        error: e instanceof Error ? e.message : t("common.unknownError"),
+      }))
     }
   }
 
   const handleToggleEnabled = async (key: ClientKey) => {
     try {
       await updateKey.mutateAsync({ name: key.name, enabled: !key.enabled })
-      toast.success(`Key "${key.name}" ${key.enabled ? "disabled" : "enabled"}`)
+      toast.success(t("clientKeys.toggled", {
+        name: key.name,
+        state: key.enabled ? t("clientKeys.disabled") : t("clientKeys.enabled"),
+      }))
     } catch (e) {
-      toast.error(`Failed to update key`)
+      toast.error(t("clientKeys.updateFailed"))
     }
   }
 
   const handleDelete = async (name: string) => {
     try {
       await deleteKey.mutateAsync(name)
-      toast.success(`Key "${name}" deleted`)
+      toast.success(t("clientKeys.deleted", { name }))
     } catch (e) {
-      toast.error(`Failed to delete key`)
+      toast.error(t("clientKeys.deleteFailed"))
     }
   }
 
@@ -115,9 +122,9 @@ export function ClientKeysPage() {
           : [],
       })
       setEditingKey(null)
-      toast.success(`Key "${editingKey.name}" updated`)
+      toast.success(t("clientKeys.updated", { name: editingKey.name }))
     } catch (e) {
-      toast.error(`Failed to update key`)
+      toast.error(t("clientKeys.updateFailed"))
     }
   }
 
@@ -125,28 +132,28 @@ export function ClientKeysPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold">Client Keys</h1>
+          <h1 className="text-2xl font-semibold">{t("clientKeys.title")}</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Manage API keys for client applications
+            {t("clientKeys.description")}
           </p>
         </div>
         <Dialog open={showCreate && !createdRawKey} onOpenChange={(o) => { setShowCreate(o); if (!o) setCreatedRawKey(null) }}>
           <DialogTrigger asChild>
             <Button size="sm">
               <Plus className="h-4 w-4 mr-1" />
-              Create Key
+              {t("clientKeys.create")}
             </Button>
           </DialogTrigger>
           <DialogContent>
             <DialogHeader>
-              <DialogTitle>Create Client Key</DialogTitle>
+              <DialogTitle>{t("clientKeys.createTitle")}</DialogTitle>
               <DialogDescription>
-                Create a new API key for client applications. The raw key will be shown once.
+                {t("clientKeys.createDescription")}
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-4">
               <div className="space-y-2">
-                <Label htmlFor="keyName">Key Name</Label>
+                <Label htmlFor="keyName">{t("clientKeys.keyName")}</Label>
                 <Input
                   id="keyName"
                   placeholder="my-agent"
@@ -155,7 +162,7 @@ export function ClientKeysPage() {
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="keyRpm">Rate Limit (RPM)</Label>
+                <Label htmlFor="keyRpm">{t("clientKeys.rateLimit")}</Label>
                 <Input
                   id="keyRpm"
                   type="number"
@@ -165,7 +172,7 @@ export function ClientKeysPage() {
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="keyModels">Allowed Models (optional)</Label>
+                <Label htmlFor="keyModels">{t("clientKeys.allowedModelsOptional")}</Label>
                 <Input
                   id="keyModels"
                   placeholder="gpt-4, claude-3"
@@ -173,16 +180,16 @@ export function ClientKeysPage() {
                   onChange={(e) => setNewModels(e.target.value)}
                 />
                 <p className="text-xs text-muted-foreground">
-                  Comma-separated model names. Leave empty to allow all.
+                  {t("clientKeys.modelsHelp")}
                 </p>
               </div>
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setShowCreate(false)}>
-                Cancel
+                {t("common.cancel")}
               </Button>
               <Button onClick={handleCreate} disabled={createKey.isPending || !newName.trim()}>
-                {createKey.isPending ? "Creating..." : "Create"}
+                {createKey.isPending ? t("clientKeys.creating") : t("common.create")}
               </Button>
             </DialogFooter>
           </DialogContent>
@@ -192,7 +199,7 @@ export function ClientKeysPage() {
       {createdRawKey && (
         <Card className="border-yellow-500/30 bg-yellow-500/5">
           <CardContent className="p-4">
-            <p className="text-sm font-medium mb-2 text-yellow-400">⚠️ Save this key — it won't be shown again!</p>
+            <p className="text-sm font-medium mb-2 text-yellow-400">{t("clientKeys.saveWarning")}</p>
             <div className="flex items-center gap-2">
               <code className="flex-1 rounded bg-background px-3 py-2 text-sm font-mono border border-border break-all">
                 {createdRawKey}
@@ -207,7 +214,7 @@ export function ClientKeysPage() {
               className="mt-3"
               onClick={() => { setCreatedRawKey(null); setShowCreate(false) }}
             >
-              Done
+              {t("common.done")}
             </Button>
           </CardContent>
         </Card>
@@ -223,13 +230,13 @@ export function ClientKeysPage() {
             </div>
           ) : keys.length === 0 ? (
             <EmptyState
-              title="No client keys"
-              description="Create API keys for clients to connect to vibe-proxy."
+              title={t("clientKeys.empty")}
+              description={t("clientKeys.emptyDescription")}
               icon={<KeyRound className="h-8 w-8" />}
               action={
                 <Button onClick={() => setShowCreate(true)}>
                   <Plus className="h-4 w-4 mr-1" />
-                  Create Key
+                  {t("clientKeys.create")}
                 </Button>
               }
             />
@@ -237,12 +244,12 @@ export function ClientKeysPage() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Key Prefix</TableHead>
-                  <TableHead>Models</TableHead>
-                  <TableHead>Status</TableHead>
+                  <TableHead>{t("clientKeys.name")}</TableHead>
+                  <TableHead>{t("clientKeys.keyPrefix")}</TableHead>
+                  <TableHead>{t("clientKeys.models")}</TableHead>
+                  <TableHead>{t("clientKeys.status")}</TableHead>
                   <TableHead>RPM</TableHead>
-                  <TableHead className="w-24">Actions</TableHead>
+                  <TableHead className="w-24">{t("common.actions")}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -260,7 +267,7 @@ export function ClientKeysPage() {
                           ))}
                         </div>
                       ) : (
-                        <span className="text-xs text-muted-foreground">All models</span>
+                        <span className="text-xs text-muted-foreground">{t("clientKeys.allModels")}</span>
                       )}
                     </TableCell>
                     <TableCell>
@@ -291,23 +298,23 @@ export function ClientKeysPage() {
       <Dialog open={!!editingKey} onOpenChange={(o) => { if (!o) setEditingKey(null) }}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Edit Key: {editingKey?.name}</DialogTitle>
-            <DialogDescription>Update allowed models and rate limit for this key</DialogDescription>
+            <DialogTitle>{t("clientKeys.editTitle", { name: editingKey?.name })}</DialogTitle>
+            <DialogDescription>{t("clientKeys.editDescription")}</DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-2">
-              <Label>Allowed Models</Label>
+              <Label>{t("clientKeys.allowedModels")}</Label>
               <Input
                 value={editModels}
                 onChange={(e) => setEditModels(e.target.value)}
                 placeholder="gpt-4, claude-3"
               />
               <p className="text-xs text-muted-foreground">
-                Comma-separated. Leave empty to allow all models.
+                {t("clientKeys.editModelsHelp")}
               </p>
             </div>
             <div className="space-y-2">
-              <Label>Rate Limit (RPM)</Label>
+              <Label>{t("clientKeys.rateLimit")}</Label>
               <Input
                 type="number"
                 value={editRpm}
@@ -317,9 +324,9 @@ export function ClientKeysPage() {
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setEditingKey(null)}>Cancel</Button>
+            <Button variant="outline" onClick={() => setEditingKey(null)}>{t("common.cancel")}</Button>
             <Button onClick={handleSaveEdit} disabled={updateKey.isPending}>
-              {updateKey.isPending ? "Saving..." : "Save"}
+              {updateKey.isPending ? t("common.saving") : t("common.save")}
             </Button>
           </DialogFooter>
         </DialogContent>

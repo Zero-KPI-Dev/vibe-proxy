@@ -14,6 +14,7 @@ import { useMetricsSummary } from "@/hooks/use-metrics"
 import { useProviderHealth } from "@/hooks/use-metrics"
 import { useClientKeys } from "@/hooks/use-client-keys"
 import { cn } from "@/lib/utils"
+import { useTranslation } from "react-i18next"
 
 function CopyBox({ label, value }: { label: string; value: string }) {
   const [copied, setCopied] = useState(false)
@@ -41,6 +42,7 @@ function CopyBox({ label, value }: { label: string; value: string }) {
 }
 
 export function DashboardPage() {
+  const { t } = useTranslation()
   const { data: snapshot, isLoading: loadingProviders } = useProviders()
   const { data: requests, isLoading: loadingRequests } = useRecentRequests()
   const { data: metrics, isLoading: loadingMetrics } = useMetricsSummary()
@@ -57,9 +59,9 @@ export function DashboardPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold">Dashboard</h1>
+          <h1 className="text-2xl font-semibold">{t("dashboard.title")}</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Overview of your vibe-proxy runtime
+            {t("dashboard.description")}
           </p>
         </div>
         <HealthBadge />
@@ -69,20 +71,20 @@ export function DashboardPage() {
         <CardContent className="p-4 space-y-3">
           <div className="flex items-center gap-2">
             <KeyRound className="h-4 w-4 text-primary" />
-            <span className="text-sm font-medium">Quick Connect</span>
+            <span className="text-sm font-medium">{t("dashboard.quickConnect")}</span>
           </div>
           <div className="grid gap-3 sm:grid-cols-3">
             <CopyBox
-              label="OpenAI-compatible Endpoint"
+              label={t("dashboard.openaiEndpoint")}
               value="http://127.0.0.1:8080/v1"
             />
             <CopyBox
-              label="Anthropic Endpoint"
+              label={t("dashboard.anthropicEndpoint")}
               value="http://127.0.0.1:8080/anthropic"
             />
             <CopyBox
-              label={firstKeyPrefix ? "Client Key (prefix)" : "No client key yet"}
-              value={firstKeyPrefix ? `${firstKeyPrefix}...` : "Create one in Client Keys →"}
+              label={firstKeyPrefix ? t("dashboard.clientKeyPrefix") : t("dashboard.noClientKey")}
+              value={firstKeyPrefix ? `${firstKeyPrefix}...` : t("dashboard.createClientKey")}
             />
           </div>
         </CardContent>
@@ -90,22 +92,22 @@ export function DashboardPage() {
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatsCard
-          label="Total Requests"
+          label={t("dashboard.totalRequests")}
           value={loadingMetrics ? "..." : (metrics?.total_requests ?? 0)}
           icon={<Activity className="h-4 w-4" />}
         />
         <StatsCard
-          label="Active Providers"
+          label={t("dashboard.activeProviders")}
           value={loadingProviders ? "..." : providers.length}
           icon={<Server className="h-4 w-4" />}
         />
         <StatsCard
-          label="Available Models"
+          label={t("dashboard.availableModels")}
           value={loadingProviders ? "..." : modelCount}
           icon={<Brain className="h-4 w-4" />}
         />
         <StatsCard
-          label="Today's Tokens"
+          label={t("dashboard.todayTokens")}
           value={loadingMetrics ? "..." : (metrics?.today_tokens?.total ?? 0).toLocaleString()}
             icon={<Database className="h-4 w-4" />}
         />
@@ -114,7 +116,7 @@ export function DashboardPage() {
       <div className="grid gap-6 lg:grid-cols-3">
         <Card className="lg:col-span-2">
           <CardHeader>
-            <CardTitle className="text-base">Recent Requests</CardTitle>
+            <CardTitle className="text-base">{t("dashboard.recentRequests")}</CardTitle>
           </CardHeader>
           <CardContent>
             {loadingRequests ? (
@@ -125,8 +127,8 @@ export function DashboardPage() {
               </div>
             ) : recentRequests.length === 0 ? (
               <EmptyState
-                title="No requests yet"
-                description="Requests proxied through vibe-proxy will appear here."
+                title={t("dashboard.noRequests")}
+                description={t("dashboard.noRequestsDescription")}
                 icon={<Activity className="h-8 w-8" />}
               />
             ) : (
@@ -137,12 +139,12 @@ export function DashboardPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Provider Health</CardTitle>
+            <CardTitle className="text-base">{t("dashboard.providerHealth")}</CardTitle>
           </CardHeader>
           <CardContent>
             {healthList.length === 0 ? (
               <div className="text-sm text-muted-foreground py-4 text-center">
-                {loadingProviders ? "Loading..." : "No providers configured"}
+                {loadingProviders ? t("common.loading") : t("dashboard.noProviders")}
               </div>
             ) : (
               <div className="space-y-3">
@@ -162,7 +164,7 @@ export function DashboardPage() {
                         <span className="text-xs text-muted-foreground">{p.latency_ms}ms</span>
                       )}
                       <Badge variant={p.healthy ? "success" : "destructive"}>
-                        {p.healthy ? "OK" : "DOWN"}
+                        {p.healthy ? t("status.healthy") : t("status.down")}
                       </Badge>
                     </div>
                   </div>

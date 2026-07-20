@@ -5,8 +5,10 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
 import { toast } from "sonner"
 import type { ProviderFormData } from "@/lib/types"
+import { useTranslation } from "react-i18next"
 
 export function ProviderEditPage() {
+  const { t } = useTranslation()
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const { data, isLoading } = useProviders()
@@ -17,11 +19,13 @@ export function ProviderEditPage() {
   const handleSubmit = async (formData: ProviderFormData) => {
     try {
       await updateProvider.mutateAsync(formData)
-      toast.success(`Provider "${id}" updated`)
+      toast.success(t("providers.updated", { id }))
       navigate("/providers")
     } catch (e) {
       toast.error(
-        `Failed to update provider: ${e instanceof Error ? e.message : "Unknown error"}`
+        t("providers.updateFailed", {
+          error: e instanceof Error ? e.message : t("common.unknownError"),
+        })
       )
     }
   }
@@ -44,9 +48,9 @@ export function ProviderEditPage() {
   if (!provider) {
     return (
       <div className="space-y-6">
-        <h1 className="text-2xl font-semibold">Provider not found</h1>
+        <h1 className="text-2xl font-semibold">{t("providers.notFound")}</h1>
         <p className="text-muted-foreground">
-          Provider "{id}" does not exist.
+          {t("providers.notFoundDescription", { id })}
         </p>
       </div>
     )
@@ -55,9 +59,9 @@ export function ProviderEditPage() {
   return (
     <div className="max-w-2xl space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold">Edit Provider</h1>
+        <h1 className="text-2xl font-semibold">{t("providers.editTitle")}</h1>
         <p className="text-sm text-muted-foreground mt-1">
-          Editing provider: {id}
+          {t("providers.editing", { id })}
         </p>
       </div>
       <Card>

@@ -1,5 +1,6 @@
 import { useState } from "react"
 import { Link, useLocation } from "react-router-dom"
+import { useTranslation } from "react-i18next"
 import {
   LayoutDashboard,
   Server,
@@ -30,6 +31,7 @@ const iconMap: Record<string, React.ReactNode> = {
 }
 
 export function AppLayout({ children }: { children: React.ReactNode }) {
+  const { t, i18n } = useTranslation()
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const location = useLocation()
   const { data: health } = useHealth()
@@ -64,7 +66,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
                   )}
                 >
                   {iconMap[item.icon]}
-                  {item.label}
+                  {t(item.labelKey)}
                 </Link>
               )
             })}
@@ -79,8 +81,10 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
                 )}
               />
               {health?.ok
-                ? `Running · ${new Date(health.loaded_at).toLocaleTimeString()}`
-                : "Offline"}
+                ? t("status.running", {
+                    time: new Date(health.loaded_at).toLocaleTimeString(i18n.language),
+                  })
+                : t("status.offline")}
             </div>
           </div>
         </div>

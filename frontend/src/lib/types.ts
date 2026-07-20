@@ -144,8 +144,9 @@ export interface ProviderHealthResponse {
 
 // ---- Config ----
 export interface ConfigValidationIssue {
-  severity: "error" | "warning"
-  field: string
+  level: "error" | "warning"
+  path: string
+  code: string
   message: string
 }
 

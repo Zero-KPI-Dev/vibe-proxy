@@ -9,6 +9,7 @@ import {
 } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
 import { providerApi } from "@/lib/api"
+import { useTranslation } from "react-i18next"
 
 interface ModelSelectorProps {
   value: string
@@ -20,6 +21,7 @@ interface ModelSelectorProps {
 type ModelOption = { id: string; vibe_type?: "alias" | "raw" }
 
 export function ModelSelector({ value, onChange, endpoint, onEndpointChange }: ModelSelectorProps) {
+  const { t } = useTranslation()
   const { data, isLoading, error } = useQuery({
     queryKey: ["models"],
     queryFn: async () => {
@@ -79,9 +81,9 @@ export function ModelSelector({ value, onChange, endpoint, onEndpointChange }: M
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value="openai_chat">OpenAI Chat</SelectItem>
-          <SelectItem value="openai_responses">OpenAI Responses</SelectItem>
-          <SelectItem value="anthropic">Anthropic Messages</SelectItem>
+          <SelectItem value="openai_chat">{t("modelSelector.openaiChat")}</SelectItem>
+          <SelectItem value="openai_responses">{t("modelSelector.openaiResponses")}</SelectItem>
+          <SelectItem value="anthropic">{t("modelSelector.anthropicMessages")}</SelectItem>
         </SelectContent>
       </Select>
 
@@ -90,17 +92,17 @@ export function ModelSelector({ value, onChange, endpoint, onEndpointChange }: M
       ) : (
         <Select value={value} onValueChange={onChange}>
           <SelectTrigger className="w-48">
-            <SelectValue placeholder={error ? "Model load failed" : "Select model..."} />
+            <SelectValue placeholder={error ? t("modelSelector.loadFailed") : t("modelSelector.selectModel")} />
           </SelectTrigger>
           <SelectContent>
             {allModels.length === 0 && (
               <div className="px-2 py-3 text-sm text-muted-foreground">
-                No models configured
+                {t("modelSelector.noneConfigured")}
               </div>
             )}
             {aliases.length > 0 && (
               <>
-                <div className="px-2 py-1 text-xs font-medium text-muted-foreground">Aliases</div>
+                <div className="px-2 py-1 text-xs font-medium text-muted-foreground">{t("modelSelector.aliases")}</div>
                 {aliases.map((m) => (
                   <SelectItem key={m.id} value={m.id}>
                     {m.id}
@@ -110,7 +112,7 @@ export function ModelSelector({ value, onChange, endpoint, onEndpointChange }: M
             )}
             {rawModels.length > 0 && (
               <>
-                <div className="px-2 py-1 text-xs font-medium text-muted-foreground">Raw Models</div>
+                <div className="px-2 py-1 text-xs font-medium text-muted-foreground">{t("modelSelector.rawModels")}</div>
                 {rawModels.map((m) => (
                   <SelectItem key={m.id} value={m.id}>
                     {m.id}

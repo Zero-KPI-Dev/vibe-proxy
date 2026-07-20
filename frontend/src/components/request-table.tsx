@@ -1,6 +1,7 @@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Badge } from "@/components/ui/badge"
 import type { RequestEvent } from "@/lib/types"
+import { useTranslation } from "react-i18next"
 
 interface RequestTableProps {
   events: RequestEvent[]
@@ -14,15 +15,16 @@ function statusBadge(status: number) {
 }
 
 export function RequestTable({ events }: RequestTableProps) {
+  const { t } = useTranslation()
   return (
     <Table>
       <TableHeader>
         <TableRow>
-          <TableHead>Client</TableHead>
-          <TableHead>Model</TableHead>
-          <TableHead>Provider</TableHead>
-          <TableHead>Status</TableHead>
-          <TableHead className="text-right">Tokens</TableHead>
+          <TableHead>{t("requestTable.client")}</TableHead>
+          <TableHead>{t("requestTable.model")}</TableHead>
+          <TableHead>{t("requestTable.provider")}</TableHead>
+          <TableHead>{t("requestTable.status")}</TableHead>
+          <TableHead className="text-right">{t("requestTable.tokens")}</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>

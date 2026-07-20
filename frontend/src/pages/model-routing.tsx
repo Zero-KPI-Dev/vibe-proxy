@@ -32,8 +32,10 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { EmptyState } from "@/components/empty-state"
 import { toast } from "sonner"
 import { Network, Plus, Trash2, ArrowRight } from "lucide-react"
+import { useTranslation } from "react-i18next"
 
 export function ModelRoutingPage() {
+  const { t } = useTranslation()
   const { data, isLoading } = useAliases()
   const createAlias = useCreateAlias()
   const deleteAlias = useDeleteAlias()
@@ -63,27 +65,29 @@ export function ModelRoutingPage() {
       setNewAlias("")
       setNewTarget("")
       setShowCreate(false)
-      toast.success(`Alias "${newAlias}" created`)
+      toast.success(t("routing.created", { alias: newAlias }))
     } catch (e) {
-      toast.error(`Failed to create alias: ${e instanceof Error ? e.message : "Unknown error"}`)
+      toast.error(t("routing.createFailed", {
+        error: e instanceof Error ? e.message : t("common.unknownError"),
+      }))
     }
   }
 
   const handleDelete = async (alias: string) => {
     try {
       await deleteAlias.mutateAsync(alias)
-      toast.success(`Alias "${alias}" deleted`)
+      toast.success(t("routing.deleted", { alias }))
     } catch (e) {
-      toast.error(`Failed to delete alias`)
+      toast.error(t("routing.deleteFailed"))
     }
   }
 
   const handleSaveDefaults = async () => {
     try {
       await updateDefaults.mutateAsync({ default_model: defaultModel, allow_raw: allowRaw })
-      toast.success("Defaults updated")
+      toast.success(t("routing.defaultsUpdated"))
     } catch (e) {
-      toast.error(`Failed to update defaults`)
+      toast.error(t("routing.defaultsFailed"))
     }
   }
 
@@ -91,28 +95,28 @@ export function ModelRoutingPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold">Model Routing</h1>
+          <h1 className="text-2xl font-semibold">{t("routing.title")}</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Configure virtual model aliases and routing rules
+            {t("routing.description")}
           </p>
         </div>
         <Dialog open={showCreate} onOpenChange={setShowCreate}>
           <DialogTrigger asChild>
             <Button size="sm">
               <Plus className="h-4 w-4 mr-1" />
-              Add Alias
+              {t("routing.addAlias")}
             </Button>
           </DialogTrigger>
           <DialogContent>
             <DialogHeader>
-              <DialogTitle>Add Alias</DialogTitle>
+              <DialogTitle>{t("routing.addAlias")}</DialogTitle>
               <DialogDescription>
-                Map a virtual model name to a provider/model combination.
+                {t("routing.addDescription")}
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-4">
               <div className="space-y-2">
-                <Label htmlFor="aliasName">Alias Name</Label>
+                <Label htmlFor="aliasName">{t("routing.aliasName")}</Label>
                 <Input
                   id="aliasName"
                   placeholder="vibe-chat"
@@ -121,7 +125,7 @@ export function ModelRoutingPage() {
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="aliasTarget">Target (provider/model)</Label>
+                <Label htmlFor="aliasTarget">{t("routing.target")}</Label>
                 <Input
                   id="aliasTarget"
                   placeholder="openai/gpt-4"
@@ -129,16 +133,16 @@ export function ModelRoutingPage() {
                   onChange={(e) => setNewTarget(e.target.value)}
                 />
                 <p className="text-xs text-muted-foreground">
-                  Format: <code className="text-xs">provider_id/model_name</code>
+                  {t("routing.format")} <code className="text-xs">provider_id/model_name</code>
                 </p>
               </div>
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setShowCreate(false)}>
-                Cancel
+                {t("common.cancel")}
               </Button>
               <Button onClick={handleCreate} disabled={!newAlias.trim() || !newTarget.trim()}>
-                Create Alias
+                {t("routing.addAlias")}
               </Button>
             </DialogFooter>
           </DialogContent>
@@ -148,7 +152,7 @@ export function ModelRoutingPage() {
       <div className="grid gap-6 lg:grid-cols-2">
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Alias Mappings</CardTitle>
+            <CardTitle className="text-base">{t("routing.mappings")}</CardTitle>
           </CardHeader>
           <CardContent className="p-0">
             {isLoading ? (
@@ -159,16 +163,16 @@ export function ModelRoutingPage() {
               </div>
             ) : aliasEntries.length === 0 ? (
               <EmptyState
-                title="No aliases"
-                description="Create aliases to map virtual model names to provider models."
+                title={t("routing.empty")}
+                description={t("routing.emptyDescription")}
                 icon={<Network className="h-8 w-8" />}
               />
             ) : (
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Alias</TableHead>
-                    <TableHead>Target</TableHead>
+                    <TableHead>{t("routing.alias")}</TableHead>
+                    <TableHead>{t("routing.targetColumn")}</TableHead>
                     <TableHead className="w-20"></TableHead>
                   </TableRow>
                 </TableHeader>
@@ -200,11 +204,11 @@ export function ModelRoutingPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Default Settings</CardTitle>
+            <CardTitle className="text-base">{t("routing.defaultSettings")}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="space-y-2">
-              <Label htmlFor="defaultModel">Default Model</Label>
+              <Label htmlFor="defaultModel">{t("routing.defaultModel")}</Label>
               <Input
                 id="defaultModel"
                 placeholder="gpt-4"
@@ -212,20 +216,20 @@ export function ModelRoutingPage() {
                 onChange={(e) => setDefaultModel(e.target.value)}
               />
               <p className="text-xs text-muted-foreground">
-                Fallback model when none is specified in the request
+                {t("routing.defaultModelHelp")}
               </p>
             </div>
             <div className="flex items-center justify-between">
               <div>
-                <Label htmlFor="allowRaw">Allow Raw Models</Label>
+                <Label htmlFor="allowRaw">{t("routing.allowRaw")}</Label>
                 <p className="text-xs text-muted-foreground">
-                  Allow clients to request models directly without an alias
+                  {t("routing.allowRawHelp")}
                 </p>
               </div>
               <Switch id="allowRaw" checked={allowRaw} onCheckedChange={setAllowRaw} />
             </div>
             <Button onClick={handleSaveDefaults} disabled={updateDefaults.isPending}>
-              {updateDefaults.isPending ? "Saving..." : "Save Defaults"}
+              {updateDefaults.isPending ? t("common.saving") : t("routing.saveDefaults")}
             </Button>
           </CardContent>
         </Card>

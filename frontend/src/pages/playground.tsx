@@ -41,6 +41,7 @@ import { ChatMessage } from "@/components/chat-message"
 import { ModelSelector } from "@/components/model-selector"
 import { EmptyState } from "@/components/empty-state"
 import { toast } from "sonner"
+import { useTranslation } from "react-i18next"
 
 type ChatEntry = {
   id: string
@@ -76,6 +77,7 @@ function deleteConversation(id: string) {
 }
 
 export function PlaygroundPage() {
+  const { t } = useTranslation()
   const [messages, setMessages] = useState<ChatEntry[]>([])
   const [input, setInput] = useState("")
   const [model, setModel] = useState("")
@@ -123,7 +125,7 @@ export function PlaygroundPage() {
     if (conv) {
       setMessages(conv)
       setConvId(id)
-      toast.success("Conversation restored")
+      toast.success(t("playground.restored"))
     }
   }
 
@@ -133,7 +135,7 @@ export function PlaygroundPage() {
       setConvId(null)
       setMessages([])
     }
-    toast.success("Conversation deleted")
+    toast.success(t("playground.deleted"))
   }
 
   const handleSend = async () => {
@@ -186,7 +188,7 @@ export function PlaygroundPage() {
         setMessages((prev) =>
           prev.map((m) =>
             m.id === assistantMsg.id
-              ? { ...m, content: `Error: ${resp.status} - ${errText}` }
+              ? { ...m, content: t("playground.requestError", { error: `${resp.status} - ${errText}` }) }
               : m
           )
         )
@@ -254,7 +256,7 @@ export function PlaygroundPage() {
         setMessages((prev) =>
           prev.map((m) =>
             m.id === assistantMsg.id && !m.content
-              ? { ...m, content: "[Stopped]" }
+              ? { ...m, content: t("playground.stopped") }
               : m
           )
         )
@@ -262,7 +264,7 @@ export function PlaygroundPage() {
         setMessages((prev) =>
           prev.map((m) =>
             m.id === assistantMsg.id
-              ? { ...m, content: `Error: ${(e as Error).message}` }
+              ? { ...m, content: t("playground.requestError", { error: (e as Error).message }) }
               : m
           )
         )
@@ -295,9 +297,9 @@ export function PlaygroundPage() {
     <div className="flex h-full flex-col">
       <div className="flex items-center justify-between mb-4 shrink-0">
         <div>
-          <h1 className="text-2xl font-semibold">Playground</h1>
+          <h1 className="text-2xl font-semibold">{t("playground.title")}</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Test models through vibe-proxy
+            {t("playground.description")}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -305,17 +307,17 @@ export function PlaygroundPage() {
             <DropdownMenuTrigger asChild>
               <Button variant="outline" size="sm">
                 <History className="h-4 w-4 mr-1" />
-                History
+                {t("playground.history")}
                 {convEntries.length > 0 && (
                   <Badge variant="secondary" className="ml-1 text-xs">{convEntries.length}</Badge>
                 )}
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-56">
-              <DropdownMenuLabel>Saved Conversations</DropdownMenuLabel>
+              <DropdownMenuLabel>{t("playground.savedConversations")}</DropdownMenuLabel>
               <DropdownMenuSeparator />
               {convEntries.length === 0 ? (
-                <DropdownMenuItem disabled>No saved conversations</DropdownMenuItem>
+                <DropdownMenuItem disabled>{t("playground.noSavedConversations")}</DropdownMenuItem>
               ) : (
                 convEntries.map(([id, msgs]) => (
                   <div key={id} className="flex items-center gap-1 px-1">
@@ -323,7 +325,7 @@ export function PlaygroundPage() {
                       className="flex-1 truncate"
                       onClick={() => handleLoad(id)}
                     >
-                      {msgs[0]?.content.slice(0, 40) || "Empty"}...
+                      {msgs[0]?.content.slice(0, 40) || t("playground.emptyConversation")}...
                     </DropdownMenuItem>
                     <Button
                       variant="ghost"
@@ -344,12 +346,12 @@ export function PlaygroundPage() {
               <DialogTrigger asChild>
                 <Button variant="outline" size="sm">
                   <FileJson className="h-4 w-4 mr-1" />
-                  Raw JSON
+                  {t("playground.rawResponse")}
                 </Button>
               </DialogTrigger>
               <DialogContent className="max-w-2xl max-h-[80vh]">
                 <DialogHeader>
-                  <DialogTitle>Raw Response JSON</DialogTitle>
+                  <DialogTitle>{t("playground.rawResponse")}</DialogTitle>
                 </DialogHeader>
                 <pre className="overflow-auto rounded-lg bg-background border border-border p-4 text-xs font-mono max-h-[60vh]">
                   {rawJson}
@@ -360,27 +362,27 @@ export function PlaygroundPage() {
 
           <Button variant="ghost" size="sm" onClick={handleClear}>
             <Trash2 className="h-4 w-4 mr-1" />
-            Clear
+            {t("common.clear")}
           </Button>
 
           <Sheet>
             <SheetTrigger asChild>
               <Button variant="outline" size="sm">
                 <Settings2 className="h-4 w-4 mr-1" />
-                Params
+                {t("playground.parameters")}
               </Button>
             </SheetTrigger>
             <SheetContent>
               <SheetHeader>
-                <SheetTitle>Parameters</SheetTitle>
+                <SheetTitle>{t("playground.parameters")}</SheetTitle>
                 <SheetDescription>
-                  Adjust request parameters for the playground
+                  {t("playground.parametersDescription")}
                 </SheetDescription>
               </SheetHeader>
               <div className="space-y-6 py-6">
                 <div className="space-y-2">
                   <div className="flex justify-between">
-                    <Label>Temperature</Label>
+                    <Label>{t("playground.temperature")}</Label>
                     <span className="text-sm text-muted-foreground">{temperature}</span>
                   </div>
                   <Slider
@@ -393,7 +395,7 @@ export function PlaygroundPage() {
                 </div>
                 <div className="space-y-2">
                   <div className="flex justify-between">
-                    <Label>Top-P</Label>
+                    <Label>{t("playground.topP")}</Label>
                     <span className="text-sm text-muted-foreground">{topP}</span>
                   </div>
                   <Slider
@@ -406,7 +408,7 @@ export function PlaygroundPage() {
                 </div>
                 <div className="space-y-2">
                   <div className="flex justify-between">
-                    <Label>Max Tokens</Label>
+                    <Label>{t("playground.maxTokens")}</Label>
                     <span className="text-sm text-muted-foreground">{maxTokens}</span>
                   </div>
                   <Slider
@@ -418,19 +420,19 @@ export function PlaygroundPage() {
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label>Stop Sequences</Label>
+                  <Label>{t("playground.stopSequences")}</Label>
                   <Input
                     value={stopSequences}
                     onChange={(e) => setStopSequences(e.target.value)}
-                    placeholder="comma-separated, e.g. \n\n,---"
+                    placeholder={t("playground.stopPlaceholder")}
                   />
                   <p className="text-xs text-muted-foreground">
-                    Comma-separated stop sequences
+                    {t("playground.stopHelp")}
                   </p>
                 </div>
                 <Separator />
                 <div className="flex items-center justify-between">
-                  <Label>Streaming</Label>
+                  <Label>{t("playground.streaming")}</Label>
                   <Switch checked={streaming} onCheckedChange={setStreaming} />
                 </div>
                 <Separator />
@@ -438,7 +440,7 @@ export function PlaygroundPage() {
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
                       <KeyRound className="h-4 w-4 text-muted-foreground" />
-                      <Label>Use Client Key</Label>
+                      <Label>{t("playground.useClientKey")}</Label>
                     </div>
                     <Switch checked={useClientKey} onCheckedChange={setUseClientKey} />
                   </div>
@@ -462,7 +464,7 @@ export function PlaygroundPage() {
                     </div>
                   )}
                   <p className="text-xs text-muted-foreground">
-                    Use a vibe-proxy client key instead of the admin token for data-plane requests
+                    {t("playground.clientKeyHelp")}
                   </p>
                 </div>
               </div>
@@ -491,8 +493,8 @@ export function PlaygroundPage() {
       >
         {messages.length === 0 ? (
           <EmptyState
-            title="Start a conversation"
-            description="Select a model and send a message to test the proxy."
+            title={t("playground.startConversation")}
+            description={t("playground.startDescription")}
             className="h-full"
           />
         ) : (
@@ -510,7 +512,7 @@ export function PlaygroundPage() {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder={model ? "Type a message..." : "Select a model first..."}
+            placeholder={model ? t("playground.messagePlaceholder") : t("playground.selectModelFirst")}
             disabled={!model || isStreaming}
             className="pr-10 py-3 h-auto"
           />
@@ -518,12 +520,12 @@ export function PlaygroundPage() {
         {isStreaming ? (
           <Button variant="destructive" onClick={handleStop}>
             <StopCircle className="h-4 w-4 mr-1" />
-            Stop
+            {t("common.stop")}
           </Button>
         ) : (
           <Button onClick={handleSend} disabled={!model || !input.trim()}>
             <Send className="h-4 w-4 mr-1" />
-            Send
+            {t("common.send")}
           </Button>
         )}
       </div>

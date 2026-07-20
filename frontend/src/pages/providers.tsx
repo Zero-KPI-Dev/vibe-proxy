@@ -26,8 +26,10 @@ import {
 import { toast } from "sonner"
 import { Server, Plus, Trash2, RefreshCw, ExternalLink } from "lucide-react"
 import type { ProviderConfig } from "@/lib/types"
+import { useTranslation } from "react-i18next"
 
 export function ProvidersPage() {
+  const { t } = useTranslation()
   const { data, isLoading, refetch } = useProviders()
   const deleteProvider = useDeleteProvider()
   const testProvider = useTestProvider()
@@ -39,18 +41,24 @@ export function ProvidersPage() {
   const handleDelete = async (id: string) => {
     try {
       await deleteProvider.mutateAsync(id)
-      toast.success(`Provider "${id}" deleted`)
+      toast.success(t("providers.deleted", { id }))
       setDeleting(null)
     } catch (e) {
-      toast.error(`Failed to delete: ${e instanceof Error ? e.message : "Unknown error"}`)
+      toast.error(t("providers.deleteFailed", { error: e instanceof Error ? e.message : t("common.unknownError") }))
     }
   }
 
   const handleTest = async (id: string) => {
     toast.promise(testProvider.mutateAsync(id), {
-      loading: `Testing ${id}...`,
-      success: (res) => `Test ${res.ok ? "succeeded" : "failed"} (${res.status ?? res.error}, ${res.latency_ms}ms)`,
-      error: (e) => `Test failed: ${e instanceof Error ? e.message : "Unknown error"}`,
+      loading: t("providers.testing", { id }),
+      success: (res) => t("providers.testResult", {
+        result: res.ok ? t("providers.testSucceeded") : t("providers.testFailedResult"),
+        detail: res.status ?? res.error,
+        latency: res.latency_ms,
+      }),
+      error: (e) => t("providers.testFailed", {
+        error: e instanceof Error ? e.message : t("common.unknownError"),
+      }),
     })
   }
 
@@ -58,19 +66,19 @@ export function ProvidersPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold">Providers</h1>
+          <h1 className="text-2xl font-semibold">{t("providers.title")}</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Manage upstream LLM providers
+            {t("providers.description")}
           </p>
         </div>
         <div className="flex gap-2">
           <Button variant="outline" size="sm" onClick={() => refetch()}>
             <RefreshCw className="h-4 w-4 mr-1" />
-            Refresh
+            {t("common.refresh")}
           </Button>
           <Button size="sm" onClick={() => navigate("/providers/new")}>
             <Plus className="h-4 w-4 mr-1" />
-            Add Provider
+            {t("providers.add")}
           </Button>
         </div>
       </div>
@@ -85,13 +93,13 @@ export function ProvidersPage() {
             </div>
           ) : providers.length === 0 ? (
             <EmptyState
-              title="No providers configured"
-              description="Add an upstream LLM provider to start proxying requests."
+              title={t("providers.empty")}
+              description={t("providers.emptyDescription")}
               icon={<Server className="h-8 w-8" />}
               action={
                 <Button onClick={() => navigate("/providers/new")}>
                   <Plus className="h-4 w-4 mr-1" />
-                  Add Provider
+                  {t("providers.add")}
                 </Button>
               }
             />
@@ -109,21 +117,21 @@ export function ProvidersPage() {
       <Dialog open={!!deleting} onOpenChange={(o) => !o && setDeleting(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Delete Provider</DialogTitle>
+            <DialogTitle>{t("providers.deleteTitle")}</DialogTitle>
             <DialogDescription>
-              Are you sure you want to delete provider "{deleting}"? This action cannot be undone.
+              {t("providers.deleteDescription", { id: deleting })}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDeleting(null)}>
-              Cancel
+              {t("common.cancel")}
             </Button>
             <Button
               variant="destructive"
               onClick={() => deleting && handleDelete(deleting)}
               disabled={deleteProvider.isPending}
             >
-              {deleteProvider.isPending ? "Deleting..." : "Delete"}
+              {deleteProvider.isPending ? t("common.deleting") : t("common.delete")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -143,15 +151,16 @@ function ProviderTable({
   onDelete: (id: string) => void
   onTest: (id: string) => void
 }) {
+  const { t } = useTranslation()
   return (
     <Table>
       <TableHeader>
         <TableRow>
           <TableHead>ID</TableHead>
-          <TableHead>Type</TableHead>
-          <TableHead>Base URL</TableHead>
-          <TableHead>Models</TableHead>
-          <TableHead className="text-right">Actions</TableHead>
+          <TableHead>{t("providers.type")}</TableHead>
+          <TableHead>{t("providers.baseUrl")}</TableHead>
+          <TableHead>{t("providers.models")}</TableHead>
+          <TableHead className="text-right">{t("common.actions")}</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
@@ -184,7 +193,7 @@ function ProviderTable({
                   <ExternalLink className="h-3.5 w-3.5" />
                 </Button>
                 <Button variant="ghost" size="sm" onClick={() => onEdit(p.id)}>
-                  Edit
+                  {t("common.edit")}
                 </Button>
                 <Button variant="ghost" size="sm" onClick={() => onDelete(p.id)}>
                   <Trash2 className="h-3.5 w-3.5 text-destructive" />
