@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"time"
 )
 
 type ValidationIssue struct {
@@ -70,6 +71,50 @@ func ValidateRuntime(cfg *RuntimeConfig) []ValidationIssue {
 		if _, ok := cfg.Providers[target.Provider]; !ok {
 			issues = append(issues, issue("error", "models.aliases."+alias, "alias_provider_not_found", "Alias points to an unknown provider."))
 		}
+	}
+	issues = append(issues, validateMultimodal(cfg.Multimodal)...)
+	return issues
+}
+
+func validateMultimodal(cfg MultimodalConfig) []ValidationIssue {
+	if !cfg.Enabled {
+		return nil
+	}
+	issues := []ValidationIssue{}
+	if cfg.Strategy != "ocr_then_vision" {
+		issues = append(issues, issue("error", "multimodal.strategy", "unsupported_multimodal_strategy", "Only ocr_then_vision is supported."))
+	}
+	if cfg.OCR.Provider != "http" {
+		issues = append(issues, issue("error", "multimodal.ocr.provider", "unsupported_ocr_provider", "The first OCR release requires provider: http."))
+	}
+	if cfg.OCR.Endpoint == "" {
+		issues = append(issues, issue("error", "multimodal.ocr.endpoint", "missing_ocr_endpoint", "OCR endpoint is required when multimodal fallback is enabled."))
+	} else if endpoint, err := url.Parse(cfg.OCR.Endpoint); err != nil || endpoint.Host == "" || (endpoint.Scheme != "http" && endpoint.Scheme != "https") {
+		issues = append(issues, issue("error", "multimodal.ocr.endpoint", "invalid_ocr_endpoint", "OCR endpoint must be an absolute HTTP or HTTPS URL."))
+	}
+	if cfg.OCR.Timeout.Duration <= 0 || cfg.OCR.Timeout.Duration > 2*time.Minute {
+		issues = append(issues, issue("error", "multimodal.ocr.timeout", "invalid_ocr_timeout", "OCR timeout must be greater than zero and no more than 2 minutes."))
+	}
+	if cfg.OCR.MinConfidence < 0 || cfg.OCR.MinConfidence > 1 {
+		issues = append(issues, issue("error", "multimodal.ocr.min_confidence", "invalid_ocr_confidence", "OCR min_confidence must be between 0 and 1."))
+	}
+	if cfg.OCR.MinTextChars <= 0 || cfg.OCR.MinTextChars > 1000 {
+		issues = append(issues, issue("error", "multimodal.ocr.min_text_chars", "invalid_ocr_min_text", "OCR min_text_chars must be between 1 and 1000."))
+	}
+	if cfg.OCR.MaxImages <= 0 || cfg.OCR.MaxImages > 16 {
+		issues = append(issues, issue("error", "multimodal.ocr.max_images", "invalid_ocr_image_limit", "OCR max_images must be between 1 and 16."))
+	}
+	if cfg.OCR.MaxImageBytes <= 0 || cfg.OCR.MaxImageBytes > 20<<20 {
+		issues = append(issues, issue("error", "multimodal.ocr.max_image_bytes", "invalid_ocr_image_limit", "OCR max_image_bytes must be between 1 and 20 MiB."))
+	}
+	if cfg.OCR.MaxTotalImageBytes <= 0 || cfg.OCR.MaxTotalImageBytes > 64<<20 || cfg.OCR.MaxTotalImageBytes < cfg.OCR.MaxImageBytes {
+		issues = append(issues, issue("error", "multimodal.ocr.max_total_image_bytes", "invalid_ocr_image_limit", "OCR total image limit must be at least the single-image limit and no more than 64 MiB."))
+	}
+	if cfg.OCR.MaxTextCharsPerImage <= 0 || cfg.OCR.MaxTextCharsPerImage > 50000 || cfg.OCR.MaxTextCharsTotal < cfg.OCR.MaxTextCharsPerImage || cfg.OCR.MaxTextCharsTotal > 200000 {
+		issues = append(issues, issue("error", "multimodal.ocr.max_text_chars_total", "invalid_ocr_text_limit", "OCR text limits are invalid or exceed the hard limit."))
+	}
+	if cfg.OCR.Cache.IsEnabled() && (cfg.OCR.Cache.MaxEntries <= 0 || cfg.OCR.Cache.MaxEntries > 4096 || cfg.OCR.Cache.TTL.Duration <= 0) {
+		issues = append(issues, issue("error", "multimodal.ocr.cache", "invalid_ocr_cache", "OCR cache requires a positive TTL and 1 to 4096 entries."))
 	}
 	return issues
 }

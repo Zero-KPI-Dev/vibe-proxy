@@ -231,6 +231,19 @@ adapter transport capabilities. The first implementation is the disabled-by-defa
 multimodal fallback skeleton. This keeps OCR, future document extraction, and similar
 transformations out of protocol adapters and out of the main runtime handler.
 
+When OCR fallback is enabled, the multimodal preprocessor performs the following before
+LLM provider concurrency is acquired:
+
+1. resolve the selected model's image capability;
+2. decode and validate embedded images under fixed limits;
+3. call the configured OCR provider with a dedicated timeout and auth profile;
+4. reuse successful in-memory results by image hash with per-key singleflight;
+5. replace image blocks in-place with escaped, explicitly untrusted OCR text;
+6. return a protocol-native error before the LLM call when OCR is unsafe or unusable.
+
+The original Canonical IR is not mutated. Remote image fetching is not part of the first
+OCR release.
+
 ### 8. Telemetry Pipeline
 
 Responsible for request observability.

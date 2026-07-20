@@ -78,3 +78,43 @@ func TestValidateRuntimeAllowsBootstrapWithoutProviders(t *testing.T) {
 		t.Fatalf("expected missing providers warning: %+v", issues)
 	}
 }
+
+func TestValidateRuntimeAcceptsHTTPOCRFallback(t *testing.T) {
+	cfg, err := CompileSimple(SimpleConfig{Multimodal: MultimodalConfig{
+		Enabled: true,
+		OCR: OCRConfig{
+			Provider: "http",
+			Endpoint: "http://127.0.0.1:32180/v1/ocr",
+			Auth:     upstreamauth.Profile{Type: "none"},
+		},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if issues := ValidateRuntime(cfg); HasErrors(issues) {
+		t.Fatalf("unexpected OCR validation errors: %+v", issues)
+	}
+	if cfg.Multimodal.OCR.MaxImages != 4 || cfg.Multimodal.OCR.Cache.MaxEntries != 256 || !cfg.Multimodal.OCR.Cache.IsEnabled() {
+		t.Fatalf("OCR defaults not applied: %+v", cfg.Multimodal.OCR)
+	}
+}
+
+func TestValidateRuntimeRejectsUnsafeOCRConfig(t *testing.T) {
+	cfg, err := CompileSimple(SimpleConfig{Multimodal: MultimodalConfig{
+		Enabled: true,
+		OCR:     OCRConfig{Provider: "http", Endpoint: "file:///tmp/ocr"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	issues := ValidateRuntime(cfg)
+	if !HasErrors(issues) {
+		t.Fatalf("expected invalid OCR endpoint: %+v", issues)
+	}
+	for _, issue := range issues {
+		if issue.Code == "invalid_ocr_endpoint" {
+			return
+		}
+	}
+	t.Fatalf("missing endpoint issue: %+v", issues)
+}

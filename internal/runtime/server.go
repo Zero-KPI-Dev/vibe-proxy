@@ -44,6 +44,7 @@ type Server struct {
 	snapshot         atomic.Value
 	authenticator    *auth.Authenticator
 	httpClient       *http.Client
+	ocrHTTPClient    *http.Client
 	clientAdapters   []protocol.ClientAdapter
 	providerAdapters map[string]protocol.ProviderAdapter
 	metrics          *metrics.Prometheus
@@ -61,7 +62,7 @@ func New(cfgPath string, cfg *config.RuntimeConfig, sink telemetry.EventSink, pr
 	if ms, ok := sink.(interface{ RecentStore() *telemetry.RecentStore }); ok {
 		recent = ms.RecentStore()
 	}
-	s := &Server{cfgPath: cfgPath, authenticator: auth.NewAuthenticator(), httpClient: &http.Client{Timeout: 0}, metrics: prom, sink: sink, recent: recent, catalog: modelcatalog.NewService(modelcatalog.Options{CachePath: modelCatalogCachePath(cfgPath, cfg)}), clientAdapters: []protocol.ClientAdapter{clientopenai.ChatAdapter{}, clientopenai.ResponsesAdapter{}, clientanthropic.MessagesAdapter{}}, providerAdapters: map[string]protocol.ProviderAdapter{"anthropic": provideranthropic.Provider{}, "openai-compatible": provideropenai.Provider{}}}
+	s := &Server{cfgPath: cfgPath, authenticator: auth.NewAuthenticator(), httpClient: &http.Client{Timeout: 0}, ocrHTTPClient: &http.Client{}, metrics: prom, sink: sink, recent: recent, catalog: modelcatalog.NewService(modelcatalog.Options{CachePath: modelCatalogCachePath(cfgPath, cfg)}), clientAdapters: []protocol.ClientAdapter{clientopenai.ChatAdapter{}, clientopenai.ResponsesAdapter{}, clientanthropic.MessagesAdapter{}}, providerAdapters: map[string]protocol.ProviderAdapter{"anthropic": provideranthropic.Provider{}, "openai-compatible": provideropenai.Provider{}}}
 	s.snapshot.Store(s.buildSnapshot(cfg))
 	return s
 }
@@ -78,6 +79,16 @@ func (s *Server) SetCatalogHTTPClient(client *http.Client) {
 	}
 }
 
+func (s *Server) SetOCRHTTPClient(client *http.Client) {
+	if client == nil {
+		return
+	}
+	s.ocrHTTPClient = client
+	if snap, ok := s.snapshot.Load().(*Snapshot); ok && snap != nil {
+		s.snapshot.Store(s.buildSnapshot(snap.Config))
+	}
+}
+
 func modelCatalogCachePath(cfgPath string, cfg *config.RuntimeConfig) string {
 	if cfgPath == "" || cfg == nil || cfg.Storage.SQLitePath == "" || cfg.Storage.SQLitePath == ":memory:" {
 		return ""
@@ -90,7 +101,7 @@ func (s *Server) buildSnapshot(cfg *config.RuntimeConfig) *Snapshot {
 		LoadedAt:      time.Now(),
 		Config:        cfg,
 		Resolver:      modelresolver.New(cfg.ModelResolver),
-		Preprocessors: preprocess.New(&multimodal.Processor{Enabled: false, Catalog: s.catalog}),
+		Preprocessors: preprocess.New(multimodal.NewProcessor(cfg.Multimodal, s.catalog, s.ocrHTTPClient)),
 		AdminToken:    os.Getenv(cfg.Security.AdminBearerTokenEnv),
 	}
 }

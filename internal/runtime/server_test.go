@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"bytes"
+	"encoding/base64"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -9,10 +10,12 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/a448582655/vibe-proxy/internal/config"
 	"github.com/a448582655/vibe-proxy/internal/metrics"
+	"github.com/a448582655/vibe-proxy/internal/modelcapability"
 	"github.com/a448582655/vibe-proxy/internal/telemetry"
 	"github.com/a448582655/vibe-proxy/internal/upstreamauth"
 )
@@ -69,6 +72,79 @@ func TestRuntimeDisabledMultimodalPreprocessorPreservesImages(t *testing.T) {
 	s.Routes().ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("unexpected response code=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestRuntimeOCRFallbackForAllClientProtocolsAndCache(t *testing.T) {
+	t.Setenv("VIBE_PROXY_ADMIN_TOKEN", "admin-token")
+	cfg, err := config.CompileSimple(config.SimpleConfig{
+		Security:   config.SecurityConfig{AdminBearerTokenEnv: "VIBE_PROXY_ADMIN_TOKEN"},
+		ClientKeys: []config.ClientKeyConfig{{Name: "test", KeyHash: "$2a$10$AXRkz.6y44ygdJFk6L1/IO0aRVp9zRMfXDJoBCBsroxVac/Lovvz6", Enabled: true, AllowedModels: []string{"*"}, RPM: 1000}},
+		Multimodal: config.MultimodalConfig{Enabled: true, OCR: config.OCRConfig{Provider: "http", Endpoint: "http://ocr.local/v1/ocr", Auth: upstreamauth.Profile{Type: "none"}}},
+		Providers: map[string]config.ProviderConfig{"mockai": {
+			Type:                "openai-compatible",
+			BaseURL:             "https://mock.openai/v1",
+			Auth:                upstreamauth.Profile{Type: "none"},
+			Models:              []string{"raw-chat"},
+			DefaultCapabilities: modelcapability.ModelCapabilities{ImageInput: modelcapability.SupportUnsupported},
+		}},
+		Models: config.ModelsConfig{AllowRaw: true, Aliases: map[string]string{"vibe-fast": "mockai/raw-chat"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	testPromOnce.Do(func() { testProm = metrics.New() })
+	s := New("", cfg, metrics.MultiSink{}, testProm)
+	var ocrCalls atomic.Int32
+	s.SetOCRHTTPClient(&http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
+		ocrCalls.Add(1)
+		body, _ := io.ReadAll(r.Body)
+		if !strings.Contains(string(body), `"media_type":"image/png"`) {
+			t.Fatalf("unexpected OCR request: %s", body)
+		}
+		return jsonResponse(200, `{"results":[{"index":0,"text":"recognized invoice 123","confidence":0.96,"language":"en"}]}`), nil
+	})})
+	var upstreamCalls atomic.Int32
+	s.SetHTTPClient(&http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
+		upstreamCalls.Add(1)
+		body, _ := io.ReadAll(r.Body)
+		if strings.Contains(string(body), "image_url") || !strings.Contains(string(body), "recognized invoice 123") || !strings.Contains(string(body), "untrusted user data") {
+			t.Fatalf("upstream did not receive normalized OCR text: %s", body)
+		}
+		if strings.Contains(string(body), `"stream":true`) {
+			return jsonResponse(200, "data: {\"id\":\"chatcmpl_ocr_stream\",\"choices\":[{\"delta\":{\"content\":\"ocr stream\"},\"finish_reason\":\"\"}]}\n\ndata: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"), nil
+		}
+		return jsonResponse(200, `{"id":"chatcmpl_ocr","model":"raw-chat","choices":[{"message":{"role":"assistant","content":"ocr ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}}`), nil
+	})})
+	png := []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52}
+	encoded := base64.StdEncoding.EncodeToString(png)
+	requests := []struct {
+		path string
+		body string
+	}{
+		{"/v1/chat/completions", `{"model":"vibe-fast","messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,` + encoded + `"}}]}]}`},
+		{"/v1/responses", `{"model":"vibe-fast","input":[{"type":"message","role":"user","content":[{"type":"input_image","image_url":"data:image/png;base64,` + encoded + `"}]}]}`},
+		{"/anthropic/v1/messages", `{"model":"vibe-fast","max_tokens":64,"messages":[{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"` + encoded + `"}}]}]}`},
+		{"/v1/chat/completions", `{"model":"vibe-fast","stream":true,"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,` + encoded + `"}}]}]}`},
+	}
+	for _, item := range requests {
+		req := httptest.NewRequest(http.MethodPost, item.path, strings.NewReader(item.body))
+		req.Header.Set("Authorization", "Bearer vibe-local-dev-key")
+		w := httptest.NewRecorder()
+		s.Routes().ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("%s failed: %d %s", item.path, w.Code, w.Body.String())
+		}
+	}
+	remoteReq := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"vibe-fast","messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"https://example.com/private.png"}}]}]}`))
+	remoteReq.Header.Set("Authorization", "Bearer vibe-local-dev-key")
+	remoteW := httptest.NewRecorder()
+	s.Routes().ServeHTTP(remoteW, remoteReq)
+	if remoteW.Code != http.StatusBadRequest || !strings.Contains(remoteW.Body.String(), `"code":"ocr_remote_image_disabled"`) {
+		t.Fatalf("unexpected remote image error: %d %s", remoteW.Code, remoteW.Body.String())
+	}
+	if ocrCalls.Load() != 1 || upstreamCalls.Load() != 4 {
+		t.Fatalf("unexpected call counts: OCR=%d upstream=%d", ocrCalls.Load(), upstreamCalls.Load())
 	}
 }
 

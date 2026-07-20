@@ -183,6 +183,62 @@ routes:
         fallback: true
 ```
 
+## OCR Image Fallback
+
+OCR fallback is opt-in. When enabled, a model resolved as `unsupported` for image input
+can receive extracted text instead of the original image:
+
+```yaml
+multimodal:
+  enabled: true
+  strategy: ocr_then_vision
+  ocr:
+    provider: http
+    endpoint: http://127.0.0.1:32180/v1/ocr
+    timeout: 15s
+    min_confidence: 0.55
+    min_text_chars: 4
+    max_images: 4
+    max_image_bytes: 5242880
+    max_total_image_bytes: 12582912
+    max_text_chars_per_image: 8000
+    max_text_chars_total: 16000
+    remote_images: false
+    cache:
+      enabled: true
+      max_entries: 256
+      ttl: 24h
+    auth:
+      type: none
+  vision_fallback_model: ""
+```
+
+The HTTP OCR endpoint receives:
+
+```json
+{
+  "images": [
+    {"index": 0, "media_type": "image/png", "data_base64": "..."}
+  ]
+}
+```
+
+and returns:
+
+```json
+{
+  "results": [
+    {"index": 0, "text": "recognized text", "confidence": 0.93, "language": "en"}
+  ]
+}
+```
+
+The first release accepts embedded base64 and base64 data URLs. It deliberately does not
+download remote image URLs in the OCR path. OCR text replaces each image at its original
+position, is escaped and marked as untrusted user data, and is never included in ordinary
+logs. Provider authentication uses the same auth profile and secret-reference forms as
+LLM providers.
+
 ## Agent Profiles
 
 Agent profiles are optional. They help with local multi-agent workflows.

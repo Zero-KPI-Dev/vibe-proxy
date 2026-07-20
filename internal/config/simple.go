@@ -18,6 +18,7 @@ type SimpleConfig struct {
 	Server        ServerConfig                  `yaml:"server"`
 	Security      SecurityConfig                `yaml:"security"`
 	Storage       StorageConfig                 `yaml:"storage"`
+	Multimodal    MultimodalConfig              `yaml:"multimodal,omitempty"`
 	ClientKeys    []ClientKeyConfig             `yaml:"client_keys"`
 	Providers     map[string]ProviderConfig     `yaml:"providers"`
 	Models        ModelsConfig                  `yaml:"models"`
@@ -65,6 +66,7 @@ type RuntimeConfig struct {
 	Server        ServerConfig
 	Security      SecurityConfig
 	Storage       StorageConfig
+	Multimodal    MultimodalConfig
 	ClientKeys    []ClientKeyConfig
 	ModelResolver modelresolver.Config
 	Providers     map[string]ProviderConfig
@@ -102,6 +104,7 @@ func CompileSimple(cfg SimpleConfig) (*RuntimeConfig, error) {
 	}
 	applyServerDefaults(&cfg.Server)
 	applyStorageDefaults(&cfg.Storage)
+	applyMultimodalDefaults(&cfg.Multimodal)
 	providers := map[string]ProviderConfig{}
 	resolverProviders := make([]modelresolver.Provider, 0, len(cfg.Providers))
 	ids := make([]string, 0, len(cfg.Providers))
@@ -137,7 +140,7 @@ func CompileSimple(cfg SimpleConfig) (*RuntimeConfig, error) {
 		}
 		aliases[name] = alias
 	}
-	return &RuntimeConfig{Server: cfg.Server, Security: cfg.Security, Storage: cfg.Storage, ClientKeys: cfg.ClientKeys, Providers: providers, ModelResolver: modelresolver.Config{DefaultModel: cfg.Models.Default, AllowRaw: cfg.Models.AllowRaw, Aliases: aliases, Providers: resolverProviders}}, nil
+	return &RuntimeConfig{Server: cfg.Server, Security: cfg.Security, Storage: cfg.Storage, Multimodal: cfg.Multimodal, ClientKeys: cfg.ClientKeys, Providers: providers, ModelResolver: modelresolver.Config{DefaultModel: cfg.Models.Default, AllowRaw: cfg.Models.AllowRaw, Aliases: aliases, Providers: resolverProviders}}, nil
 }
 
 func CompileLegacy(cfg *Config) *RuntimeConfig {
