@@ -6,6 +6,7 @@ import type { TFunction } from "i18next"
 import { useTranslation } from "react-i18next"
 import { Check, ChevronDown } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import {
@@ -22,7 +23,7 @@ import {
 } from "@/components/ui/popover"
 import { cn } from "@/lib/utils"
 import { providerApi } from "@/lib/api"
-import type { ProviderFormData } from "@/lib/types"
+import type { ModelCatalogMatch, ProviderFormData } from "@/lib/types"
 
 const createProviderSchema = (t: TFunction, mode: "create" | "edit") => z
   .object({
@@ -31,6 +32,7 @@ const createProviderSchema = (t: TFunction, mode: "create" | "edit") => z
     base_url: z.string()
       .min(1, t("providerForm.validation.baseUrlRequired"))
       .url(t("providerForm.validation.validUrl")),
+    catalog_provider: z.string().optional(),
     auth_type: z.enum(["bearer", "api_key_header", "none"]),
     api_key_source: z.enum(["env", "literal"]).optional(),
     api_key_env: z.string().optional(),
@@ -93,6 +95,7 @@ export function ProviderForm({ defaultValues, onSubmit, isPending, mode }: Provi
       id: "",
       type: "openai-compatible",
       base_url: "http://host.docker.internal:3000/v1",
+      catalog_provider: "",
       api_key_env: "",
       api_key: "",
       api_key_source: "env",
@@ -112,6 +115,7 @@ export function ProviderForm({ defaultValues, onSubmit, isPending, mode }: Provi
   const [isFetchingModels, setIsFetchingModels] = useState(false)
   const [modelFetchMessage, setModelFetchMessage] = useState("")
   const [availableModels, setAvailableModels] = useState<string[]>([])
+  const [modelDetails, setModelDetails] = useState<Record<string, ModelCatalogMatch>>({})
   const [modelFilter, setModelFilter] = useState("")
   const selectedModelsText = watch("models")
 
@@ -158,12 +162,20 @@ export function ProviderForm({ defaultValues, onSubmit, isPending, mode }: Provi
         return
       }
       setAvailableModels(result.models)
+      setModelDetails(result.model_details ?? {})
       const nextSelected = new Set(selectedModels)
       if (nextSelected.size === 0 && result.models.length === 1) {
         nextSelected.add(result.models[0]!)
         writeSelectedModels(nextSelected)
       }
-      setModelFetchMessage(t("providerForm.fetched", { count: result.models.length }))
+      const matched = Object.values(result.model_details ?? {}).filter(
+        (detail) => detail.status !== "not_found" && detail.status !== "ambiguous"
+      ).length
+      setModelFetchMessage(
+        result.catalog_error
+          ? t("providerForm.fetchedCatalogUnavailable", { count: result.models.length })
+          : t("providerForm.fetchedWithCapabilities", { count: result.models.length, matched })
+      )
     } catch (e) {
       setModelFetchMessage(e instanceof Error ? e.message : t("providerForm.fetchFailed", { status: "" }))
     } finally {
@@ -225,6 +237,18 @@ export function ProviderForm({ defaultValues, onSubmit, isPending, mode }: Provi
               <SelectItem value="anthropic">Anthropic</SelectItem>
             </SelectContent>
           </Select>
+        </div>
+
+        <div className="space-y-2 sm:col-span-2">
+          <Label htmlFor="catalog_provider">{t("providerForm.catalogProvider")}</Label>
+          <Input
+            id="catalog_provider"
+            placeholder={t("providerForm.catalogProviderPlaceholder")}
+            {...register("catalog_provider")}
+          />
+          <p className="text-xs text-muted-foreground">
+            {t("providerForm.catalogProviderHelp")}
+          </p>
         </div>
 
         <div className="space-y-2 sm:col-span-2">
@@ -392,6 +416,7 @@ export function ProviderForm({ defaultValues, onSubmit, isPending, mode }: Provi
                     ) : (
                       filteredModels.map((model) => {
                         const checked = selectedModels.has(model)
+                        const detail = modelDetails[model]
                         return (
                           <button
                             key={model}
@@ -408,7 +433,50 @@ export function ProviderForm({ defaultValues, onSubmit, isPending, mode }: Provi
                             )}>
                               {checked && <Check className="h-3 w-3" />}
                             </span>
-                            <span className="font-mono text-xs">{model}</span>
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate font-mono text-xs">{model}</span>
+                              <span className="mt-1 flex flex-wrap gap-1">
+                                {detail?.image_input === "supported" && (
+                                  <Badge variant="success" className="px-1.5 py-0 text-[10px]">
+                                    {t("providerForm.capabilityVision")}
+                                  </Badge>
+                                )}
+                                {detail?.image_input === "unsupported" && (
+                                  <Badge variant="outline" className="px-1.5 py-0 text-[10px]">
+                                    {t("providerForm.capabilityText")}
+                                  </Badge>
+                                )}
+                                {(!detail || detail.image_input === "unknown") && (
+                                  <Badge variant="warning" className="px-1.5 py-0 text-[10px]">
+                                    {detail?.status === "ambiguous"
+                                      ? t("providerForm.capabilityAmbiguous")
+                                      : t("providerForm.capabilityUnknown")}
+                                  </Badge>
+                                )}
+                                {detail?.model?.tool_call && (
+                                  <Badge variant="secondary" className="px-1.5 py-0 text-[10px]">
+                                    {t("providerForm.capabilityTools")}
+                                  </Badge>
+                                )}
+                                {detail?.model?.reasoning && (
+                                  <Badge variant="secondary" className="px-1.5 py-0 text-[10px]">
+                                    {t("providerForm.capabilityReasoning")}
+                                  </Badge>
+                                )}
+                                {(detail?.model?.context_limit ?? 0) > 0 && (
+                                  <Badge variant="secondary" className="px-1.5 py-0 text-[10px]">
+                                    {t("providerForm.capabilityContext", {
+                                      value: formatTokenLimit(detail?.model?.context_limit ?? 0),
+                                    })}
+                                  </Badge>
+                                )}
+                                {detail && detail.status !== "not_found" && detail.status !== "ambiguous" && (
+                                  <Badge variant="outline" className="px-1.5 py-0 text-[10px] text-muted-foreground">
+                                    models.dev
+                                  </Badge>
+                                )}
+                              </span>
+                            </span>
                           </button>
                         )
                       })
@@ -462,4 +530,10 @@ export function ProviderForm({ defaultValues, onSubmit, isPending, mode }: Provi
       </div>
     </form>
   )
+}
+
+function formatTokenLimit(value: number) {
+  if (value >= 1_000_000) return `${Number((value / 1_000_000).toFixed(1))}M`
+  if (value >= 1_000) return `${Number((value / 1_000).toFixed(1))}K`
+  return String(value)
 }

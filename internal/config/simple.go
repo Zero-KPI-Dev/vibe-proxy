@@ -25,14 +25,15 @@ type SimpleConfig struct {
 }
 
 type ProviderConfig struct {
-	Type           string                 `yaml:"type"`
-	BaseURL        string                 `yaml:"base_url"`
-	APIKey         upstreamauth.SecretRef `yaml:"api_key"`
-	Auth           upstreamauth.Profile   `yaml:"auth"`
-	Models         []string               `yaml:"models"`
-	Priority       int                    `yaml:"priority"`
-	Timeout        Duration               `yaml:"timeout"`
-	MaxConcurrency int                    `yaml:"max_concurrency"`
+	Type            string                 `yaml:"type"`
+	BaseURL         string                 `yaml:"base_url"`
+	CatalogProvider string                 `yaml:"catalog_provider,omitempty"`
+	APIKey          upstreamauth.SecretRef `yaml:"api_key"`
+	Auth            upstreamauth.Profile   `yaml:"auth"`
+	Models          []string               `yaml:"models"`
+	Priority        int                    `yaml:"priority"`
+	Timeout         Duration               `yaml:"timeout"`
+	MaxConcurrency  int                    `yaml:"max_concurrency"`
 }
 
 type ModelsConfig struct {

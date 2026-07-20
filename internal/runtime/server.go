@@ -18,6 +18,7 @@ import (
 	"github.com/a448582655/vibe-proxy/internal/config"
 	"github.com/a448582655/vibe-proxy/internal/ir"
 	"github.com/a448582655/vibe-proxy/internal/metrics"
+	"github.com/a448582655/vibe-proxy/internal/modelcatalog"
 	"github.com/a448582655/vibe-proxy/internal/modelresolver"
 	"github.com/a448582655/vibe-proxy/internal/protocol"
 	provideranthropic "github.com/a448582655/vibe-proxy/internal/provideradapters/anthropic"
@@ -45,6 +46,7 @@ type Server struct {
 	metrics          *metrics.Prometheus
 	sink             telemetry.EventSink
 	recent           *telemetry.RecentStore
+	catalog          *modelcatalog.Service
 	semaphore        sync.Map
 }
 
@@ -56,7 +58,7 @@ func New(cfgPath string, cfg *config.RuntimeConfig, sink telemetry.EventSink, pr
 	if ms, ok := sink.(interface{ RecentStore() *telemetry.RecentStore }); ok {
 		recent = ms.RecentStore()
 	}
-	s := &Server{cfgPath: cfgPath, authenticator: auth.NewAuthenticator(), httpClient: &http.Client{Timeout: 0}, metrics: prom, sink: sink, recent: recent, clientAdapters: []protocol.ClientAdapter{clientopenai.ChatAdapter{}, clientopenai.ResponsesAdapter{}, clientanthropic.MessagesAdapter{}}, providerAdapters: map[string]protocol.ProviderAdapter{"anthropic": provideranthropic.Provider{}, "openai-compatible": provideropenai.Provider{}}}
+	s := &Server{cfgPath: cfgPath, authenticator: auth.NewAuthenticator(), httpClient: &http.Client{Timeout: 0}, metrics: prom, sink: sink, recent: recent, catalog: modelcatalog.NewService(modelcatalog.Options{CachePath: modelCatalogCachePath(cfgPath, cfg)}), clientAdapters: []protocol.ClientAdapter{clientopenai.ChatAdapter{}, clientopenai.ResponsesAdapter{}, clientanthropic.MessagesAdapter{}}, providerAdapters: map[string]protocol.ProviderAdapter{"anthropic": provideranthropic.Provider{}, "openai-compatible": provideropenai.Provider{}}}
 	s.snapshot.Store(s.buildSnapshot(cfg))
 	return s
 }
@@ -65,6 +67,19 @@ func (s *Server) SetHTTPClient(client *http.Client) {
 	if client != nil {
 		s.httpClient = client
 	}
+}
+
+func (s *Server) SetCatalogHTTPClient(client *http.Client) {
+	if s.catalog != nil {
+		s.catalog.SetHTTPClient(client)
+	}
+}
+
+func modelCatalogCachePath(cfgPath string, cfg *config.RuntimeConfig) string {
+	if cfgPath == "" || cfg == nil || cfg.Storage.SQLitePath == "" || cfg.Storage.SQLitePath == ":memory:" {
+		return ""
+	}
+	return cfg.Storage.SQLitePath + ".models-dev.json"
 }
 
 func (s *Server) buildSnapshot(cfg *config.RuntimeConfig) *Snapshot {
@@ -91,6 +106,9 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/admin/providers/test", s.adminProviderTest)
 	mux.HandleFunc("/admin/providers/models", s.adminProviderModels)
 	mux.HandleFunc("/admin/providers/health", s.adminProviderHealth)
+	mux.HandleFunc("/admin/model-catalog/status", s.adminModelCatalogStatus)
+	mux.HandleFunc("/admin/model-catalog/refresh", s.adminModelCatalogRefresh)
+	mux.HandleFunc("/admin/model-catalog/lookup", s.adminModelCatalogLookup)
 	mux.HandleFunc("/admin/providers", s.adminProviders) // GET (list), POST (create), PUT (update), DELETE (delete)
 	mux.HandleFunc("/admin/local/configure", s.adminLocalConfigure)
 	mux.HandleFunc("/admin/aliases/default", s.adminAliasesDefaults)
@@ -317,7 +335,7 @@ func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 	providers := []map[string]any{}
 	for id, p := range snap.Config.Providers {
 		authType, keySource, keyEnv := providerAuthMeta(p)
-		providers = append(providers, map[string]any{"id": id, "type": p.Type, "base_url": p.BaseURL, "models": p.Models, "max_concurrency": p.MaxConcurrency, "auth_type": authType, "api_key_source": keySource, "api_key_env": keyEnv})
+		providers = append(providers, map[string]any{"id": id, "type": p.Type, "base_url": p.BaseURL, "catalog_provider": p.CatalogProvider, "models": p.Models, "max_concurrency": p.MaxConcurrency, "auth_type": authType, "api_key_source": keySource, "api_key_env": keyEnv})
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{"loaded_at": snap.LoadedAt, "providers": providers, "model_resolver": snap.Config.ModelResolver})
@@ -462,8 +480,14 @@ func (s *Server) adminProviderModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sort.Strings(models)
+	catalogErr := s.catalog.Ensure(r.Context(), 24*time.Hour)
+	modelDetails := s.catalogMatches(input.CatalogProvider, input.ID, input.BaseURL, models)
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"ok": true, "models": models, "status": resp.StatusCode, "latency_ms": latency, "target": target})
+	result := map[string]any{"ok": true, "models": models, "model_details": modelDetails, "catalog": s.catalog.State(), "status": resp.StatusCode, "latency_ms": latency, "target": target}
+	if catalogErr != nil {
+		result["catalog_error"] = catalogErr.Error()
+	}
+	json.NewEncoder(w).Encode(result)
 }
 
 func parseProviderModels(r io.Reader) ([]string, error) {

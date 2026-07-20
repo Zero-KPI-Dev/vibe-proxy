@@ -254,6 +254,12 @@ func TestRuntimeAdminProviderModelsProbeUsesUnsavedFormAuth(t *testing.T) {
 		}
 		return jsonResponse(200, `{"object":"list","data":[{"id":"z-model"},{"id":"a-model"}]}`), nil
 	})})
+	s.SetCatalogHTTPClient(&http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
+		if r.URL.String() != "https://models.dev/api.json" {
+			t.Fatalf("unexpected catalog url: %s", r.URL.String())
+		}
+		return jsonResponse(200, `{"draft":{"id":"draft","models":{"a-model":{"id":"a-model","name":"A Model","reasoning":true,"tool_call":true,"modalities":{"input":["text","image"],"output":["text"]},"limit":{"context":128000,"output":16000}}}}}`), nil
+	})})
 
 	req := adminJSONRequest(http.MethodPost, "/admin/providers/models", `{"id":"draft","type":"openai-compatible","base_url":"https://mock.openai/v1","auth_type":"bearer","api_key_source":"literal","api_key":"sk-direct-secret"}`)
 	w := httptest.NewRecorder()
@@ -261,11 +267,50 @@ func TestRuntimeAdminProviderModelsProbeUsesUnsavedFormAuth(t *testing.T) {
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"ok":true`) || !strings.Contains(w.Body.String(), `"a-model"`) || !strings.Contains(w.Body.String(), `"z-model"`) {
 		t.Fatalf("unexpected provider models response: %d %s", w.Code, w.Body.String())
 	}
+	if !strings.Contains(w.Body.String(), `"model_details"`) || !strings.Contains(w.Body.String(), `"image_input":"supported"`) || !strings.Contains(w.Body.String(), `"context_limit":128000`) {
+		t.Fatalf("provider models response missing catalog details: %s", w.Body.String())
+	}
 	if strings.Contains(w.Body.String(), "sk-direct-secret") {
 		t.Fatalf("provider models response leaked secret: %s", w.Body.String())
 	}
 	if len(s.current().Config.Providers) != 0 {
 		t.Fatalf("models probe unexpectedly saved provider")
+	}
+}
+
+func TestRuntimeAdminModelCatalogRefreshStatusAndLookup(t *testing.T) {
+	t.Setenv("VIBE_PROXY_ADMIN_TOKEN", "admin-token")
+	cfg, err := config.CompileSimple(config.SimpleConfig{Security: config.SecurityConfig{AdminBearerTokenEnv: "VIBE_PROXY_ADMIN_TOKEN"}, Providers: map[string]config.ProviderConfig{}, Models: config.ModelsConfig{AllowRaw: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	testPromOnce.Do(func() { testProm = metrics.New() })
+	s := New("", cfg, metrics.MultiSink{}, testProm)
+	s.SetCatalogHTTPClient(&http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
+		resp := jsonResponse(200, `{"openai":{"id":"openai","models":{"gpt-vision":{"id":"gpt-vision","name":"GPT Vision","tool_call":true,"modalities":{"input":["text","image"],"output":["text"]},"limit":{"context":128000,"output":16000}}}}}`)
+		resp.Header.Set("ETag", `"catalog-v1"`)
+		return resp, nil
+	})})
+
+	refresh := adminJSONRequest(http.MethodPost, "/admin/model-catalog/refresh", "")
+	refreshW := httptest.NewRecorder()
+	s.Routes().ServeHTTP(refreshW, refresh)
+	if refreshW.Code != http.StatusOK || !strings.Contains(refreshW.Body.String(), `"models":1`) || !strings.Contains(refreshW.Body.String(), `"etag":"\"catalog-v1\""`) {
+		t.Fatalf("unexpected refresh response: %d %s", refreshW.Code, refreshW.Body.String())
+	}
+
+	status := adminJSONRequest(http.MethodGet, "/admin/model-catalog/status", "")
+	statusW := httptest.NewRecorder()
+	s.Routes().ServeHTTP(statusW, status)
+	if statusW.Code != http.StatusOK || !strings.Contains(statusW.Body.String(), `"providers":1`) {
+		t.Fatalf("unexpected status response: %d %s", statusW.Code, statusW.Body.String())
+	}
+
+	lookup := adminJSONRequest(http.MethodPost, "/admin/model-catalog/lookup", `{"provider_id":"newapi","catalog_provider":"openai","models":["gpt-vision","private-model"]}`)
+	lookupW := httptest.NewRecorder()
+	s.Routes().ServeHTTP(lookupW, lookup)
+	if lookupW.Code != http.StatusOK || !strings.Contains(lookupW.Body.String(), `"gpt-vision":{"requested_model":"gpt-vision","status":"exact_provider"`) || !strings.Contains(lookupW.Body.String(), `"private-model":{"requested_model":"private-model","status":"not_found"`) {
+		t.Fatalf("unexpected lookup response: %d %s", lookupW.Code, lookupW.Body.String())
 	}
 }
 

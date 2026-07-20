@@ -39,6 +39,12 @@ providers:
     base_url: https://api.deepseek.com/v1
     api_key: env:DEEPSEEK_API_KEY
 
+  company-maas:
+    type: openai-compatible
+    base_url: https://maas.example.com/v1
+    api_key: env:COMPANY_MAAS_API_KEY
+    catalog_provider: deepseek
+
 models:
   default: vibe-coder
   allow_raw: true
@@ -48,6 +54,29 @@ models:
 ```
 
 This should be enough for most local users.
+
+## Model Capability Catalog
+
+Provider model IDs discovered through `/v1/models` do not normally include whether the
+model accepts images, supports tools, or performs reasoning. `vibe-proxy` enriches those
+IDs from a cached models.dev catalog and preserves `unknown` when a match is ambiguous.
+
+For first-party endpoints, the catalog provider is inferred from the provider ID, model
+prefix, or base URL. A custom MaaS endpoint can declare the upstream model family:
+
+```yaml
+providers:
+  internal-maas:
+    type: openai-compatible
+    base_url: https://maas.internal.example/v1
+    catalog_provider: anthropic
+    api_key: env:INTERNAL_MAAS_TOKEN
+```
+
+`catalog_provider` is metadata only. It does not change request routing, protocol
+selection, or authentication. Explicit local capability overrides take precedence over
+provider defaults and catalog metadata. The catalog is advisory and is never consulted
+over the network in the data-plane hot path.
 
 ## Provider Auth
 

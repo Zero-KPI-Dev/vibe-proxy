@@ -10,19 +10,20 @@ import (
 )
 
 type LocalProviderInput struct {
-	ID             string   `json:"id"`
-	Type           string   `json:"type"`
-	BaseURL        string   `json:"base_url"`
-	APIKeyEnv      string   `json:"api_key_env"`
-	APIKey         string   `json:"api_key"`
-	APIKeySource   string   `json:"api_key_source"`
-	AuthType       string   `json:"auth_type"`
-	Header         string   `json:"header"`
-	Models         []string `json:"models"`
-	Alias          string   `json:"alias"`
-	AliasModel     string   `json:"alias_model"`
-	DefaultModel   string   `json:"default_model"`
-	MaxConcurrency int      `json:"max_concurrency"`
+	ID              string   `json:"id"`
+	Type            string   `json:"type"`
+	BaseURL         string   `json:"base_url"`
+	CatalogProvider string   `json:"catalog_provider"`
+	APIKeyEnv       string   `json:"api_key_env"`
+	APIKey          string   `json:"api_key"`
+	APIKeySource    string   `json:"api_key_source"`
+	AuthType        string   `json:"auth_type"`
+	Header          string   `json:"header"`
+	Models          []string `json:"models"`
+	Alias           string   `json:"alias"`
+	AliasModel      string   `json:"alias_model"`
+	DefaultModel    string   `json:"default_model"`
+	MaxConcurrency  int      `json:"max_concurrency"`
 }
 
 func UpsertLocalProvider(path string, input LocalProviderInput) (*RuntimeConfig, error) {
@@ -83,11 +84,12 @@ func BuildLocalProvider(input LocalProviderInput, existing *ProviderConfig) (Pro
 		return ProviderConfig{}, err
 	}
 	return ProviderConfig{
-		Type:           providerType,
-		BaseURL:        input.BaseURL,
-		Auth:           auth,
-		Models:         input.Models,
-		MaxConcurrency: input.MaxConcurrency,
+		Type:            providerType,
+		BaseURL:         input.BaseURL,
+		CatalogProvider: input.CatalogProvider,
+		Auth:            auth,
+		Models:          input.Models,
+		MaxConcurrency:  input.MaxConcurrency,
 	}, nil
 }
 

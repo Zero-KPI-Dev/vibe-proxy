@@ -9,6 +9,7 @@ export interface ProviderConfig {
   id: string
   type: "openai-compatible" | "anthropic"
   base_url: string
+  catalog_provider?: string
   models: string[]
   max_concurrency?: number
   api_key_env?: string
@@ -20,6 +21,7 @@ export interface ProviderFormData {
   id: string
   type: "openai-compatible" | "anthropic"
   base_url: string
+  catalog_provider?: string
   api_key_env?: string
   api_key?: string
   api_key_source?: "env" | "literal"
@@ -171,10 +173,78 @@ export interface ProviderTestResponse {
 export interface ProviderModelsResponse {
   ok: boolean
   models: string[]
+  model_details?: Record<string, ModelCatalogMatch>
+  catalog?: ModelCatalogState
+  catalog_error?: string
   status?: number
   latency_ms?: number
   target?: string
   error?: string
+}
+
+export type ModelCapabilitySupport = "unknown" | "supported" | "unsupported"
+
+export type ModelCatalogMatchStatus =
+  | "not_found"
+  | "ambiguous"
+  | "exact_provider"
+  | "exact_prefixed"
+  | "exact_unique"
+  | "consensus"
+
+export interface ModelCatalogInfo {
+  provider_id?: string
+  id: string
+  name?: string
+  family?: string
+  input_modalities?: string[]
+  output_modalities?: string[]
+  attachment?: boolean
+  reasoning?: boolean
+  tool_call?: boolean
+  structured_output?: boolean
+  temperature?: boolean
+  context_limit?: number
+  input_limit?: number
+  output_limit?: number
+  status?: string
+  release_date?: string
+  last_updated?: string
+}
+
+export interface ModelCatalogCandidate {
+  provider_id: string
+  model_id: string
+  name?: string
+  image_input: ModelCapabilitySupport
+}
+
+export interface ModelCatalogMatch {
+  requested_model: string
+  status: ModelCatalogMatchStatus
+  source: "models_dev"
+  image_input: ModelCapabilitySupport
+  model?: ModelCatalogInfo
+  candidates?: ModelCatalogCandidate[]
+}
+
+export interface ModelCatalogState {
+  source_url: string
+  etag?: string
+  fetched_at?: string
+  stale: boolean
+  providers: number
+  models: number
+  error?: string
+}
+
+export interface ModelCatalogStatusResponse {
+  catalog: ModelCatalogState
+}
+
+export interface ModelCatalogRefreshResponse {
+  ok: boolean
+  catalog: ModelCatalogState
 }
 
 export interface ConfigureResponse {

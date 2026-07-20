@@ -15,6 +15,8 @@ import type {
   ProviderHealthResponse,
   RawConfigResponse,
   ConfigValidationIssue,
+  ModelCatalogRefreshResponse,
+  ModelCatalogStatusResponse,
 } from "./types"
 
 export function getToken(): string {
@@ -89,6 +91,14 @@ export const providerApi = {
     request<ProviderModelsResponse>("/admin/providers/models", {
       method: "POST",
       body: JSON.stringify(data),
+    }),
+}
+
+export const modelCatalogApi = {
+  status: () => request<ModelCatalogStatusResponse>("/admin/model-catalog/status"),
+  refresh: () =>
+    request<ModelCatalogRefreshResponse>("/admin/model-catalog/refresh", {
+      method: "POST",
     }),
 }
 

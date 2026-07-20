@@ -71,6 +71,7 @@ export function ProviderEditPage() {
               id: provider.id,
               type: provider.type,
               base_url: provider.base_url,
+              catalog_provider: provider.catalog_provider ?? "",
               auth_type: provider.auth_type ?? "bearer",
               api_key_source: provider.api_key_source ?? "env",
               api_key_env: provider.api_key_env ?? "",
