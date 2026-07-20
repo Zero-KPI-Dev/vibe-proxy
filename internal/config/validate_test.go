@@ -3,6 +3,7 @@ package config
 import (
 	"testing"
 
+	"github.com/a448582655/vibe-proxy/internal/modelcapability"
 	"github.com/a448582655/vibe-proxy/internal/modelresolver"
 	"github.com/a448582655/vibe-proxy/internal/upstreamauth"
 )
@@ -25,6 +26,32 @@ func TestValidateRuntimeDetectsInvalidProviderAndAlias(t *testing.T) {
 	if !sawType || !sawAlias {
 		t.Fatalf("missing expected issues: %+v", issues)
 	}
+}
+
+func TestValidateRuntimeRejectsInvalidImageCapability(t *testing.T) {
+	cfg, err := CompileSimple(SimpleConfig{Providers: map[string]ProviderConfig{
+		"local": {
+			Type:    "openai-compatible",
+			BaseURL: "http://127.0.0.1:3000/v1",
+			Auth:    upstreamauth.Profile{Type: "none"},
+			DefaultCapabilities: modelcapability.ModelCapabilities{
+				ImageInput: "maybe",
+			},
+		},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	issues := ValidateRuntime(cfg)
+	if !HasErrors(issues) {
+		t.Fatalf("expected invalid capability error: %+v", issues)
+	}
+	for _, issue := range issues {
+		if issue.Code == "invalid_image_input_capability" {
+			return
+		}
+	}
+	t.Fatalf("missing capability validation issue: %+v", issues)
 }
 
 func TestValidateRuntimeAcceptsSimpleConfig(t *testing.T) {

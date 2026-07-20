@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/a448582655/vibe-proxy/internal/modelcapability"
 	"github.com/a448582655/vibe-proxy/internal/modelresolver"
 	"github.com/a448582655/vibe-proxy/internal/upstreamauth"
 	"gopkg.in/yaml.v3"
@@ -25,15 +26,17 @@ type SimpleConfig struct {
 }
 
 type ProviderConfig struct {
-	Type            string                 `yaml:"type"`
-	BaseURL         string                 `yaml:"base_url"`
-	CatalogProvider string                 `yaml:"catalog_provider,omitempty"`
-	APIKey          upstreamauth.SecretRef `yaml:"api_key"`
-	Auth            upstreamauth.Profile   `yaml:"auth"`
-	Models          []string               `yaml:"models"`
-	Priority        int                    `yaml:"priority"`
-	Timeout         Duration               `yaml:"timeout"`
-	MaxConcurrency  int                    `yaml:"max_concurrency"`
+	Type                string                                       `yaml:"type"`
+	BaseURL             string                                       `yaml:"base_url"`
+	CatalogProvider     string                                       `yaml:"catalog_provider,omitempty"`
+	DefaultCapabilities modelcapability.ModelCapabilities            `yaml:"default_capabilities,omitempty"`
+	ModelCapabilities   map[string]modelcapability.ModelCapabilities `yaml:"model_capabilities,omitempty"`
+	APIKey              upstreamauth.SecretRef                       `yaml:"api_key"`
+	Auth                upstreamauth.Profile                         `yaml:"auth"`
+	Models              []string                                     `yaml:"models"`
+	Priority            int                                          `yaml:"priority"`
+	Timeout             Duration                                     `yaml:"timeout"`
+	MaxConcurrency      int                                          `yaml:"max_concurrency"`
 }
 
 type ModelsConfig struct {

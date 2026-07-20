@@ -83,14 +83,19 @@ func BuildLocalProvider(input LocalProviderInput, existing *ProviderConfig) (Pro
 	if err != nil {
 		return ProviderConfig{}, err
 	}
-	return ProviderConfig{
+	provider := ProviderConfig{
 		Type:            providerType,
 		BaseURL:         input.BaseURL,
 		CatalogProvider: input.CatalogProvider,
 		Auth:            auth,
 		Models:          input.Models,
 		MaxConcurrency:  input.MaxConcurrency,
-	}, nil
+	}
+	if existing != nil {
+		provider.DefaultCapabilities = existing.DefaultCapabilities
+		provider.ModelCapabilities = existing.ModelCapabilities
+	}
+	return provider, nil
 }
 
 func buildProviderAuth(input LocalProviderInput, authType string, providerType string, existing *ProviderConfig) (upstreamauth.Profile, error) {

@@ -26,3 +26,16 @@ func TestParseAnthropicMessagesRequest(t *testing.T) {
 		t.Fatalf("tools not parsed: %+v", req.Tools)
 	}
 }
+
+func TestParseAnthropicBase64Image(t *testing.T) {
+	body := []byte(`{"model":"vision","max_tokens":32,"messages":[{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AA=="}}]}]}`)
+	r, _ := http.NewRequest(http.MethodPost, "/anthropic/v1/messages", bytes.NewReader(body))
+	req, err := (MessagesAdapter{}).ParseRequest(context.Background(), r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	image := req.Messages[0].Content[0]
+	if image.Type != ir.ContentImage || image.Image == nil || image.Image.MediaType != "image/png" || image.Image.Base64 != "AA==" {
+		t.Fatalf("image not parsed: %+v", image)
+	}
+}

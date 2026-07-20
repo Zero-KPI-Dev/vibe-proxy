@@ -78,6 +78,25 @@ selection, or authentication. Explicit local capability overrides take precedenc
 provider defaults and catalog metadata. The catalog is advisory and is never consulted
 over the network in the data-plane hot path.
 
+Provider-wide defaults and per-model corrections use an explicit three-state value:
+
+```yaml
+providers:
+  internal-maas:
+    default_capabilities:
+      image_input: unsupported
+    model_capabilities:
+      qwen-vl:
+        image_input: supported
+      renamed-private-model:
+        image_input: unknown
+```
+
+Valid values are `supported`, `unsupported`, and `unknown`. Missing metadata also means
+unknown, but an explicit local value records the user's intended override. Editing a
+provider through the basic control plane preserves advanced capability overrides already
+present in YAML.
+
 ## Provider Auth
 
 Provider auth must support non-key and custom-header deployments.

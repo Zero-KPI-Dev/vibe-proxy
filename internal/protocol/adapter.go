@@ -32,6 +32,8 @@ type Capabilities struct {
 	Streaming         bool `json:"streaming"`
 	Tools             bool `json:"tools"`
 	ParallelToolCalls bool `json:"parallel_tool_calls"`
+	// Vision describes whether the adapter can transport image blocks. Model-level
+	// image support is resolved separately and must not be inferred from this flag.
 	Vision            bool `json:"vision"`
 	Files             bool `json:"files"`
 	JSONMode          bool `json:"json_mode"`

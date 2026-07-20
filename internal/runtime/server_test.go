@@ -55,6 +55,23 @@ func TestRuntimeOpenAIChatToOpenAICompatible(t *testing.T) {
 	}
 }
 
+func TestRuntimeDisabledMultimodalPreprocessorPreservesImages(t *testing.T) {
+	s := newTestServer(t, func(r *http.Request) (*http.Response, error) {
+		body, _ := io.ReadAll(r.Body)
+		if !strings.Contains(string(body), `"image_url":{"url":"data:image/png;base64,AA=="}`) {
+			t.Fatalf("image was not preserved: %s", body)
+		}
+		return jsonResponse(200, `{"id":"chatcmpl_image","model":"raw-chat","choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`), nil
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader([]byte(`{"model":"vibe-fast","messages":[{"role":"user","content":[{"type":"text","text":"read"},{"type":"image_url","image_url":{"url":"data:image/png;base64,AA=="}}]}]}`)))
+	req.Header.Set("Authorization", "Bearer vibe-local-dev-key")
+	w := httptest.NewRecorder()
+	s.Routes().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("unexpected response code=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
 func TestRuntimeResponsesToOpenAICompatible(t *testing.T) {
 	s := newTestServer(t, func(r *http.Request) (*http.Response, error) {
 		return jsonResponse(200, `{"id":"chatcmpl_2","model":"raw-chat","choices":[{"message":{"role":"assistant","content":"response ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":2,"total_tokens":3}}`), nil

@@ -5,16 +5,18 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/a448582655/vibe-proxy/internal/modelcapability"
 )
 
 const DefaultSourceURL = "https://models.dev/api.json"
 
-type SupportState string
+type SupportState = modelcapability.SupportState
 
 const (
-	SupportUnknown     SupportState = "unknown"
-	SupportSupported   SupportState = "supported"
-	SupportUnsupported SupportState = "unsupported"
+	SupportUnknown     = modelcapability.SupportUnknown
+	SupportSupported   = modelcapability.SupportSupported
+	SupportUnsupported = modelcapability.SupportUnsupported
 )
 
 type MatchStatus string

@@ -49,6 +49,14 @@ func ValidateRuntime(cfg *RuntimeConfig) []ValidationIssue {
 		if p.Auth.Type == "api_key_header" && (p.Auth.Header == "" || p.Auth.Value == "") {
 			issues = append(issues, issue("error", path+".auth", "invalid_api_key_header", "API key header auth requires header and value."))
 		}
+		if !p.DefaultCapabilities.ImageInput.Valid() {
+			issues = append(issues, issue("error", path+".default_capabilities.image_input", "invalid_image_input_capability", "image_input must be unknown, supported, or unsupported."))
+		}
+		for model, capabilities := range p.ModelCapabilities {
+			if !capabilities.ImageInput.Valid() {
+				issues = append(issues, issue("error", path+".model_capabilities."+model+".image_input", "invalid_image_input_capability", "image_input must be unknown, supported, or unsupported."))
+			}
+		}
 	}
 	for alias, target := range cfg.ModelResolver.Aliases {
 		if alias == "" {

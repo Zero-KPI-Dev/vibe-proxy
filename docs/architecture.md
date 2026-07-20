@@ -66,8 +66,8 @@ HTTP Request
   -> Listener / Protocol Detection
   -> Client Adapter
   -> Canonical IR
-  -> Pipeline Hooks
   -> Model Resolver
+  -> Request Preprocessor Pipeline
   -> Channel Selector
   -> Upstream Auth Profile
   -> Provider Adapter
@@ -134,6 +134,17 @@ Resolution order:
 3. raw model match against provider model lists when `allow_raw_models` is enabled
 4. fallback to configured default model when allowed by the client protocol/profile
 5. standardized `model_not_found` error
+
+The registry also resolves model capabilities independently from routing. Image input
+uses a three-state value (`supported`, `unsupported`, `unknown`) with this precedence:
+
+1. model-level local override
+2. provider default
+3. unambiguous models.dev metadata
+4. unknown
+
+Adapter `Vision` capability means that the protocol adapter can encode image blocks; it
+does not claim that every model behind that adapter accepts images.
 
 ### 4. Channel Manager
 
@@ -212,6 +223,13 @@ OnError
 ```
 
 v0.1 can keep hooks internal. A public plugin SDK can come later.
+
+Resolved requests also pass through a small, ordered `RequestPreprocessor` pipeline
+before provider concurrency is acquired and before the upstream request is encoded.
+Preprocessors receive Canonical IR, the resolved target, provider configuration, and
+adapter transport capabilities. The first implementation is the disabled-by-default
+multimodal fallback skeleton. This keeps OCR, future document extraction, and similar
+transformations out of protocol adapters and out of the main runtime handler.
 
 ### 8. Telemetry Pipeline
 

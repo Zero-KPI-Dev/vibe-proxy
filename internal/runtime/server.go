@@ -20,6 +20,8 @@ import (
 	"github.com/a448582655/vibe-proxy/internal/metrics"
 	"github.com/a448582655/vibe-proxy/internal/modelcatalog"
 	"github.com/a448582655/vibe-proxy/internal/modelresolver"
+	"github.com/a448582655/vibe-proxy/internal/multimodal"
+	"github.com/a448582655/vibe-proxy/internal/preprocess"
 	"github.com/a448582655/vibe-proxy/internal/protocol"
 	provideranthropic "github.com/a448582655/vibe-proxy/internal/provideradapters/anthropic"
 	provideropenai "github.com/a448582655/vibe-proxy/internal/provideradapters/openai"
@@ -30,10 +32,11 @@ import (
 )
 
 type Snapshot struct {
-	LoadedAt   time.Time
-	Config     *config.RuntimeConfig
-	Resolver   *modelresolver.Resolver
-	AdminToken string
+	LoadedAt      time.Time
+	Config        *config.RuntimeConfig
+	Resolver      *modelresolver.Resolver
+	Preprocessors *preprocess.Pipeline
+	AdminToken    string
 }
 
 type Server struct {
@@ -83,7 +86,13 @@ func modelCatalogCachePath(cfgPath string, cfg *config.RuntimeConfig) string {
 }
 
 func (s *Server) buildSnapshot(cfg *config.RuntimeConfig) *Snapshot {
-	return &Snapshot{LoadedAt: time.Now(), Config: cfg, Resolver: modelresolver.New(cfg.ModelResolver), AdminToken: os.Getenv(cfg.Security.AdminBearerTokenEnv)}
+	return &Snapshot{
+		LoadedAt:      time.Now(),
+		Config:        cfg,
+		Resolver:      modelresolver.New(cfg.ModelResolver),
+		Preprocessors: preprocess.New(&multimodal.Processor{Enabled: false, Catalog: s.catalog}),
+		AdminToken:    os.Getenv(cfg.Security.AdminBearerTokenEnv),
+	}
 }
 
 func (s *Server) Routes() http.Handler {
@@ -203,6 +212,31 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 	if providerAdapter == nil {
 		_ = clientAdapter.EncodeError(r.Context(), w, ir.GatewayError{StatusCode: 501, Kind: "config_error", Code: "provider_adapter_not_found", Message: "Provider adapter is not available."})
 		return
+	}
+	prepared, err := snap.Preprocessors.Prepare(r.Context(), creq, preprocess.RouteContext{
+		Target:              target,
+		ProviderConfig:      providerCfg,
+		AdapterCapabilities: providerAdapter.Capabilities(),
+	})
+	if err != nil {
+		_ = clientAdapter.EncodeError(r.Context(), w, errorToIR(err))
+		return
+	}
+	creq = prepared.Request
+	if prepared.Target.ProviderID != target.ProviderID || prepared.Target.Model != target.Model {
+		target = prepared.Target
+		creq.ResolvedProvider = target.ProviderID
+		creq.ResolvedModel = target.Model
+		providerCfg, ok = snap.Config.Providers[target.ProviderID]
+		if !ok {
+			_ = clientAdapter.EncodeError(r.Context(), w, ir.GatewayError{StatusCode: 503, Kind: "config_error", Code: "provider_not_found", Message: "Preprocessor target provider is not configured."})
+			return
+		}
+		providerAdapter = s.providerAdapters[target.ProviderType]
+		if providerAdapter == nil {
+			_ = clientAdapter.EncodeError(r.Context(), w, ir.GatewayError{StatusCode: 501, Kind: "config_error", Code: "provider_adapter_not_found", Message: "Preprocessor target adapter is not available."})
+			return
+		}
 	}
 	if !s.acquire(target.ProviderID, providerCfg.MaxConcurrency) {
 		_ = clientAdapter.EncodeError(r.Context(), w, ir.GatewayError{StatusCode: 429, Kind: "rate_limit_error", Code: "provider_busy", Message: "Selected provider is busy.", RetryAfter: "1"})
@@ -335,7 +369,7 @@ func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 	providers := []map[string]any{}
 	for id, p := range snap.Config.Providers {
 		authType, keySource, keyEnv := providerAuthMeta(p)
-		providers = append(providers, map[string]any{"id": id, "type": p.Type, "base_url": p.BaseURL, "catalog_provider": p.CatalogProvider, "models": p.Models, "max_concurrency": p.MaxConcurrency, "auth_type": authType, "api_key_source": keySource, "api_key_env": keyEnv})
+		providers = append(providers, map[string]any{"id": id, "type": p.Type, "base_url": p.BaseURL, "catalog_provider": p.CatalogProvider, "default_capabilities": p.DefaultCapabilities, "model_capabilities": p.ModelCapabilities, "models": p.Models, "max_concurrency": p.MaxConcurrency, "auth_type": authType, "api_key_source": keySource, "api_key_env": keyEnv})
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{"loaded_at": snap.LoadedAt, "providers": providers, "model_resolver": snap.Config.ModelResolver})

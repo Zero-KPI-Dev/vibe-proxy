@@ -10,11 +10,17 @@ export interface ProviderConfig {
   type: "openai-compatible" | "anthropic"
   base_url: string
   catalog_provider?: string
+  default_capabilities?: ModelCapabilities
+  model_capabilities?: Record<string, ModelCapabilities>
   models: string[]
   max_concurrency?: number
   api_key_env?: string
   api_key_source?: "env" | "literal"
   auth_type?: "bearer" | "api_key_header" | "none"
+}
+
+export interface ModelCapabilities {
+  image_input?: ModelCapabilitySupport
 }
 
 export interface ProviderFormData {
