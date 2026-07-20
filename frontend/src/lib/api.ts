@@ -17,6 +17,10 @@ import type {
   ConfigValidationIssue,
   ModelCatalogRefreshResponse,
   ModelCatalogStatusResponse,
+  ModelCatalogLookupResponse,
+  MultimodalAdminConfig,
+  MultimodalAdminInput,
+  OCRTestResponse,
 } from "./types"
 
 export function getToken(): string {
@@ -44,8 +48,10 @@ async function request<T>(path: string, opts: RequestInit = {}): Promise<T> {
     body = text
   }
   if (!resp.ok) {
-    const msg = typeof body === "object" && body && "error" in body
-      ? (body as Record<string, unknown>).error as string
+    const msg = typeof body === "object" && body && "message" in body && typeof (body as Record<string, unknown>).message === "string"
+      ? (body as Record<string, unknown>).message as string
+      : typeof body === "object" && body && "error" in body
+      ? String((body as Record<string, unknown>).error)
       : typeof body === "string"
         ? body
         : `HTTP ${resp.status}`
@@ -99,6 +105,25 @@ export const modelCatalogApi = {
   refresh: () =>
     request<ModelCatalogRefreshResponse>("/admin/model-catalog/refresh", {
       method: "POST",
+    }),
+  lookup: (data: { provider_id: string; catalog_provider?: string; base_url: string; models: string[] }) =>
+    request<ModelCatalogLookupResponse>("/admin/model-catalog/lookup", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+}
+
+export const multimodalApi = {
+  get: () => request<MultimodalAdminConfig>("/admin/multimodal"),
+  save: (data: MultimodalAdminInput) =>
+    request<{ ok: boolean; multimodal: MultimodalAdminConfig; loaded_at: string }>("/admin/multimodal", {
+      method: "PUT",
+      body: JSON.stringify(data),
+    }),
+  testOCR: (data: MultimodalAdminInput) =>
+    request<OCRTestResponse>("/admin/multimodal/ocr/test", {
+      method: "POST",
+      body: JSON.stringify(data),
     }),
 }
 

@@ -166,3 +166,34 @@ func TestProcessorFallsBackToExplicitVisionTarget(t *testing.T) {
 		t.Fatalf("unexpected fallback decision: %+v", result.Decisions)
 	}
 }
+
+func TestProcessorDoesNotSendMalformedImageToVisionFallback(t *testing.T) {
+	provider := &fakeOCRProvider{confidence: 0.9}
+	resolver := modelresolver.New(modelresolver.Config{Aliases: map[string]modelresolver.Alias{"vibe-vision": {Provider: "vision", Model: "vision-model"}}, Providers: []modelresolver.Provider{{ID: "vision", Type: "openai-compatible", BaseURL: "https://vision.example/v1", Models: []string{"vision-model"}}}})
+	processor := &Processor{
+		Enabled:             true,
+		OCR:                 provider,
+		MinConfidence:       0.5,
+		MinTextChars:        1,
+		ImageLimits:         ImageLimits{MaxImages: 1, MaxImageBytes: 1024, MaxTotalImageBytes: 1024},
+		TextLimits:          TextLimits{PerImage: 100, Total: 100},
+		VisionFallbackModel: "vibe-vision",
+		Resolver:            resolver,
+		Providers: map[string]config.ProviderConfig{"vision": {
+			Type:                "openai-compatible",
+			BaseURL:             "https://vision.example/v1",
+			DefaultCapabilities: modelcapability.ModelCapabilities{ImageInput: modelcapability.SupportSupported},
+		}},
+		AdapterCapabilities: func(string) (protocol.Capabilities, bool) { return protocol.Capabilities{Vision: true}, true },
+	}
+	req := &ir.Request{Messages: []ir.Message{{Role: ir.RoleUser, Content: []ir.ContentBlock{{Type: ir.ContentImage, Image: &ir.ImageContent{URL: "data:image/png;base64,not-valid-base64"}}}}}}
+	original := modelresolver.Target{ProviderID: "text", ProviderType: "openai-compatible", Model: "text-model"}
+	route := preprocess.RouteContext{Target: original, ProviderConfig: config.ProviderConfig{DefaultCapabilities: modelcapability.ModelCapabilities{ImageInput: modelcapability.SupportUnsupported}}, AdapterCapabilities: protocol.Capabilities{Vision: true}}
+	result, err := processor.Prepare(context.Background(), req, route)
+	if gatewayCode(err) != "ocr_invalid_image" {
+		t.Fatalf("malformed image should be rejected before Vision fallback: result=%+v err=%v", result, err)
+	}
+	if result.Target != original || provider.calls != 0 {
+		t.Fatalf("malformed image reached a fallback provider: result=%+v OCR calls=%d", result, provider.calls)
+	}
+}

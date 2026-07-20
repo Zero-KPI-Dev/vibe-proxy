@@ -78,6 +78,12 @@ export function ProviderEditPage() {
               api_key: "",
               models: (provider.models ?? []).join(", "),
               max_concurrency: provider.max_concurrency ?? 32,
+              default_image_input: provider.default_capabilities?.image_input ?? "",
+              model_image_capabilities: Object.fromEntries(
+                Object.entries(provider.model_capabilities ?? {})
+                  .filter(([, capabilities]) => Boolean(capabilities.image_input))
+                  .map(([model, capabilities]) => [model, capabilities.image_input!])
+              ),
             }}
             onSubmit={handleSubmit}
             isPending={updateProvider.isPending}

@@ -9,6 +9,7 @@ import { Database, Languages, Palette, RefreshCw, Shield, Save } from "lucide-re
 import { setToken, getToken, modelCatalogApi } from "@/lib/api"
 import type { ModelCatalogState } from "@/lib/types"
 import { normalizeLanguage, setAppLanguage, type AppLanguage } from "@/i18n"
+import { OCRFallbackSettings } from "@/components/ocr-fallback-settings"
 import {
   Select,
   SelectContent,
@@ -33,6 +34,7 @@ export function SettingsPage() {
   )
   const [catalog, setCatalog] = useState<ModelCatalogState | null>(null)
   const [catalogLoading, setCatalogLoading] = useState(false)
+  const [authVersion, setAuthVersion] = useState(0)
 
   const loadCatalogStatus = async () => {
     if (!getToken()) return
@@ -50,6 +52,7 @@ export function SettingsPage() {
 
   const handleSaveToken = () => {
     setToken(adminToken)
+    setAuthVersion((value) => value + 1)
     toast.success(t("settings.tokenSaved"))
     void loadCatalogStatus()
   }
@@ -123,6 +126,8 @@ export function SettingsPage() {
           </div>
         </CardContent>
       </Card>
+
+      <OCRFallbackSettings authVersion={authVersion} />
 
       <Card>
         <CardHeader>

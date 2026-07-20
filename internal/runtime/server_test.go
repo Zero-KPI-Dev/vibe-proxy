@@ -218,6 +218,84 @@ func TestRuntimeFallsBackFromOCRToVisionProvider(t *testing.T) {
 	}
 }
 
+func TestRuntimeAdminConfiguresAndTestsOCRWithoutLeakingSecret(t *testing.T) {
+	t.Setenv("VIBE_PROXY_ADMIN_TOKEN", "admin-token")
+	path := filepath.Join(t.TempDir(), "bootstrap.yaml")
+	content := `version: vibeproxy.io/v1alpha1
+security:
+  admin_bearer_token_env: VIBE_PROXY_ADMIN_TOKEN
+providers:
+  text:
+    type: openai-compatible
+    base_url: http://127.0.0.1:3000/v1
+    auth:
+      type: none
+    models: [text-model]
+    default_capabilities:
+      image_input: unsupported
+models:
+  allow_raw: true
+  aliases: {}
+multimodal:
+  enabled: false
+  ocr:
+    provider: http
+    endpoint: http://old-ocr.local/v1/ocr
+    auth:
+      type: bearer
+      token: literal:old-secret
+`
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.LoadRuntime(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	testPromOnce.Do(func() { testProm = metrics.New() })
+	s := New(path, cfg, metrics.MultiSink{}, testProm)
+	s.SetOCRHTTPClient(&http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
+		if r.Header.Get("x-ocr-key") != "unsaved-secret" {
+			t.Fatalf("unsaved OCR auth not applied: %v", r.Header)
+		}
+		body, _ := io.ReadAll(r.Body)
+		if !strings.Contains(string(body), `"data_base64"`) || strings.Contains(string(body), "unsaved-secret") {
+			t.Fatalf("unexpected OCR test body: %s", body)
+		}
+		return jsonResponse(200, `{"results":[{"index":0,"text":"ok","confidence":0.99}]}`), nil
+	})})
+
+	getReq := httptest.NewRequest(http.MethodGet, "/admin/multimodal", nil)
+	getReq.Header.Set("Authorization", "Bearer admin-token")
+	getW := httptest.NewRecorder()
+	s.Routes().ServeHTTP(getW, getReq)
+	if getW.Code != http.StatusOK || strings.Contains(getW.Body.String(), "old-secret") || !strings.Contains(getW.Body.String(), `"api_key_source":"literal"`) {
+		t.Fatalf("unexpected multimodal snapshot: %d %s", getW.Code, getW.Body.String())
+	}
+
+	testBody := `{"enabled":true,"endpoint":"http://new-ocr.local/v1/ocr","auth_type":"api_key_header","api_key_source":"literal","api_key":"unsaved-secret","header":"x-ocr-key","min_confidence":0.55,"min_text_chars":4,"max_images":4}`
+	testReq := httptest.NewRequest(http.MethodPost, "/admin/multimodal/ocr/test", strings.NewReader(testBody))
+	testReq.Header.Set("Authorization", "Bearer admin-token")
+	testW := httptest.NewRecorder()
+	s.Routes().ServeHTTP(testW, testReq)
+	if testW.Code != http.StatusOK || !strings.Contains(testW.Body.String(), `"ok":true`) || strings.Contains(testW.Body.String(), "unsaved-secret") {
+		t.Fatalf("unexpected OCR test response: %d %s", testW.Code, testW.Body.String())
+	}
+
+	saveBody := `{"enabled":true,"endpoint":"http://new-ocr.local/v1/ocr","auth_type":"bearer","api_key_source":"env","api_key_env":"OCR_TOKEN","min_confidence":0.6,"min_text_chars":5,"max_images":3}`
+	saveReq := httptest.NewRequest(http.MethodPut, "/admin/multimodal", strings.NewReader(saveBody))
+	saveReq.Header.Set("Authorization", "Bearer admin-token")
+	saveW := httptest.NewRecorder()
+	s.Routes().ServeHTTP(saveW, saveReq)
+	if saveW.Code != http.StatusOK || !strings.Contains(saveW.Body.String(), `"ok":true`) {
+		t.Fatalf("unexpected OCR save response: %d %s", saveW.Code, saveW.Body.String())
+	}
+	written, _ := os.ReadFile(path)
+	if !strings.Contains(string(written), "env:OCR_TOKEN") || strings.Contains(string(written), "unsaved-secret") || !strings.Contains(string(written), "min_confidence: 0.6") {
+		t.Fatalf("unexpected saved OCR config: %s", written)
+	}
+}
+
 func TestRuntimeResponsesToOpenAICompatible(t *testing.T) {
 	s := newTestServer(t, func(r *http.Request) (*http.Response, error) {
 		return jsonResponse(200, `{"id":"chatcmpl_2","model":"raw-chat","choices":[{"message":{"role":"assistant","content":"response ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":2,"total_tokens":3}}`), nil

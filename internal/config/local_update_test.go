@@ -48,3 +48,63 @@ func TestBuildLocalProviderPreservesCapabilityOverrides(t *testing.T) {
 		t.Fatalf("capability overrides were lost: %+v", provider)
 	}
 }
+
+func TestBuildLocalProviderUpdatesCapabilityOverrides(t *testing.T) {
+	defaultState := "unsupported"
+	provider, err := BuildLocalProvider(LocalProviderInput{
+		ID:                     "local",
+		Type:                   "openai-compatible",
+		BaseURL:                "http://127.0.0.1:3000/v1",
+		AuthType:               "none",
+		DefaultImageInput:      &defaultState,
+		ModelImageCapabilities: map[string]string{"vision": "supported", "private": "unknown"},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if provider.DefaultCapabilities.ImageInput != modelcapability.SupportUnsupported || provider.ModelCapabilities["vision"].ImageInput != modelcapability.SupportSupported || provider.ModelCapabilities["private"].ImageInput != modelcapability.SupportUnknown {
+		t.Fatalf("capability overrides not updated: %+v", provider)
+	}
+}
+
+func TestBuildLocalProviderRejectsInvalidCapabilityOverride(t *testing.T) {
+	defaultState := "probably"
+	if _, err := BuildLocalProvider(LocalProviderInput{Type: "openai-compatible", BaseURL: "http://127.0.0.1:3000/v1", AuthType: "none", DefaultImageInput: &defaultState}, nil); err == nil {
+		t.Fatal("expected invalid default capability to be rejected")
+	}
+	if _, err := BuildLocalProvider(LocalProviderInput{Type: "openai-compatible", BaseURL: "http://127.0.0.1:3000/v1", AuthType: "none", ModelImageCapabilities: map[string]string{"model": "maybe"}}, nil); err == nil {
+		t.Fatal("expected invalid model capability to be rejected")
+	}
+}
+
+func TestUpdateProviderDoesNotBreakConfiguredVisionFallback(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	content := `version: vibeproxy.io/v1alpha1
+providers:
+  vision:
+    type: openai-compatible
+    base_url: http://127.0.0.1:3000/v1
+    auth: {type: none}
+    models: [vision-model]
+    model_capabilities:
+      vision-model: {image_input: supported}
+models:
+  allow_raw: true
+  aliases: {}
+multimodal:
+  enabled: true
+  vision_fallback_model: vision/vision-model
+`
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	unsupported := "unsupported"
+	_, err := UpdateProvider(path, LocalProviderInput{ID: "vision", Type: "openai-compatible", BaseURL: "http://127.0.0.1:3000/v1", AuthType: "none", Models: []string{"vision-model"}, DefaultImageInput: &unsupported, ModelImageCapabilities: map[string]string{}})
+	if err == nil {
+		t.Fatal("expected update that invalidates Vision fallback to be rejected")
+	}
+	written, readErr := os.ReadFile(path)
+	if readErr != nil || !strings.Contains(string(written), "image_input: supported") {
+		t.Fatalf("invalid update was written: err=%v config=%s", readErr, written)
+	}
+}

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { z } from "zod"
@@ -22,7 +22,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover"
 import { cn } from "@/lib/utils"
-import { providerApi } from "@/lib/api"
+import { modelCatalogApi, providerApi } from "@/lib/api"
 import type { ModelCatalogMatch, ProviderFormData } from "@/lib/types"
 
 const createProviderSchema = (t: TFunction, mode: "create" | "edit") => z
@@ -43,6 +43,8 @@ const createProviderSchema = (t: TFunction, mode: "create" | "edit") => z
     alias_model: z.string().optional(),
     default_model: z.string().optional(),
     max_concurrency: z.coerce.number().int().positive().optional(),
+    default_image_input: z.enum(["", "unknown", "supported", "unsupported"]).optional(),
+    model_image_capabilities: z.record(z.enum(["unknown", "supported", "unsupported"])).optional(),
   })
   .superRefine((v, ctx) => {
     if (v.auth_type === "none") return
@@ -105,6 +107,8 @@ export function ProviderForm({ defaultValues, onSubmit, isPending, mode }: Provi
       alias_model: "",
       default_model: "",
       max_concurrency: 32,
+      default_image_input: "",
+      model_image_capabilities: {},
       ...defaultValues,
     },
   })
@@ -114,10 +118,18 @@ export function ProviderForm({ defaultValues, onSubmit, isPending, mode }: Provi
   const selectedKeySource = watch("api_key_source") ?? "env"
   const [isFetchingModels, setIsFetchingModels] = useState(false)
   const [modelFetchMessage, setModelFetchMessage] = useState("")
-  const [availableModels, setAvailableModels] = useState<string[]>([])
+  const initialModels = useMemo(() => {
+    const value = defaultValues?.models
+    return (typeof value === "string" ? value.split(",") : value ?? [])
+      .map((model) => model.trim())
+      .filter(Boolean)
+  }, [defaultValues?.models])
+  const [availableModels, setAvailableModels] = useState<string[]>(initialModels)
   const [modelDetails, setModelDetails] = useState<Record<string, ModelCatalogMatch>>({})
   const [modelFilter, setModelFilter] = useState("")
   const selectedModelsText = watch("models")
+  const defaultImageInput = watch("default_image_input") ?? ""
+  const modelImageCapabilities = watch("model_image_capabilities") ?? {}
 
   const selectedModels = new Set(
     (typeof selectedModelsText === "string" ? selectedModelsText.split(",") : selectedModelsText)
@@ -131,6 +143,22 @@ export function ProviderForm({ defaultValues, onSubmit, isPending, mode }: Provi
     [availableModels, modelFilter]
   )
 
+  useEffect(() => {
+    if (initialModels.length === 0) return
+    let active = true
+    void modelCatalogApi.lookup({
+      provider_id: defaultValues?.id ?? "",
+      catalog_provider: defaultValues?.catalog_provider ?? "",
+      base_url: defaultValues?.base_url ?? "",
+      models: initialModels,
+    }).then((result) => {
+      if (active) setModelDetails(result.matches ?? {})
+    }).catch(() => {
+      // A missing/stale catalog should not block editing an existing provider.
+    })
+    return () => { active = false }
+  }, [defaultValues?.base_url, defaultValues?.catalog_provider, defaultValues?.id, initialModels])
+
   const writeSelectedModels = (models: Iterable<string>) => {
     setValue("models", Array.from(models).join(", "))
   }
@@ -140,7 +168,13 @@ export function ProviderForm({ defaultValues, onSubmit, isPending, mode }: Provi
     // such as models may already be arrays. Avoid parsing the transformed
     // object a second time, because the Zod input schema expects models to be a
     // comma-separated string.
-    await onSubmit(values as unknown as ProviderFormData)
+    const parsed = values as unknown as ProviderFormData
+    const enabledModels = new Set(parsed.models ?? [])
+    const modelImageCapabilities = Object.fromEntries(
+      Object.entries(parsed.model_image_capabilities ?? {})
+        .filter(([model]) => enabledModels.has(model))
+    )
+    await onSubmit({ ...parsed, model_image_capabilities: modelImageCapabilities })
   }
 
   const handleFetchModels = async () => {
@@ -207,6 +241,16 @@ export function ProviderForm({ defaultValues, onSubmit, isPending, mode }: Provi
     const next = new Set(selectedModels)
     for (const model of filteredModels) next.delete(model)
     writeSelectedModels(next)
+  }
+
+  const setModelImageCapability = (model: string, value: string) => {
+    const next = { ...modelImageCapabilities }
+    if (value === "auto") {
+      delete next[model]
+    } else {
+      next[model] = value as "unknown" | "supported" | "unsupported"
+    }
+    setValue("model_image_capabilities", next, { shouldDirty: true })
   }
 
   return (
@@ -490,6 +534,68 @@ export function ProviderForm({ defaultValues, onSubmit, isPending, mode }: Provi
             </div>
           )}
         </div>
+
+        <div className="space-y-2 sm:col-span-2">
+          <Label>{t("providerForm.defaultImageCapability")}</Label>
+          <Select
+            value={defaultImageInput || "auto"}
+            onValueChange={(value) => setValue(
+              "default_image_input",
+              value === "auto" ? "" : value as "unknown" | "supported" | "unsupported",
+              { shouldDirty: true }
+            )}
+          >
+            <SelectTrigger><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="auto">{t("providerForm.capabilityAuto")}</SelectItem>
+              <SelectItem value="supported">{t("providerForm.capabilitySupported")}</SelectItem>
+              <SelectItem value="unsupported">{t("providerForm.capabilityUnsupported")}</SelectItem>
+              <SelectItem value="unknown">{t("providerForm.capabilityUnknownExplicit")}</SelectItem>
+            </SelectContent>
+          </Select>
+          <p className="text-xs text-muted-foreground">{t("providerForm.defaultImageCapabilityHelp")}</p>
+        </div>
+
+        {selectedModels.size > 0 && (
+          <details className="sm:col-span-2 rounded-md border border-border px-3 py-2">
+            <summary className="cursor-pointer text-sm font-medium">
+              {t("providerForm.modelCapabilityOverrides", { count: selectedModels.size })}
+            </summary>
+            <p className="mt-2 text-xs text-muted-foreground">
+              {t("providerForm.modelCapabilityOverridesHelp")}
+            </p>
+            <div className="mt-3 max-h-72 space-y-2 overflow-y-auto pr-1">
+              {Array.from(selectedModels).sort().map((model) => (
+                <div key={model} className="grid items-center gap-2 rounded-md border border-border px-3 py-2 sm:grid-cols-[minmax(0,1fr)_12rem]">
+                  <div className="min-w-0">
+                    <div className="truncate font-mono text-xs">{model}</div>
+                    <div className="mt-1 text-[11px] text-muted-foreground">
+                      {modelDetails[model]?.image_input === "supported"
+                        ? t("providerForm.catalogSaysVision")
+                        : modelDetails[model]?.image_input === "unsupported"
+                          ? t("providerForm.catalogSaysText")
+                          : t("providerForm.catalogSaysUnknown")}
+                    </div>
+                  </div>
+                  <Select
+                    value={modelImageCapabilities[model] || "auto"}
+                    onValueChange={(value) => setModelImageCapability(model, value)}
+                  >
+                    <SelectTrigger aria-label={t("providerForm.modelCapabilityFor", { model })}>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="auto">{t("providerForm.capabilityInherit")}</SelectItem>
+                      <SelectItem value="supported">{t("providerForm.capabilitySupported")}</SelectItem>
+                      <SelectItem value="unsupported">{t("providerForm.capabilityUnsupported")}</SelectItem>
+                      <SelectItem value="unknown">{t("providerForm.capabilityUnknownExplicit")}</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              ))}
+            </div>
+          </details>
+        )}
 
         <div className="space-y-2">
           <Label htmlFor="max_concurrency">{t("providerForm.maxConcurrency")}</Label>

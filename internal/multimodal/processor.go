@@ -180,7 +180,7 @@ func (p *Processor) Prepare(ctx context.Context, req *ir.Request, route preproce
 				if minConfidence != nil {
 					attributes["ocr_min_confidence"] = *minConfidence
 				}
-				if p.VisionFallbackModel != "" {
+				if p.VisionFallbackModel != "" && canUseVisionFallback(err) {
 					fallback, fallbackErr := p.resolveVisionFallback(req, route.Target)
 					if fallbackErr != nil {
 						attributes["vision_fallback_error"] = "invalid_target"
@@ -260,6 +260,13 @@ func gatewayErrorCode(err error) string {
 		return provider.Code
 	}
 	return "ocr_unavailable"
+}
+
+func canUseVisionFallback(err error) bool {
+	// A malformed image is a client error, not an OCR quality or availability
+	// failure. Forwarding it to a Vision provider would bypass the gateway's
+	// deterministic input validation and turn a 400 into an upstream request.
+	return gatewayErrorCode(err) != "ocr_invalid_image"
 }
 
 func (p *Processor) applyOCR(ctx context.Context, req *ir.Request) (*ir.Request, int, time.Duration, *float64, error) {

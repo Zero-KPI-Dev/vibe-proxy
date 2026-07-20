@@ -428,6 +428,7 @@ flowchart TD
 - 不再递归进入 OCR 或二次 fallback；
 - 保留原始 Canonical IR 图片，而不是使用失败后的 OCR 请求；
 - 遥测同时记录 original target 和 effective target。
+- `ocr_invalid_image` 属于客户端输入错误，必须直接返回 400，不能借 Vision fallback 绕过网关的格式与 MIME 校验。
 
 客户端密钥仍按**客户端请求的公开模型名**授权。Vision fallback 是公开模型路由内部的实现细节。未来团队网关模式如需成本隔离，可增加内部 target allowlist。
 

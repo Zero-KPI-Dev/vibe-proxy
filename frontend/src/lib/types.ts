@@ -38,6 +38,8 @@ export interface ProviderFormData {
   alias_model?: string
   default_model?: string
   max_concurrency?: number
+  default_image_input?: "" | ModelCapabilitySupport
+  model_image_capabilities?: Record<string, ModelCapabilitySupport>
 }
 
 export interface SnapshotResponse {
@@ -269,6 +271,40 @@ export interface ModelCatalogStatusResponse {
 export interface ModelCatalogRefreshResponse {
   ok: boolean
   catalog: ModelCatalogState
+}
+
+export interface ModelCatalogLookupResponse {
+  matches: Record<string, ModelCatalogMatch>
+  catalog: ModelCatalogState
+  catalog_error?: string
+}
+
+// ---- Multimodal fallback ----
+export interface MultimodalAdminConfig {
+  enabled: boolean
+  strategy: "ocr_then_vision"
+  endpoint: string
+  auth_type: "none" | "bearer" | "api_key_header"
+  api_key_source: "" | "env" | "literal"
+  api_key_env: string
+  header: string
+  vision_fallback_model: string
+  min_confidence: number
+  min_text_chars: number
+  max_images: number
+}
+
+export interface MultimodalAdminInput extends MultimodalAdminConfig {
+  api_key?: string
+}
+
+export interface OCRTestResponse {
+  ok: boolean
+  provider?: string
+  latency_ms: number
+  result_count?: number
+  has_text?: boolean
+  error?: string
 }
 
 export interface ConfigureResponse {

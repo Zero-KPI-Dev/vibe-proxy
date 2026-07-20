@@ -5,25 +5,28 @@ import (
 	"os"
 	"strings"
 
+	"github.com/a448582655/vibe-proxy/internal/modelcapability"
 	"github.com/a448582655/vibe-proxy/internal/upstreamauth"
 	"gopkg.in/yaml.v3"
 )
 
 type LocalProviderInput struct {
-	ID              string   `json:"id"`
-	Type            string   `json:"type"`
-	BaseURL         string   `json:"base_url"`
-	CatalogProvider string   `json:"catalog_provider"`
-	APIKeyEnv       string   `json:"api_key_env"`
-	APIKey          string   `json:"api_key"`
-	APIKeySource    string   `json:"api_key_source"`
-	AuthType        string   `json:"auth_type"`
-	Header          string   `json:"header"`
-	Models          []string `json:"models"`
-	Alias           string   `json:"alias"`
-	AliasModel      string   `json:"alias_model"`
-	DefaultModel    string   `json:"default_model"`
-	MaxConcurrency  int      `json:"max_concurrency"`
+	ID                     string            `json:"id"`
+	Type                   string            `json:"type"`
+	BaseURL                string            `json:"base_url"`
+	CatalogProvider        string            `json:"catalog_provider"`
+	APIKeyEnv              string            `json:"api_key_env"`
+	APIKey                 string            `json:"api_key"`
+	APIKeySource           string            `json:"api_key_source"`
+	AuthType               string            `json:"auth_type"`
+	Header                 string            `json:"header"`
+	Models                 []string          `json:"models"`
+	Alias                  string            `json:"alias"`
+	AliasModel             string            `json:"alias_model"`
+	DefaultModel           string            `json:"default_model"`
+	MaxConcurrency         int               `json:"max_concurrency"`
+	DefaultImageInput      *string           `json:"default_image_input"`
+	ModelImageCapabilities map[string]string `json:"model_image_capabilities"`
 }
 
 func UpsertLocalProvider(path string, input LocalProviderInput) (*RuntimeConfig, error) {
@@ -56,6 +59,13 @@ func UpsertLocalProvider(path string, input LocalProviderInput) (*RuntimeConfig,
 	if cfg.Version == "" {
 		cfg.Version = "vibeproxy.io/v1alpha1"
 	}
+	compiled, err := CompileSimple(cfg)
+	if err != nil {
+		return nil, err
+	}
+	if issues := ValidateRuntime(compiled); HasErrors(issues) {
+		return nil, fmt.Errorf("invalid provider configuration: %+v", issues)
+	}
 	out, err := yaml.Marshal(cfg)
 	if err != nil {
 		return nil, err
@@ -63,7 +73,7 @@ func UpsertLocalProvider(path string, input LocalProviderInput) (*RuntimeConfig,
 	if err := os.WriteFile(path, out, 0600); err != nil {
 		return nil, err
 	}
-	return CompileSimple(cfg)
+	return compiled, nil
 }
 
 func BuildLocalProvider(input LocalProviderInput, existing *ProviderConfig) (ProviderConfig, error) {
@@ -94,6 +104,27 @@ func BuildLocalProvider(input LocalProviderInput, existing *ProviderConfig) (Pro
 	if existing != nil {
 		provider.DefaultCapabilities = existing.DefaultCapabilities
 		provider.ModelCapabilities = existing.ModelCapabilities
+	}
+	if input.DefaultImageInput != nil {
+		state := modelcapability.SupportState(*input.DefaultImageInput)
+		if !state.Valid() {
+			return ProviderConfig{}, fmt.Errorf("invalid default image_input capability %q", state)
+		}
+		provider.DefaultCapabilities.ImageInput = state
+	}
+	if input.ModelImageCapabilities != nil {
+		provider.ModelCapabilities = make(map[string]modelcapability.ModelCapabilities, len(input.ModelImageCapabilities))
+		for model, state := range input.ModelImageCapabilities {
+			model = strings.TrimSpace(model)
+			if model == "" || state == "" {
+				continue
+			}
+			support := modelcapability.SupportState(state)
+			if !support.Valid() {
+				return ProviderConfig{}, fmt.Errorf("invalid image_input capability %q for model %q", support, model)
+			}
+			provider.ModelCapabilities[model] = modelcapability.ModelCapabilities{ImageInput: support}
+		}
 	}
 	return provider, nil
 }

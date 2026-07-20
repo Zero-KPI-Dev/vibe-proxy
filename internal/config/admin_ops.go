@@ -52,6 +52,13 @@ func UpdateProvider(path string, input LocalProviderInput) (*RuntimeConfig, erro
 		return nil, err
 	}
 	cfg.Providers[input.ID] = provider
+	compiled, err := CompileSimple(cfg)
+	if err != nil {
+		return nil, err
+	}
+	if issues := ValidateRuntime(compiled); HasErrors(issues) {
+		return nil, fmt.Errorf("invalid provider configuration: %+v", issues)
+	}
 	out, err := yaml.Marshal(cfg)
 	if err != nil {
 		return nil, err
@@ -59,7 +66,7 @@ func UpdateProvider(path string, input LocalProviderInput) (*RuntimeConfig, erro
 	if err := os.WriteFile(path, out, 0600); err != nil {
 		return nil, err
 	}
-	return CompileSimple(cfg)
+	return compiled, nil
 }
 
 func RawConfig(path string) (string, error) {
