@@ -64,3 +64,132 @@
     text-wrap: balance;
   }
 }
+
+@layer components {
+  .markdown-response {
+    @apply break-words text-[15px] leading-7 text-foreground;
+  }
+
+  .markdown-response > :first-child {
+    margin-top: 0;
+  }
+
+  .markdown-response > :last-child {
+    margin-bottom: 0;
+  }
+
+  .markdown-response p {
+    margin: 0.65rem 0;
+    white-space: pre-wrap;
+  }
+
+  .markdown-response h1,
+  .markdown-response h2,
+  .markdown-response h3,
+  .markdown-response h4 {
+    @apply font-semibold tracking-tight text-foreground;
+    margin: 1.25rem 0 0.55rem;
+  }
+
+  .markdown-response h1 {
+    @apply border-b border-border pb-2 text-xl;
+  }
+
+  .markdown-response h2 {
+    @apply text-lg;
+  }
+
+  .markdown-response h3 {
+    @apply text-base;
+  }
+
+  .markdown-response h4 {
+    @apply text-sm;
+  }
+
+  .markdown-response ul,
+  .markdown-response ol {
+    margin: 0.65rem 0;
+    padding-left: 1.55rem;
+  }
+
+  .markdown-response ul {
+    list-style-type: disc;
+  }
+
+  .markdown-response ol {
+    list-style-type: decimal;
+  }
+
+  .markdown-response li {
+    padding-left: 0.2rem;
+  }
+
+  .markdown-response li + li {
+    margin-top: 0.35rem;
+  }
+
+  .markdown-response li > p {
+    margin: 0.2rem 0;
+  }
+
+  .markdown-response ul ul {
+    list-style-type: circle;
+  }
+
+  .markdown-response ul ul,
+  .markdown-response ul ol,
+  .markdown-response ol ul,
+  .markdown-response ol ol {
+    margin: 0.3rem 0;
+  }
+
+  .markdown-response strong {
+    @apply font-semibold text-foreground;
+  }
+
+  .markdown-response a {
+    @apply font-medium text-primary underline decoration-primary/40 underline-offset-4;
+  }
+
+  .markdown-response blockquote {
+    @apply border-l-2 border-primary/50 text-muted-foreground;
+    margin: 0.9rem 0;
+    padding: 0.1rem 0 0.1rem 1rem;
+  }
+
+  .markdown-response code {
+    @apply rounded bg-background px-1.5 py-0.5 font-mono text-[0.875em] text-foreground ring-1 ring-border;
+  }
+
+  .markdown-response pre {
+    @apply overflow-x-auto rounded-lg border border-border bg-background p-3;
+    margin: 0.9rem 0;
+  }
+
+  .markdown-response pre code {
+    @apply bg-transparent p-0 ring-0;
+  }
+
+  .markdown-response table {
+    @apply w-full border-collapse overflow-hidden text-sm;
+    margin: 0.9rem 0;
+  }
+
+  .markdown-response th,
+  .markdown-response td {
+    @apply border border-border px-3 py-2 text-left align-top;
+  }
+
+  .markdown-response th {
+    @apply bg-background font-semibold;
+  }
+
+  .markdown-response hr {
+    @apply my-5 border-border;
+  }
+
+  .markdown-response input[type="checkbox"] {
+    @apply mr-2 align-middle accent-primary;
+  }
+}

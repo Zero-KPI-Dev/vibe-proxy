@@ -60,6 +60,11 @@ import {
   type PlaygroundImage,
   type PlaygroundMessage,
 } from "@/lib/playground-request"
+import {
+  withConversation,
+  withoutConversation,
+  type PlaygroundConversations,
+} from "@/lib/playground-history"
 import { toast } from "sonner"
 import { useTranslation } from "react-i18next"
 
@@ -70,7 +75,7 @@ const MAX_IMAGES = 4
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024
 const SUPPORTED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"])
 
-function loadConversations(): Record<string, ChatEntry[]> {
+function loadConversations(): PlaygroundConversations {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
     return raw ? JSON.parse(raw) : {}
@@ -79,26 +84,12 @@ function loadConversations(): Record<string, ChatEntry[]> {
   }
 }
 
-function saveConversation(id: string, messages: ChatEntry[]) {
-  const all = loadConversations()
-  // Keep local history small and avoid retaining image bytes in localStorage.
-  // Metadata remains visible after reload, but images must be attached again
-  // before a historical turn can be resent.
-  all[id] = messages.map((message) => ({
-    ...message,
-    images: message.images?.map(({ dataUrl: _dataUrl, ...image }) => image),
-  }))
+function persistConversations(conversations: PlaygroundConversations) {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(all))
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(conversations))
   } catch {
     // storage full — silently ignore
   }
-}
-
-function deleteConversation(id: string) {
-  const all = loadConversations()
-  delete all[id]
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(all))
 }
 
 export function PlaygroundPage() {
@@ -121,11 +112,11 @@ export function PlaygroundPage() {
   const [pendingImages, setPendingImages] = useState<PlaygroundImage[]>([])
   const [flowEvent, setFlowEvent] = useState<RequestEvent | null>(null)
   const [flowLoading, setFlowLoading] = useState(false)
+  const [savedConvs, setSavedConvs] = useState<PlaygroundConversations>(() => loadConversations())
   const abortRef = useRef<AbortController | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  const savedConvs = loadConversations()
   const convEntries = Object.entries(savedConvs)
 
   const apiPath =
@@ -226,8 +217,16 @@ export function PlaygroundPage() {
   }, [messages, scrollToBottom])
 
   useEffect(() => {
-    if (convId) saveConversation(convId, messages)
+    if (!convId) return
+    // Keep local history small and avoid retaining image bytes in localStorage.
+    // Metadata remains visible after reload, but images must be attached again
+    // before a historical turn can be resent.
+    setSavedConvs((current) => withConversation(current, convId, messages))
   }, [messages, convId])
+
+  useEffect(() => {
+    persistConversations(savedConvs)
+  }, [savedConvs])
 
   const handleLoad = (id: string) => {
     const conv = savedConvs[id]
@@ -239,7 +238,7 @@ export function PlaygroundPage() {
   }
 
   const handleDeleteConv = (id: string) => {
-    deleteConversation(id)
+    setSavedConvs((current) => withoutConversation(current, id))
     if (convId === id) {
       setConvId(null)
       setMessages([])
@@ -447,7 +446,13 @@ export function PlaygroundPage() {
                       variant="ghost"
                       size="icon"
                       className="h-6 w-6 shrink-0"
-                      onClick={() => handleDeleteConv(id)}
+                      onClick={(event) => {
+                        event.preventDefault()
+                        event.stopPropagation()
+                        handleDeleteConv(id)
+                      }}
+                      aria-label={t("common.delete")}
+                      title={t("common.delete")}
                     >
                       <Trash2 className="h-3 w-3 text-destructive" />
                     </Button>

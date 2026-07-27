@@ -1,10 +1,19 @@
 import assert from "node:assert/strict"
+import React from "react"
+import { renderToStaticMarkup } from "react-dom/server"
+import ReactMarkdown from "react-markdown"
+import remarkGfm from "remark-gfm"
 import {
   buildPlaygroundBody,
   clipboardImageFiles,
   streamDelta,
   unaryText,
 } from "../src/lib/playground-request.ts"
+import {
+  conversationForStorage,
+  withConversation,
+  withoutConversation,
+} from "../src/lib/playground-history.ts"
 
 const image = {
   id: "image-1",
@@ -47,6 +56,46 @@ assert.deepEqual(
   }),
   [clipboardImage]
 )
+
+const conversationWithImage = [{
+  id: "message-1",
+  role: "user",
+  content: "describe this",
+  images: [{
+    id: "image-1",
+    name: "cat.png",
+    mediaType: "image/png",
+    size: 42,
+    dataUrl: "data:image/png;base64,secret-image-bytes",
+  }],
+}]
+const storedConversation = conversationForStorage(conversationWithImage)
+assert.equal(storedConversation[0].images[0].dataUrl, undefined)
+assert.equal(conversationWithImage[0].images[0].dataUrl, "data:image/png;base64,secret-image-bytes")
+
+const conversationStore = withConversation({}, "conversation-1", conversationWithImage)
+const prunedConversationStore = withoutConversation(conversationStore, "conversation-1")
+assert.deepEqual(prunedConversationStore, {})
+assert.equal(Object.keys(conversationStore).length, 1)
+
+const markdownHtml = renderToStaticMarkup(
+  React.createElement(ReactMarkdown, {
+    remarkPlugins: [remarkGfm],
+    children: [
+      "## Summary",
+      "",
+      "1. First",
+      "2. Second",
+      "",
+      "| Model | Vision |",
+      "| --- | --- |",
+      "| demo | yes |",
+    ].join("\n"),
+  })
+)
+assert.match(markdownHtml, /<h2>Summary<\/h2>/)
+assert.match(markdownHtml, /<ol>/)
+assert.match(markdownHtml, /<table>/)
 
 const chat = buildPlaygroundBody("openai_chat", "vision", messages, parameters)
 assert.deepEqual(chat.messages[0].content, [

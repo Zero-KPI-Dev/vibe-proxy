@@ -3,6 +3,7 @@ import { useState } from "react"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import ReactMarkdown from "react-markdown"
+import remarkGfm from "remark-gfm"
 import type { PlaygroundImage } from "@/lib/playground-request"
 
 interface ChatMessageProps {
@@ -35,10 +36,10 @@ export function ChatMessage({ role, content, images = [] }: ChatMessageProps) {
 
       <div
         className={cn(
-          "group relative max-w-[80%] rounded-xl px-4 py-3",
+          "group relative min-w-0 rounded-xl px-4 py-3",
           role === "user"
-            ? "bg-primary text-primary-foreground"
-            : "bg-muted"
+            ? "max-w-[76%] bg-primary text-primary-foreground"
+            : "w-full max-w-[min(88%,56rem)] border border-border/70 bg-muted/55"
         )}
       >
         {images.length > 0 && (
@@ -63,9 +64,9 @@ export function ChatMessage({ role, content, images = [] }: ChatMessageProps) {
             )}
           </div>
         )}
-        <div className="prose prose-sm prose-invert max-w-none">
+        <div className={cn(role === "assistant" ? "markdown-response" : "text-sm leading-6")}>
           {role === "assistant" ? (
-            <ReactMarkdown>{content}</ReactMarkdown>
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
           ) : content ? (
             <p className="whitespace-pre-wrap">{content}</p>
           ) : null}
