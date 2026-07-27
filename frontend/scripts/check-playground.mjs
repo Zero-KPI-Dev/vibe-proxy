@@ -14,6 +14,7 @@ import {
   withConversation,
   withoutConversation,
 } from "../src/lib/playground-history.ts"
+import { conversationImageIds } from "../src/lib/playground-images.ts"
 
 const image = {
   id: "image-1",
@@ -72,6 +73,7 @@ const conversationWithImage = [{
 const storedConversation = conversationForStorage(conversationWithImage)
 assert.equal(storedConversation[0].images[0].dataUrl, undefined)
 assert.equal(conversationWithImage[0].images[0].dataUrl, "data:image/png;base64,secret-image-bytes")
+assert.deepEqual(conversationImageIds(conversationWithImage), ["image-1"])
 
 const conversationStore = withConversation({}, "conversation-1", conversationWithImage)
 const prunedConversationStore = withoutConversation(conversationStore, "conversation-1")

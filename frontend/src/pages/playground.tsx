@@ -65,6 +65,11 @@ import {
   withoutConversation,
   type PlaygroundConversations,
 } from "@/lib/playground-history"
+import {
+  deleteConversationImages,
+  hydrateConversationImages,
+  persistConversationImages,
+} from "@/lib/playground-images"
 import { toast } from "sonner"
 import { useTranslation } from "react-i18next"
 
@@ -220,7 +225,8 @@ export function PlaygroundPage() {
     if (!convId) return
     // Keep local history small and avoid retaining image bytes in localStorage.
     // Metadata remains visible after reload, but images must be attached again
-    // before a historical turn can be resent.
+    // if IndexedDB is unavailable.
+    void persistConversationImages(messages)
     setSavedConvs((current) => withConversation(current, convId, messages))
   }, [messages, convId])
 
@@ -228,16 +234,26 @@ export function PlaygroundPage() {
     persistConversations(savedConvs)
   }, [savedConvs])
 
-  const handleLoad = (id: string) => {
+  const handleLoad = async (id: string) => {
     const conv = savedConvs[id]
     if (conv) {
-      setMessages(conv)
+      let restored = conv
+      try {
+        restored = await hydrateConversationImages(conv)
+      } catch {
+        // Keep the conversation usable even if browser storage is unavailable.
+      }
+      setMessages(restored)
       setConvId(id)
       toast.success(t("playground.restored"))
     }
   }
 
   const handleDeleteConv = (id: string) => {
+    const conversation = savedConvs[id]
+    if (conversation) {
+      void deleteConversationImages(conversation)
+    }
     setSavedConvs((current) => withoutConversation(current, id))
     if (convId === id) {
       setConvId(null)
@@ -438,7 +454,7 @@ export function PlaygroundPage() {
                   <div key={id} className="flex items-center gap-1 px-1">
                     <DropdownMenuItem
                       className="flex-1 truncate"
-                      onClick={() => handleLoad(id)}
+                      onClick={() => void handleLoad(id)}
                     >
                       {msgs[0]?.content.slice(0, 40) || t("playground.emptyConversation")}...
                     </DropdownMenuItem>

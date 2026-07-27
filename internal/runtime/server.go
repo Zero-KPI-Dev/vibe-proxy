@@ -50,6 +50,7 @@ type Server struct {
 	metrics          *metrics.Prometheus
 	sink             telemetry.EventSink
 	recent           *telemetry.RecentStore
+	observability    telemetry.ObservabilityReader
 	catalog          *modelcatalog.Service
 	semaphore        sync.Map
 }
@@ -62,7 +63,14 @@ func New(cfgPath string, cfg *config.RuntimeConfig, sink telemetry.EventSink, pr
 	if ms, ok := sink.(interface{ RecentStore() *telemetry.RecentStore }); ok {
 		recent = ms.RecentStore()
 	}
-	s := &Server{cfgPath: cfgPath, authenticator: auth.NewAuthenticator(), httpClient: &http.Client{Timeout: 0}, ocrHTTPClient: &http.Client{}, metrics: prom, sink: sink, recent: recent, catalog: modelcatalog.NewService(modelcatalog.Options{CachePath: modelCatalogCachePath(cfgPath, cfg)}), clientAdapters: []protocol.ClientAdapter{clientopenai.ChatAdapter{}, clientopenai.ResponsesAdapter{}, clientanthropic.MessagesAdapter{}}, providerAdapters: map[string]protocol.ProviderAdapter{"anthropic": provideranthropic.Provider{}, "openai-compatible": provideropenai.Provider{}}}
+	var observability telemetry.ObservabilityReader
+	if reader, ok := sink.(telemetry.ObservabilityReader); ok {
+		observability = reader
+	}
+	if provider, ok := sink.(telemetry.ObservabilityReaderProvider); ok {
+		observability = provider.ObservabilityReader()
+	}
+	s := &Server{cfgPath: cfgPath, authenticator: auth.NewAuthenticator(), httpClient: &http.Client{Timeout: 0}, ocrHTTPClient: &http.Client{}, metrics: prom, sink: sink, recent: recent, observability: observability, catalog: modelcatalog.NewService(modelcatalog.Options{CachePath: modelCatalogCachePath(cfgPath, cfg)}), clientAdapters: []protocol.ClientAdapter{clientopenai.ChatAdapter{}, clientopenai.ResponsesAdapter{}, clientanthropic.MessagesAdapter{}}, providerAdapters: map[string]protocol.ProviderAdapter{"anthropic": provideranthropic.Provider{}, "openai-compatible": provideropenai.Provider{}}}
 	s.snapshot.Store(s.buildSnapshot(cfg))
 	return s
 }
@@ -336,6 +344,14 @@ func (s *Server) handleWithClient(w http.ResponseWriter, r *http.Request, truste
 		tracked := streamengine.Track(ctx, events, func(stats streamengine.Stats) {
 			streamStats = stats
 			tracker.Event.Usage = toTelemetryUsage(stats.Usage)
+			if !stats.FirstTokenAt.IsZero() {
+				firstTokenAt := stats.FirstTokenAt
+				tracker.Event.FirstTokenAt = &firstTokenAt
+				tracker.Event.TTFTMillis = firstTokenAt.Sub(tracker.Event.StartedAt).Milliseconds()
+			}
+			if stats.OutputTokenCount > 1 && !stats.FirstTokenAt.IsZero() && !stats.CompletedAt.IsZero() {
+				tracker.Event.TPOTMillis = float64(stats.CompletedAt.Sub(stats.FirstTokenAt).Milliseconds()) / float64(stats.OutputTokenCount-1)
+			}
 		})
 		if err := clientAdapter.EncodeStream(ctx, w, tracked); err != nil {
 			ge := errorToIR(err)
@@ -678,13 +694,33 @@ func (s *Server) adminRecentRequests(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	limit := 50
-	if s.recent == nil {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"active": []telemetry.Event{}, "recent": []telemetry.Event{}})
-		return
+	active := []telemetry.Event{}
+	recent := []telemetry.Event{}
+	if s.recent != nil {
+		active = s.recent.Active()
+		recent = s.recent.Recent(limit)
+	}
+	if s.observability != nil && len(recent) < limit {
+		persisted, err := s.observability.RecentFinished(limit)
+		if err == nil {
+			seen := make(map[string]struct{}, len(recent))
+			for _, event := range recent {
+				seen[event.RequestID] = struct{}{}
+			}
+			for _, event := range persisted {
+				if len(recent) >= limit {
+					break
+				}
+				if _, exists := seen[event.RequestID]; exists {
+					continue
+				}
+				recent = append(recent, event)
+				seen[event.RequestID] = struct{}{}
+			}
+		}
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"active": s.recent.Active(), "recent": s.recent.Recent(limit)})
+	json.NewEncoder(w).Encode(map[string]any{"active": active, "recent": recent})
 }
 
 func (s *Server) notImplemented(message string) http.HandlerFunc {

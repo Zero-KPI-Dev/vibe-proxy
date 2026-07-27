@@ -377,14 +377,31 @@ func (s *Server) adminMetricsSummary(w http.ResponseWriter, r *http.Request) {
 	for _, p := range snap.Config.Providers {
 		totalModels += len(p.Models)
 	}
+	var totalRequests int64
+	var promptTokens int64
+	var completionTokens int64
+	var totalTokens int64
+	if s.observability != nil {
+		now := time.Now().UTC()
+		todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+		summary, err := s.observability.MetricsSummary(todayStart)
+		if err != nil {
+			http.Error(w, `{"error":"metrics_summary_failed"}`, http.StatusInternalServerError)
+			return
+		}
+		totalRequests = summary.TotalRequests
+		promptTokens = summary.TodayTokens.Prompt
+		completionTokens = summary.TodayTokens.Completion
+		totalTokens = summary.TodayTokens.Total
+	}
 	s.writeJSON(w, map[string]any{
-		"total_requests":   0,
+		"total_requests":   totalRequests,
 		"active_providers": totalProviders,
 		"total_models":     totalModels,
 		"today_tokens": map[string]int64{
-			"prompt":     0,
-			"completion": 0,
-			"total":      0,
+			"prompt":     promptTokens,
+			"completion": completionTokens,
+			"total":      totalTokens,
 		},
 	})
 }
@@ -393,11 +410,43 @@ func (s *Server) adminMetricsHistory(w http.ResponseWriter, r *http.Request) {
 	if !s.adminAuthorize(w, r) {
 		return
 	}
-	// Return empty history for now; Prometheus scraping will provide real data
+	rangeName := r.URL.Query().Get("range")
+	window, bucket, ok := metricsRange(rangeName)
+	if !ok {
+		http.Error(w, `{"error":"invalid_metrics_range"}`, http.StatusBadRequest)
+		return
+	}
+	points := []any{}
+	if s.observability != nil {
+		history, err := s.observability.MetricsHistory(time.Now().UTC().Add(-window), bucket)
+		if err != nil {
+			http.Error(w, `{"error":"metrics_history_failed"}`, http.StatusInternalServerError)
+			return
+		}
+		points = make([]any, len(history))
+		for i := range history {
+			points[i] = history[i]
+		}
+	}
 	s.writeJSON(w, map[string]any{
-		"range":  r.URL.Query().Get("range"),
-		"points": []any{},
+		"range":  rangeName,
+		"points": points,
 	})
+}
+
+func metricsRange(value string) (window time.Duration, bucket time.Duration, ok bool) {
+	switch value {
+	case "", "1h":
+		return time.Hour, 5 * time.Minute, true
+	case "6h":
+		return 6 * time.Hour, 30 * time.Minute, true
+	case "24h":
+		return 24 * time.Hour, time.Hour, true
+	case "7d":
+		return 7 * 24 * time.Hour, 6 * time.Hour, true
+	default:
+		return 0, 0, false
+	}
 }
 
 func (s *Server) adminProviderHealth(w http.ResponseWriter, r *http.Request) {

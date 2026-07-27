@@ -12,6 +12,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/a448582655/vibe-proxy/internal/config"
 	"github.com/a448582655/vibe-proxy/internal/metrics"
@@ -26,6 +27,28 @@ var testProm *metrics.Prometheus
 type roundTrip func(*http.Request) (*http.Response, error)
 
 func (f roundTrip) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestMetricsRange(t *testing.T) {
+	tests := []struct {
+		value  string
+		window time.Duration
+		bucket time.Duration
+		ok     bool
+	}{
+		{value: "", window: time.Hour, bucket: 5 * time.Minute, ok: true},
+		{value: "1h", window: time.Hour, bucket: 5 * time.Minute, ok: true},
+		{value: "6h", window: 6 * time.Hour, bucket: 30 * time.Minute, ok: true},
+		{value: "24h", window: 24 * time.Hour, bucket: time.Hour, ok: true},
+		{value: "7d", window: 7 * 24 * time.Hour, bucket: 6 * time.Hour, ok: true},
+		{value: "invalid", ok: false},
+	}
+	for _, test := range tests {
+		window, bucket, ok := metricsRange(test.value)
+		if ok != test.ok || window != test.window || bucket != test.bucket {
+			t.Fatalf("metricsRange(%q) = %s, %s, %v", test.value, window, bucket, ok)
+		}
+	}
+}
 
 func TestRuntimeModelsEndpoint(t *testing.T) {
 	s := newTestServer(t, func(r *http.Request) (*http.Response, error) { return jsonResponse(200, `{}`), nil })
@@ -190,6 +213,7 @@ func TestRuntimeOCRFallbackForAllClientProtocolsAndCache(t *testing.T) {
 			t.Fatalf("upstream did not receive normalized OCR text: %s", body)
 		}
 		if strings.Contains(string(body), `"stream":true`) {
+			time.Sleep(2 * time.Millisecond)
 			return jsonResponse(200, "data: {\"id\":\"chatcmpl_ocr_stream\",\"choices\":[{\"delta\":{\"content\":\"ocr stream\"},\"finish_reason\":\"\"}]}\n\ndata: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"), nil
 		}
 		return jsonResponse(200, `{"id":"chatcmpl_ocr","model":"raw-chat","choices":[{"message":{"role":"assistant","content":"ocr ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}}`), nil
@@ -227,8 +251,11 @@ func TestRuntimeOCRFallbackForAllClientProtocolsAndCache(t *testing.T) {
 	if ocrCalls.Load() != 1 || upstreamCalls.Load() != 4 {
 		t.Fatalf("unexpected call counts: OCR=%d upstream=%d", ocrCalls.Load(), upstreamCalls.Load())
 	}
-	var sawOCR, sawCache, sawRejected bool
+	var sawOCR, sawCache, sawRejected, sawStreamTiming bool
 	for _, event := range recent.Recent(20) {
+		if event.FirstTokenAt != nil && event.TTFTMillis > 0 {
+			sawStreamTiming = true
+		}
 		if event.Transformation == nil {
 			continue
 		}
@@ -246,6 +273,9 @@ func TestRuntimeOCRFallbackForAllClientProtocolsAndCache(t *testing.T) {
 	}
 	if !sawOCR || !sawCache || !sawRejected {
 		t.Fatalf("missing structured OCR telemetry: %+v", recent.Recent(20))
+	}
+	if !sawStreamTiming {
+		t.Fatalf("missing streaming latency telemetry: %+v", recent.Recent(20))
 	}
 }
 
