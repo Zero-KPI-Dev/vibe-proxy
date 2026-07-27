@@ -10,12 +10,13 @@ import {
 import { Skeleton } from "@/components/ui/skeleton"
 import { providerApi } from "@/lib/api"
 import { useTranslation } from "react-i18next"
+import type { PlaygroundEndpoint } from "@/lib/playground-request"
 
 interface ModelSelectorProps {
   value: string
   onChange: (value: string) => void
-  endpoint: string
-  onEndpointChange: (value: string) => void
+  endpoint: PlaygroundEndpoint
+  onEndpointChange: (value: PlaygroundEndpoint) => void
 }
 
 type ModelOption = { id: string; vibe_type?: "alias" | "raw" }
@@ -25,19 +26,9 @@ export function ModelSelector({ value, onChange, endpoint, onEndpointChange }: M
   const { data, isLoading, error } = useQuery({
     queryKey: ["models"],
     queryFn: async () => {
-      const token = localStorage.getItem("vibe_admin_token") ?? ""
-      const resp = await fetch("/v1/models", {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      })
-      if (resp.ok) {
-        const json = await resp.json()
-        return (json.data ?? []) as ModelOption[]
-      }
-
-      // The data-plane /v1/models endpoint requires a client key. For the
-      // local admin playground, fall back to the admin snapshot so the user can
-      // still choose configured aliases/raw models without creating a client key
-      // first.
+      // The control-plane playground is authenticated with the admin token.
+      // Read its model choices from the admin snapshot instead of deliberately
+      // sending that token to the data-plane /v1/models endpoint.
       const snapshot = await providerApi.list()
       const resolver = snapshot.model_resolver as unknown as {
         Aliases?: Record<string, unknown>
@@ -76,7 +67,7 @@ export function ModelSelector({ value, onChange, endpoint, onEndpointChange }: M
 
   return (
     <div className="flex gap-2 items-center">
-      <Select value={endpoint} onValueChange={onEndpointChange}>
+      <Select value={endpoint} onValueChange={(value) => onEndpointChange(value as PlaygroundEndpoint)}>
         <SelectTrigger className="w-44">
           <SelectValue />
         </SelectTrigger>

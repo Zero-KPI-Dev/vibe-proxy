@@ -58,6 +58,83 @@ func TestRuntimeOpenAIChatToOpenAICompatible(t *testing.T) {
 	}
 }
 
+func TestRuntimeAdminPlaygroundUsesFullPipelineWithoutDataPlaneKey(t *testing.T) {
+	t.Setenv("VIBE_PROXY_ADMIN_TOKEN", "admin-token")
+	cfg, err := config.CompileSimple(config.SimpleConfig{
+		Security: config.SecurityConfig{AdminBearerTokenEnv: "VIBE_PROXY_ADMIN_TOKEN"},
+		Providers: map[string]config.ProviderConfig{"mockai": {
+			Type:    "openai-compatible",
+			BaseURL: "https://mock.openai/v1",
+			Auth:    upstreamauth.Profile{Type: "none"},
+			Models:  []string{"raw-chat"},
+		}},
+		Models: config.ModelsConfig{AllowRaw: true, Aliases: map[string]string{"vibe-fast": "mockai/raw-chat"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recent := telemetry.NewRecentStore(10)
+	testPromOnce.Do(func() { testProm = metrics.New() })
+	s := New("", cfg, metrics.MultiSink{recent}, testProm)
+	s.SetHTTPClient(&http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
+		if r.URL.String() != "https://mock.openai/v1/chat/completions" {
+			t.Fatalf("unexpected upstream URL: %s", r.URL.String())
+		}
+		return jsonResponse(200, `{"id":"chatcmpl_admin","model":"raw-chat","choices":[{"message":{"role":"assistant","content":"admin playground ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`), nil
+	})})
+
+	unauthorized := httptest.NewRequest(http.MethodPost, "/admin/playground/v1/chat/completions", strings.NewReader(`{"model":"vibe-fast","messages":[{"role":"user","content":"hi"}]}`))
+	unauthorizedW := httptest.NewRecorder()
+	s.Routes().ServeHTTP(unauthorizedW, unauthorized)
+	if unauthorizedW.Code != http.StatusUnauthorized {
+		t.Fatalf("admin playground accepted missing admin token: %d %s", unauthorizedW.Code, unauthorizedW.Body.String())
+	}
+
+	publicWithAdminToken := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"vibe-fast","messages":[{"role":"user","content":"hi"}]}`))
+	publicWithAdminToken.Header.Set("Authorization", "Bearer admin-token")
+	publicW := httptest.NewRecorder()
+	s.Routes().ServeHTTP(publicW, publicWithAdminToken)
+	if publicW.Code != http.StatusUnauthorized || !strings.Contains(publicW.Body.String(), `"code":"invalid_api_key"`) {
+		t.Fatalf("public data plane unexpectedly trusted admin token: %d %s", publicW.Code, publicW.Body.String())
+	}
+
+	requests := []struct {
+		path string
+		body string
+		want string
+	}{
+		{"/admin/playground/v1/chat/completions", `{"model":"vibe-fast","messages":[{"role":"user","content":"hi"}]}`, "admin playground ok"},
+		{"/admin/playground/v1/responses", `{"model":"vibe-fast","input":"hi"}`, `"object":"response"`},
+		{"/admin/playground/anthropic/v1/messages", `{"model":"vibe-fast","max_tokens":32,"messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}`, `"type":"message"`},
+	}
+	requestIDs := map[string]bool{}
+	for _, item := range requests {
+		req := adminJSONRequest(http.MethodPost, item.path, item.body)
+		w := httptest.NewRecorder()
+		s.Routes().ServeHTTP(w, req)
+		if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), item.want) {
+			t.Fatalf("unexpected admin playground response for %s: %d %s", item.path, w.Code, w.Body.String())
+		}
+		requestID := w.Header().Get("X-Vibe-Proxy-Request-ID")
+		if requestID == "" {
+			t.Fatalf("admin playground response did not expose a request ID: %v", w.Header())
+		}
+		requestIDs[requestID] = true
+	}
+	events := recent.Recent(10)
+	if len(events) != len(requests) {
+		t.Fatalf("admin playground requests were not all tracked: %+v", events)
+	}
+	for _, event := range events {
+		if event.ClientName != "admin-playground" || !requestIDs[event.RequestID] {
+			t.Fatalf("admin playground request was not tracked correctly: %+v", events)
+		}
+	}
+	if len(requestIDs) != len(requests) {
+		t.Fatalf("admin playground request was not tracked correctly: %+v", events)
+	}
+}
+
 func TestRuntimeDisabledMultimodalPreprocessorPreservesImages(t *testing.T) {
 	s := newTestServer(t, func(r *http.Request) (*http.Response, error) {
 		body, _ := io.ReadAll(r.Body)
@@ -213,7 +290,7 @@ func TestRuntimeFallsBackFromOCRToVisionProvider(t *testing.T) {
 		t.Fatalf("unexpected Vision fallback response: %d %v %s", w.Code, w.Header(), w.Body.String())
 	}
 	events := recent.Recent(10)
-	if len(events) != 1 || events[0].Transformation == nil || events[0].Transformation.MultimodalRoute != "vision_fallback" || events[0].Transformation.OriginalProvider != "text" || events[0].Transformation.EffectiveProvider != "vision" || events[0].Transformation.OCRFailureCode != "ocr_no_usable_text" {
+	if len(events) != 1 || events[0].Transformation == nil || events[0].Transformation.MultimodalRoute != "vision_fallback" || events[0].Transformation.RouteReason != "ocr_no_usable_text" || events[0].Transformation.ModelImageSupport != "unsupported" || events[0].Transformation.OriginalProvider != "text" || events[0].Transformation.EffectiveProvider != "vision" || events[0].Transformation.OCRFailureCode != "ocr_no_usable_text" {
 		t.Fatalf("unexpected Vision telemetry: %+v", events)
 	}
 }

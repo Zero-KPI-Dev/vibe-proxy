@@ -1,15 +1,17 @@
-import { User, Bot, Copy, Check } from "lucide-react"
+import { User, Bot, Copy, Check, FileImage } from "lucide-react"
 import { useState } from "react"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import ReactMarkdown from "react-markdown"
+import type { PlaygroundImage } from "@/lib/playground-request"
 
 interface ChatMessageProps {
   role: "user" | "assistant"
   content: string
+  images?: PlaygroundImage[]
 }
 
-export function ChatMessage({ role, content }: ChatMessageProps) {
+export function ChatMessage({ role, content, images = [] }: ChatMessageProps) {
   const [copied, setCopied] = useState(false)
 
   const handleCopy = () => {
@@ -39,12 +41,34 @@ export function ChatMessage({ role, content }: ChatMessageProps) {
             : "bg-muted"
         )}
       >
+        {images.length > 0 && (
+          <div className="mb-2 grid max-w-md grid-cols-2 gap-2">
+            {images.map((image) =>
+              image.dataUrl ? (
+                <img
+                  key={image.id}
+                  src={image.dataUrl}
+                  alt={image.name}
+                  className="max-h-40 w-full rounded-lg border border-white/20 object-cover"
+                />
+              ) : (
+                <div
+                  key={image.id}
+                  className="flex items-center gap-2 rounded-lg border border-current/20 px-2 py-2 text-xs"
+                >
+                  <FileImage className="h-4 w-4 shrink-0" />
+                  <span className="truncate">{image.name}</span>
+                </div>
+              )
+            )}
+          </div>
+        )}
         <div className="prose prose-sm prose-invert max-w-none">
           {role === "assistant" ? (
             <ReactMarkdown>{content}</ReactMarkdown>
-          ) : (
+          ) : content ? (
             <p className="whitespace-pre-wrap">{content}</p>
-          )}
+          ) : null}
         </div>
         <Button
           variant="ghost"

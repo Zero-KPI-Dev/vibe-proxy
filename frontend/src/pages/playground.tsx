@@ -1,17 +1,26 @@
 import { useState, useRef, useEffect, useCallback } from "react"
-import { Send, Trash2, Settings2, StopCircle, History, FileJson, KeyRound, Eye, EyeOff } from "lucide-react"
+import {
+  Send,
+  Trash2,
+  Settings2,
+  StopCircle,
+  History,
+  FileJson,
+  KeyRound,
+  Eye,
+  EyeOff,
+  ImagePlus,
+  X,
+  Workflow,
+  LoaderCircle,
+} from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 import { Separator } from "@/components/ui/separator"
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import {
   Sheet,
   SheetContent,
@@ -40,16 +49,26 @@ import { Badge } from "@/components/ui/badge"
 import { ChatMessage } from "@/components/chat-message"
 import { ModelSelector } from "@/components/model-selector"
 import { EmptyState } from "@/components/empty-state"
+import { MultimodalFlow } from "@/components/multimodal-flow"
+import { requestApi } from "@/lib/api"
+import type { RequestEvent } from "@/lib/types"
+import {
+  buildPlaygroundBody,
+  streamDelta,
+  unaryText,
+  type PlaygroundEndpoint,
+  type PlaygroundImage,
+  type PlaygroundMessage,
+} from "@/lib/playground-request"
 import { toast } from "sonner"
 import { useTranslation } from "react-i18next"
 
-type ChatEntry = {
-  id: string
-  role: "user" | "assistant"
-  content: string
-}
+type ChatEntry = PlaygroundMessage
 
 const STORAGE_KEY = "vibe_playground_conversations"
+const MAX_IMAGES = 4
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024
+const SUPPORTED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"])
 
 function loadConversations(): Record<string, ChatEntry[]> {
   try {
@@ -62,7 +81,13 @@ function loadConversations(): Record<string, ChatEntry[]> {
 
 function saveConversation(id: string, messages: ChatEntry[]) {
   const all = loadConversations()
-  all[id] = messages
+  // Keep local history small and avoid retaining image bytes in localStorage.
+  // Metadata remains visible after reload, but images must be attached again
+  // before a historical turn can be resent.
+  all[id] = messages.map((message) => ({
+    ...message,
+    images: message.images?.map(({ dataUrl: _dataUrl, ...image }) => image),
+  }))
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(all))
   } catch {
@@ -81,7 +106,7 @@ export function PlaygroundPage() {
   const [messages, setMessages] = useState<ChatEntry[]>([])
   const [input, setInput] = useState("")
   const [model, setModel] = useState("")
-  const [endpoint, setEndpoint] = useState("openai_chat")
+  const [endpoint, setEndpoint] = useState<PlaygroundEndpoint>("openai_chat")
   const [streaming, setStreaming] = useState(true)
   const [isStreaming, setIsStreaming] = useState(false)
   const [temperature, setTemperature] = useState(0.7)
@@ -93,8 +118,12 @@ export function PlaygroundPage() {
   const [useClientKey, setUseClientKey] = useState(false)
   const [clientKeyValue, setClientKeyValue] = useState("")
   const [showKey, setShowKey] = useState(false)
+  const [pendingImages, setPendingImages] = useState<PlaygroundImage[]>([])
+  const [flowEvent, setFlowEvent] = useState<RequestEvent | null>(null)
+  const [flowLoading, setFlowLoading] = useState(false)
   const abortRef = useRef<AbortController | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   const savedConvs = loadConversations()
   const convEntries = Object.entries(savedConvs)
@@ -105,6 +134,73 @@ export function PlaygroundPage() {
       : endpoint === "anthropic"
         ? "/anthropic/v1/messages"
         : "/v1/chat/completions"
+
+  const readImage = (file: File) =>
+    new Promise<PlaygroundImage>((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () =>
+        resolve({
+          id: crypto.randomUUID(),
+          name: file.name,
+          mediaType: file.type,
+          size: file.size,
+          dataUrl: String(reader.result),
+        })
+      reader.onerror = () => reject(reader.error ?? new Error("image_read_failed"))
+      reader.readAsDataURL(file)
+    })
+
+  const addImages = async (files: File[]) => {
+    const availableSlots = MAX_IMAGES - pendingImages.length
+    if (availableSlots <= 0) {
+      toast.error(t("playground.tooManyImages", { count: MAX_IMAGES }))
+      return
+    }
+    const accepted: File[] = []
+    for (const file of files) {
+      if (!SUPPORTED_IMAGE_TYPES.has(file.type)) {
+        toast.error(t("playground.unsupportedImage", { name: file.name }))
+        continue
+      }
+      if (file.size > MAX_IMAGE_BYTES) {
+        toast.error(t("playground.imageTooLarge", { name: file.name, size: 5 }))
+        continue
+      }
+      accepted.push(file)
+    }
+    if (accepted.length > availableSlots) {
+      toast.error(t("playground.tooManyImages", { count: MAX_IMAGES }))
+    }
+    const selected = accepted.slice(0, availableSlots)
+    try {
+      const next = await Promise.all(selected.map(readImage))
+      setPendingImages((current) => [...current, ...next])
+    } catch {
+      toast.error(t("playground.imageReadFailed"))
+    }
+  }
+
+  const pollRequestFlow = async (requestId: string) => {
+    setFlowLoading(true)
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      try {
+        const result = await requestApi.recent()
+        const event = [...(result.recent ?? []), ...(result.active ?? [])].find(
+          (item) => item.request_id === requestId
+        )
+        if (event?.completed_at || (event && attempt === 7)) {
+          setFlowEvent(event)
+          setFlowLoading(false)
+          return
+        }
+      } catch {
+        setFlowLoading(false)
+        return
+      }
+      await new Promise((resolve) => setTimeout(resolve, 150))
+    }
+    setFlowLoading(false)
+  }
 
   const scrollToBottom = useCallback(() => {
     if (scrollRef.current) {
@@ -140,48 +236,58 @@ export function PlaygroundPage() {
 
   const handleSend = async () => {
     const trimmed = input.trim()
-    if (!trimmed || !model) return
+    if ((!trimmed && pendingImages.length === 0) || !model) return
+    if (useClientKey && !clientKeyValue.trim()) {
+      toast.error(t("playground.clientKeyRequired"))
+      return
+    }
 
-    const userMsg: ChatEntry = { id: crypto.randomUUID(), role: "user", content: trimmed }
+    const userMsg: ChatEntry = {
+      id: crypto.randomUUID(),
+      role: "user",
+      content: trimmed,
+      images: pendingImages,
+    }
     const assistantMsg: ChatEntry = { id: crypto.randomUUID(), role: "assistant", content: "" }
+    const requestMessages = [...messages, userMsg]
 
     setMessages((prev) => [...prev, userMsg, assistantMsg])
     if (!convId) setConvId(crypto.randomUUID())
     setInput("")
+    setPendingImages([])
+    setFlowEvent(null)
+    setFlowLoading(true)
     setIsStreaming(true)
 
     const controller = new AbortController()
     abortRef.current = controller
+    let requestId = ""
 
     try {
       const adminToken = localStorage.getItem("vibe_admin_token") ?? ""
-      const token = useClientKey && clientKeyValue ? clientKeyValue : adminToken
+      const token = useClientKey ? clientKeyValue.trim() : adminToken
       const headers: Record<string, string> = {
         "Content-Type": "application/json",
       }
       if (token) headers["Authorization"] = `Bearer ${token}`
 
-      const body: Record<string, unknown> = {
-        model,
-        messages: [...messages, userMsg].map((m) => ({
-          role: m.role,
-          content: m.content,
-        })),
+      const stop = stopSequences.split(",").map((item) => item.trim()).filter(Boolean)
+      const body = buildPlaygroundBody(endpoint, model, requestMessages, {
         stream: streaming,
         temperature,
-        top_p: topP,
-        max_tokens: maxTokens,
-      }
-      if (stopSequences.trim()) {
-        body.stop = stopSequences.split(",").map((s) => s.trim()).filter(Boolean)
-      }
+        topP,
+        maxTokens,
+        stop,
+      })
+      const requestPath = useClientKey ? apiPath : `/admin/playground${apiPath}`
 
-      const resp = await fetch(apiPath, {
+      const resp = await fetch(requestPath, {
         method: "POST",
         headers,
         body: JSON.stringify(body),
         signal: controller.signal,
       })
+      requestId = resp.headers.get("X-Vibe-Proxy-Request-ID") ?? ""
 
       if (!resp.ok) {
         const errText = await resp.text()
@@ -192,7 +298,6 @@ export function PlaygroundPage() {
               : m
           )
         )
-        setIsStreaming(false)
         return
       }
 
@@ -214,13 +319,8 @@ export function PlaygroundPage() {
               const data = line.slice(6).trim()
               if (data === "[DONE]") continue
               try {
-                const parsed = JSON.parse(data)
-                let delta = ""
-                if (endpoint === "anthropic") {
-                  delta = parsed.delta?.text ?? ""
-                } else {
-                  delta = parsed.choices?.[0]?.delta?.content ?? parsed.choices?.[0]?.text ?? ""
-                }
+                const parsed = JSON.parse(data) as Record<string, any>
+                const delta = streamDelta(endpoint, parsed)
                 if (delta) {
                   setMessages((prev) =>
                     prev.map((m) =>
@@ -239,12 +339,7 @@ export function PlaygroundPage() {
       } else {
         const json = await resp.json()
         setRawJson(JSON.stringify(json, null, 2))
-        let content = ""
-        if (endpoint === "anthropic") {
-          content = json.content?.[0]?.text ?? JSON.stringify(json)
-        } else {
-          content = json.choices?.[0]?.message?.content ?? json.choices?.[0]?.text ?? JSON.stringify(json)
-        }
+        const content = unaryText(endpoint, json)
         setMessages((prev) =>
           prev.map((m) =>
             m.id === assistantMsg.id ? { ...m, content } : m
@@ -270,6 +365,11 @@ export function PlaygroundPage() {
         )
       }
     } finally {
+      if (requestId) {
+        await pollRequestFlow(requestId)
+      } else {
+        setFlowLoading(false)
+      }
       setIsStreaming(false)
       abortRef.current = null
     }
@@ -284,6 +384,9 @@ export function PlaygroundPage() {
     setInput("")
     setConvId(null)
     setRawJson(null)
+    setPendingImages([])
+    setFlowEvent(null)
+    setFlowLoading(false)
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -487,6 +590,25 @@ export function PlaygroundPage() {
         )}
       </div>
 
+      {(flowEvent || flowLoading) && (
+        <Card className="mb-4 shrink-0 border-primary/20">
+          <CardHeader className="pb-3">
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Workflow className="h-4 w-4 text-primary" />
+              {t("playground.requestFlow")}
+              {flowLoading && <LoaderCircle className="h-4 w-4 animate-spin text-muted-foreground" />}
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {flowEvent ? (
+              <MultimodalFlow event={flowEvent} />
+            ) : (
+              <p className="text-sm text-muted-foreground">{t("playground.loadingFlow")}</p>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
       <div
         ref={scrollRef}
         className="flex-1 overflow-y-auto rounded-xl border border-border bg-card mb-4"
@@ -500,34 +622,108 @@ export function PlaygroundPage() {
         ) : (
           <div className="px-4">
             {messages.map((msg) => (
-              <ChatMessage key={msg.id} role={msg.role} content={msg.content} />
+              <ChatMessage
+                key={msg.id}
+                role={msg.role}
+                content={msg.content}
+                images={msg.images}
+              />
             ))}
           </div>
         )}
       </div>
 
-      <div className="flex items-end gap-2 shrink-0">
-        <div className="flex-1 relative">
-          <Input
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder={model ? t("playground.messagePlaceholder") : t("playground.selectModelFirst")}
-            disabled={!model || isStreaming}
-            className="pr-10 py-3 h-auto"
-          />
-        </div>
-        {isStreaming ? (
-          <Button variant="destructive" onClick={handleStop}>
-            <StopCircle className="h-4 w-4 mr-1" />
-            {t("common.stop")}
-          </Button>
-        ) : (
-          <Button onClick={handleSend} disabled={!model || !input.trim()}>
-            <Send className="h-4 w-4 mr-1" />
-            {t("common.send")}
-          </Button>
+      <div className="shrink-0 space-y-2">
+        {pendingImages.length > 0 && (
+          <div className="flex flex-wrap gap-2 rounded-lg border border-border bg-muted/30 p-2">
+            {pendingImages.map((image) => (
+              <div key={image.id} className="group relative h-20 w-20">
+                <img
+                  src={image.dataUrl}
+                  alt={image.name}
+                  className="h-full w-full rounded-md border border-border object-cover"
+                />
+                <Button
+                  type="button"
+                  variant="destructive"
+                  size="icon"
+                  className="absolute -right-2 -top-2 h-6 w-6 opacity-90"
+                  onClick={() =>
+                    setPendingImages((current) => current.filter((item) => item.id !== image.id))
+                  }
+                  aria-label={t("playground.removeImage", { name: image.name })}
+                >
+                  <X className="h-3 w-3" />
+                </Button>
+                <div className="absolute inset-x-0 bottom-0 truncate rounded-b-md bg-black/65 px-1 py-0.5 text-[10px] text-white">
+                  {image.name}
+                </div>
+              </div>
+            ))}
+          </div>
         )}
+        <div className="flex items-end gap-2">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/png,image/jpeg,image/webp,image/gif"
+            multiple
+            className="hidden"
+            onChange={(event) => {
+              void addImages(Array.from(event.target.files ?? []))
+              event.target.value = ""
+            }}
+          />
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="shrink-0"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={!model || isStreaming || pendingImages.length >= MAX_IMAGES}
+            title={t("playground.attachImage")}
+          >
+            <ImagePlus className="mr-1 h-4 w-4" />
+            {t("playground.attachImage")}
+          </Button>
+          <div className="flex-1">
+            <Textarea
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+              onPaste={(event) => {
+                const imageFiles = Array.from(event.clipboardData.files).filter((file) =>
+                  file.type.startsWith("image/")
+                )
+                if (imageFiles.length > 0) {
+                  event.preventDefault()
+                  void addImages(imageFiles)
+                }
+              }}
+              placeholder={model ? t("playground.messagePlaceholder") : t("playground.selectModelFirst")}
+              disabled={!model || isStreaming}
+              className="min-h-11 resize-none"
+              rows={1}
+            />
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              {t("playground.imageHelp", { count: MAX_IMAGES, size: 5 })}
+            </p>
+          </div>
+          {isStreaming ? (
+            <Button variant="destructive" onClick={handleStop}>
+              <StopCircle className="h-4 w-4 mr-1" />
+              {t("common.stop")}
+            </Button>
+          ) : (
+            <Button
+              onClick={handleSend}
+              disabled={!model || (!input.trim() && pendingImages.length === 0)}
+            >
+              <Send className="h-4 w-4 mr-1" />
+              {t("common.send")}
+            </Button>
+          )}
+        </div>
       </div>
     </div>
   )

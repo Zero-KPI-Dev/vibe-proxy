@@ -107,6 +107,8 @@ export interface RequestEvent {
 
 export interface TransformationSummary {
   multimodal_route?: string
+  route_reason?: string
+  model_image_support?: ModelCapabilitySupport
   capability_source?: string
   catalog_match?: string
   input_images?: number

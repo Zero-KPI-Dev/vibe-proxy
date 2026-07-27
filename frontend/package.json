@@ -6,8 +6,9 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "test": "npm run test:i18n",
+    "test": "npm run test:i18n && npm run test:playground",
     "test:i18n": "node ./scripts/check-i18n.mjs",
+    "test:playground": "node ./scripts/check-playground.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

@@ -134,6 +134,9 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/healthz", s.healthz)
 
 	// Admin API endpoints
+	mux.HandleFunc("/admin/playground/v1/chat/completions", s.adminPlayground("/v1/chat/completions"))
+	mux.HandleFunc("/admin/playground/v1/responses", s.adminPlayground("/v1/responses"))
+	mux.HandleFunc("/admin/playground/anthropic/v1/messages", s.adminPlayground("/anthropic/v1/messages"))
 	mux.HandleFunc("/admin/config/reload", s.reload)
 	mux.HandleFunc("/admin/config/snapshot", s.adminSnapshot)
 	mux.HandleFunc("/admin/config/validate", s.adminValidateConfig)
@@ -200,6 +203,10 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
+	s.handleWithClient(w, r, nil)
+}
+
+func (s *Server) handleWithClient(w http.ResponseWriter, r *http.Request, trustedClient *auth.Client) {
 	snap := s.current()
 	clientAdapter := s.detectClientAdapter(r)
 	if clientAdapter == nil {
@@ -210,16 +217,23 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 		_ = clientAdapter.EncodeError(r.Context(), w, ir.GatewayError{StatusCode: 405, Kind: "invalid_request_error", Code: "method_not_allowed", Message: "Method not allowed."})
 		return
 	}
-	client, gerr := s.authenticator.AuthenticateDataPlane(r, snap.Config.ClientKeys)
-	if gerr != nil {
-		_ = clientAdapter.EncodeError(r.Context(), w, toIRError(*gerr))
-		return
+	var client auth.Client
+	if trustedClient != nil {
+		client = *trustedClient
+	} else {
+		var gerr *types.GatewayError
+		client, gerr = s.authenticator.AuthenticateDataPlane(r, snap.Config.ClientKeys)
+		if gerr != nil {
+			_ = clientAdapter.EncodeError(r.Context(), w, toIRError(*gerr))
+			return
+		}
 	}
 	creq, err := clientAdapter.ParseRequest(r.Context(), r)
 	if err != nil {
 		_ = clientAdapter.EncodeError(r.Context(), w, errorToIR(err))
 		return
 	}
+	w.Header().Set("X-Vibe-Proxy-Request-ID", creq.ID)
 	if !auth.ModelAllowed(client.AllowedModels, creq.RequestedModel) {
 		_ = clientAdapter.EncodeError(r.Context(), w, ir.GatewayError{StatusCode: 403, Kind: "permission_error", Code: "model_not_allowed", Message: "This API key is not allowed to use the requested model."})
 		return
@@ -350,6 +364,22 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tracker.Finish(http.StatusOK, toTelemetryUsage(out.Usage), "")
+}
+
+func (s *Server) adminPlayground(targetPath string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		snap := s.current()
+		if !auth.AuthorizeAdmin(r, snap.AdminToken) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		clone := r.Clone(r.Context())
+		clonedURL := *r.URL
+		clonedURL.Path = targetPath
+		clone.URL = &clonedURL
+		client := auth.Client{Name: "admin-playground", AllowedModels: []string{"*"}}
+		s.handleWithClient(w, clone, &client)
+	}
 }
 
 func (s *Server) detectClientAdapter(r *http.Request) protocol.ClientAdapter {

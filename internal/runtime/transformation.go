@@ -17,12 +17,14 @@ func transformationSummary(decisions []preprocess.Decision, original, effective 
 		}
 		summary := &telemetry.TransformationSummary{
 			MultimodalRoute:   decision.Route,
+			RouteReason:       decision.Reason,
 			OriginalProvider:  original.ProviderID,
 			OriginalModel:     original.Model,
 			EffectiveProvider: effective.ProviderID,
 			EffectiveModel:    effective.Model,
 		}
 		summary.InputImages = attributeInt(decision.Attributes, "input_image_count")
+		summary.ModelImageSupport = attributeString(decision.Attributes, "model_image_support")
 		summary.CapabilitySource = attributeString(decision.Attributes, "capability_source")
 		summary.CatalogMatch = attributeString(decision.Attributes, "catalog_match")
 		summary.OCRProvider = attributeString(decision.Attributes, "ocr_provider")

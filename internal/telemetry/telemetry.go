@@ -38,6 +38,8 @@ type Event struct {
 
 type TransformationSummary struct {
 	MultimodalRoute   string   `json:"multimodal_route,omitempty"`
+	RouteReason       string   `json:"route_reason,omitempty"`
+	ModelImageSupport string   `json:"model_image_support,omitempty"`
 	CapabilitySource  string   `json:"capability_source,omitempty"`
 	CatalogMatch      string   `json:"catalog_match,omitempty"`
 	InputImages       int      `json:"input_images,omitempty"`
