@@ -11,8 +11,8 @@ import {
   EyeOff,
   ImagePlus,
   X,
-  Workflow,
   LoaderCircle,
+  ClipboardPaste,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -20,7 +20,6 @@ import { Textarea } from "@/components/ui/textarea"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 import { Separator } from "@/components/ui/separator"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import {
   Sheet,
   SheetContent,
@@ -54,6 +53,7 @@ import { requestApi } from "@/lib/api"
 import type { RequestEvent } from "@/lib/types"
 import {
   buildPlaygroundBody,
+  clipboardImageFiles,
   streamDelta,
   unaryText,
   type PlaygroundEndpoint,
@@ -150,11 +150,11 @@ export function PlaygroundPage() {
       reader.readAsDataURL(file)
     })
 
-  const addImages = async (files: File[]) => {
+  const addImages = async (files: File[]): Promise<number> => {
     const availableSlots = MAX_IMAGES - pendingImages.length
     if (availableSlots <= 0) {
       toast.error(t("playground.tooManyImages", { count: MAX_IMAGES }))
-      return
+      return 0
     }
     const accepted: File[] = []
     for (const file of files) {
@@ -175,8 +175,21 @@ export function PlaygroundPage() {
     try {
       const next = await Promise.all(selected.map(readImage))
       setPendingImages((current) => [...current, ...next])
+      return next.length
     } catch {
       toast.error(t("playground.imageReadFailed"))
+      return 0
+    }
+  }
+
+  const handlePasteCapture = async (event: React.ClipboardEvent<HTMLDivElement>) => {
+    const imageFiles = clipboardImageFiles(event.clipboardData)
+    if (imageFiles.length === 0) return
+    event.preventDefault()
+    if (isStreaming) return
+    const attached = await addImages(imageFiles)
+    if (attached > 0) {
+      toast.success(t("playground.pastedImages", { count: attached }))
     }
   }
 
@@ -397,7 +410,7 @@ export function PlaygroundPage() {
   }
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full flex-col" onPasteCapture={(event) => void handlePasteCapture(event)}>
       <div className="flex items-center justify-between mb-4 shrink-0">
         <div>
           <h1 className="text-2xl font-semibold">{t("playground.title")}</h1>
@@ -591,22 +604,21 @@ export function PlaygroundPage() {
       </div>
 
       {(flowEvent || flowLoading) && (
-        <Card className="mb-4 shrink-0 border-primary/20">
-          <CardHeader className="pb-3">
-            <CardTitle className="flex items-center gap-2 text-base">
-              <Workflow className="h-4 w-4 text-primary" />
-              {t("playground.requestFlow")}
-              {flowLoading && <LoaderCircle className="h-4 w-4 animate-spin text-muted-foreground" />}
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            {flowEvent ? (
-              <MultimodalFlow event={flowEvent} />
-            ) : (
-              <p className="text-sm text-muted-foreground">{t("playground.loadingFlow")}</p>
-            )}
-          </CardContent>
-        </Card>
+        <div className="mb-4 shrink-0">
+          {flowEvent ? (
+            <MultimodalFlow event={flowEvent} />
+          ) : (
+            <div className="flex items-center gap-3 rounded-xl border border-border bg-card px-4 py-3 shadow-sm">
+              <span className="flex h-8 w-8 items-center justify-center rounded-full bg-primary/10 text-primary">
+                <LoaderCircle className="h-4 w-4 animate-spin" />
+              </span>
+              <div>
+                <p className="text-sm font-medium">{t("playground.requestFlow")}</p>
+                <p className="text-xs text-muted-foreground">{t("playground.loadingFlow")}</p>
+              </div>
+            </div>
+          )}
+        </div>
       )}
 
       <div
@@ -633,36 +645,8 @@ export function PlaygroundPage() {
         )}
       </div>
 
-      <div className="shrink-0 space-y-2">
-        {pendingImages.length > 0 && (
-          <div className="flex flex-wrap gap-2 rounded-lg border border-border bg-muted/30 p-2">
-            {pendingImages.map((image) => (
-              <div key={image.id} className="group relative h-20 w-20">
-                <img
-                  src={image.dataUrl}
-                  alt={image.name}
-                  className="h-full w-full rounded-md border border-border object-cover"
-                />
-                <Button
-                  type="button"
-                  variant="destructive"
-                  size="icon"
-                  className="absolute -right-2 -top-2 h-6 w-6 opacity-90"
-                  onClick={() =>
-                    setPendingImages((current) => current.filter((item) => item.id !== image.id))
-                  }
-                  aria-label={t("playground.removeImage", { name: image.name })}
-                >
-                  <X className="h-3 w-3" />
-                </Button>
-                <div className="absolute inset-x-0 bottom-0 truncate rounded-b-md bg-black/65 px-1 py-0.5 text-[10px] text-white">
-                  {image.name}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-        <div className="flex items-end gap-2">
+      <div className="shrink-0">
+        <div className="flex items-end gap-3">
           <input
             ref={fileInputRef}
             type="file"
@@ -674,53 +658,80 @@ export function PlaygroundPage() {
               event.target.value = ""
             }}
           />
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="shrink-0"
-            onClick={() => fileInputRef.current?.click()}
-            disabled={!model || isStreaming || pendingImages.length >= MAX_IMAGES}
-            title={t("playground.attachImage")}
-          >
-            <ImagePlus className="mr-1 h-4 w-4" />
-            {t("playground.attachImage")}
-          </Button>
-          <div className="flex-1">
+          <div className="min-w-0 flex-1 overflow-hidden rounded-2xl border border-border bg-card shadow-sm transition focus-within:border-primary/50 focus-within:ring-2 focus-within:ring-primary/10">
+            {pendingImages.length > 0 && (
+              <div className="flex flex-wrap gap-2 px-3 pt-3">
+                {pendingImages.map((image) => (
+                  <div key={image.id} className="group relative h-16 w-16" title={image.name}>
+                    <img
+                      src={image.dataUrl}
+                      alt={image.name}
+                      className="h-full w-full rounded-lg border border-border object-cover"
+                    />
+                    <Button
+                      type="button"
+                      variant="destructive"
+                      size="icon"
+                      className="absolute -right-1.5 -top-1.5 h-5 w-5 rounded-full opacity-95 shadow-sm"
+                      onClick={() =>
+                        setPendingImages((current) => current.filter((item) => item.id !== image.id))
+                      }
+                      aria-label={t("playground.removeImage", { name: image.name })}
+                    >
+                      <X className="h-3 w-3" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
             <Textarea
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
-              onPaste={(event) => {
-                const imageFiles = Array.from(event.clipboardData.files).filter((file) =>
-                  file.type.startsWith("image/")
-                )
-                if (imageFiles.length > 0) {
-                  event.preventDefault()
-                  void addImages(imageFiles)
-                }
-              }}
               placeholder={model ? t("playground.messagePlaceholder") : t("playground.selectModelFirst")}
               disabled={!model || isStreaming}
-              className="min-h-11 resize-none"
-              rows={1}
+              className="min-h-[68px] resize-none border-0 bg-transparent px-4 pb-2 pt-3 shadow-none focus-visible:ring-0"
+              rows={2}
             />
-            <p className="mt-1 text-[11px] text-muted-foreground">
-              {t("playground.imageHelp", { count: MAX_IMAGES, size: 5 })}
-            </p>
+            <div className="flex items-center justify-between gap-3 border-t border-border/60 px-2 py-1.5">
+              <div className="flex min-w-0 items-center gap-1">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 rounded-lg px-2 text-muted-foreground hover:text-foreground"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={!model || isStreaming || pendingImages.length >= MAX_IMAGES}
+                >
+                  <ImagePlus className="mr-1.5 h-4 w-4" />
+                  {t("playground.image")}
+                </Button>
+                <span className="hidden items-center gap-1.5 text-xs text-muted-foreground sm:flex">
+                  <ClipboardPaste className="h-3.5 w-3.5" />
+                  {t("playground.pasteImageHint")}
+                </span>
+              </div>
+              <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
+                {t("playground.imageCounter", {
+                  current: pendingImages.length,
+                  max: MAX_IMAGES,
+                })}
+              </span>
+            </div>
           </div>
           {isStreaming ? (
-            <Button variant="destructive" onClick={handleStop}>
-              <StopCircle className="h-4 w-4 mr-1" />
-              {t("common.stop")}
+            <Button variant="destructive" size="icon" className="h-11 w-11 rounded-xl" onClick={handleStop}>
+              <StopCircle className="h-4 w-4" />
             </Button>
           ) : (
             <Button
               onClick={handleSend}
+              size="icon"
+              className="h-11 w-11 shrink-0 rounded-xl shadow-sm"
               disabled={!model || (!input.trim() && pendingImages.length === 0)}
+              aria-label={t("common.send")}
             >
-              <Send className="h-4 w-4 mr-1" />
-              {t("common.send")}
+              <Send className="h-4 w-4" />
             </Button>
           )}
         </div>

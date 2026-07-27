@@ -1,6 +1,7 @@
 import assert from "node:assert/strict"
 import {
   buildPlaygroundBody,
+  clipboardImageFiles,
   streamDelta,
   unaryText,
 } from "../src/lib/playground-request.ts"
@@ -27,6 +28,25 @@ const parameters = {
   maxTokens: 128,
   stop: ["END"],
 }
+
+const clipboardImage = { name: "clipboard.png", type: "image/png" }
+assert.deepEqual(
+  clipboardImageFiles({
+    items: [
+      { kind: "string", type: "text/plain", getAsFile: () => null },
+      { kind: "file", type: "image/png", getAsFile: () => clipboardImage },
+    ],
+    files: [],
+  }),
+  [clipboardImage]
+)
+assert.deepEqual(
+  clipboardImageFiles({
+    items: [],
+    files: [clipboardImage, { name: "notes.txt", type: "text/plain" }],
+  }),
+  [clipboardImage]
+)
 
 const chat = buildPlaygroundBody("openai_chat", "vision", messages, parameters)
 assert.deepEqual(chat.messages[0].content, [

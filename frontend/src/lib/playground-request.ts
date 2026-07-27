@@ -23,6 +23,24 @@ export interface PlaygroundParameters {
   stream: boolean
 }
 
+type ClipboardImageSource = {
+  items?: ArrayLike<{
+    kind: string
+    type: string
+    getAsFile(): File | null
+  }>
+  files?: ArrayLike<File>
+}
+
+export function clipboardImageFiles(data: ClipboardImageSource): File[] {
+  const itemFiles = Array.from(data.items ?? [])
+    .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+    .map((item) => item.getAsFile())
+    .filter((file): file is File => file != null)
+  if (itemFiles.length > 0) return itemFiles
+  return Array.from(data.files ?? []).filter((file) => file.type.startsWith("image/"))
+}
+
 function usableImages(message: PlaygroundMessage) {
   return (message.images ?? []).filter(
     (image): image is PlaygroundImage & { dataUrl: string } => Boolean(image.dataUrl)
