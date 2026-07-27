@@ -89,18 +89,22 @@ func validateMultimodal(cfg MultimodalConfig) []ValidationIssue {
 	if cfg.Strategy != "ocr_then_vision" {
 		issues = append(issues, issue("error", "multimodal.strategy", "unsupported_multimodal_strategy", "Only ocr_then_vision is supported."))
 	}
-	hasOCR := cfg.OCR.Provider != "" || cfg.OCR.Endpoint != ""
+	hasOCR := cfg.OCR.Provider != ""
 	if !hasOCR && cfg.VisionFallbackModel == "" {
-		issues = append(issues, issue("error", "multimodal", "missing_multimodal_fallback", "An HTTP OCR endpoint or Vision fallback model is required when multimodal fallback is enabled."))
+		issues = append(issues, issue("error", "multimodal", "missing_multimodal_fallback", "A built-in OCR provider, HTTP OCR endpoint, or Vision fallback model is required when multimodal fallback is enabled."))
 	}
 	if hasOCR {
-		if cfg.OCR.Provider != "http" {
-			issues = append(issues, issue("error", "multimodal.ocr.provider", "unsupported_ocr_provider", "The first OCR release requires provider: http."))
-		}
-		if cfg.OCR.Endpoint == "" {
-			issues = append(issues, issue("error", "multimodal.ocr.endpoint", "missing_ocr_endpoint", "OCR endpoint is required when OCR fallback is configured."))
-		} else if endpoint, err := url.Parse(cfg.OCR.Endpoint); err != nil || endpoint.Host == "" || (endpoint.Scheme != "http" && endpoint.Scheme != "https") {
-			issues = append(issues, issue("error", "multimodal.ocr.endpoint", "invalid_ocr_endpoint", "OCR endpoint must be an absolute HTTP or HTTPS URL."))
+		switch cfg.OCR.Provider {
+		case "builtin":
+			// The model and WASM runtime are embedded in the executable.
+		case "http":
+			if cfg.OCR.Endpoint == "" {
+				issues = append(issues, issue("error", "multimodal.ocr.endpoint", "missing_ocr_endpoint", "OCR endpoint is required for provider: http."))
+			} else if endpoint, err := url.Parse(cfg.OCR.Endpoint); err != nil || endpoint.Host == "" || (endpoint.Scheme != "http" && endpoint.Scheme != "https") {
+				issues = append(issues, issue("error", "multimodal.ocr.endpoint", "invalid_ocr_endpoint", "OCR endpoint must be an absolute HTTP or HTTPS URL."))
+			}
+		default:
+			issues = append(issues, issue("error", "multimodal.ocr.provider", "unsupported_ocr_provider", "OCR provider must be builtin or http."))
 		}
 	}
 	if cfg.OCR.Timeout.Duration <= 0 || cfg.OCR.Timeout.Duration > 2*time.Minute {

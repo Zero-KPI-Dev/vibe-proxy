@@ -111,6 +111,13 @@ multimodal route, original/effective targets, capability source, image count, OC
 latency, confidence and cache hits. It never contains image bytes, image URLs, OCR text, or
 OCR credentials.
 
+`GET /admin/multimodal` reports `provider: builtin|http`. Built-in OCR is the
+default; an external endpoint and its authentication fields are only used when
+the provider is `http`. `POST /admin/multimodal/ocr/test` runs the selected
+provider against an embedded deterministic Chinese and English fixture and
+returns provider, engine (for built-in), latency, result count, and aggregate
+confidence without returning recognized text.
+
 Successful OCR responses also include:
 
 ```text

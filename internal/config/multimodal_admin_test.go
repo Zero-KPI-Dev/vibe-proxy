@@ -53,3 +53,33 @@ func TestBuildMultimodalLiteralAuth(t *testing.T) {
 		t.Fatalf("unexpected auth: %+v", got.OCR.Auth)
 	}
 }
+
+func TestBuildMultimodalDefaultsToBuiltinAndExternalOverridesIt(t *testing.T) {
+	builtin, err := BuildMultimodal(MultimodalAdminInput{Enabled: true}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if builtin.OCR.Provider != "builtin" || builtin.OCR.Endpoint != "" || builtin.OCR.Auth.Type != "" {
+		t.Fatalf("unexpected built-in config: %+v", builtin.OCR)
+	}
+
+	external, err := BuildMultimodal(MultimodalAdminInput{
+		Enabled:  true,
+		Provider: "http",
+		Endpoint: "http://ocr.local/v1/ocr",
+		AuthType: "none",
+	}, &builtin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if external.OCR.Provider != "http" || external.OCR.Endpoint != "http://ocr.local/v1/ocr" || external.OCR.Auth.Type != "none" {
+		t.Fatalf("unexpected external config: %+v", external.OCR)
+	}
+}
+
+func TestBuildMultimodalRejectsUnknownProvider(t *testing.T) {
+	_, err := BuildMultimodal(MultimodalAdminInput{Enabled: true, Provider: "mystery"}, nil)
+	if err == nil || !strings.Contains(err.Error(), "unsupported OCR provider") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}

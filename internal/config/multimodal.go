@@ -43,8 +43,14 @@ func applyMultimodalDefaults(cfg *MultimodalConfig) {
 	if cfg.Strategy == "" {
 		cfg.Strategy = "ocr_then_vision"
 	}
-	if cfg.OCR.Provider == "" && cfg.OCR.Endpoint != "" {
-		cfg.OCR.Provider = "http"
+	if cfg.OCR.Provider == "" {
+		if cfg.OCR.Endpoint != "" {
+			// Preserve compatibility with configurations created before the
+			// built-in provider existed.
+			cfg.OCR.Provider = "http"
+		} else {
+			cfg.OCR.Provider = "builtin"
+		}
 	}
 	if cfg.OCR.Timeout.Duration == 0 {
 		cfg.OCR.Timeout.Duration = 15 * time.Second

@@ -285,6 +285,7 @@ export interface ModelCatalogLookupResponse {
 export interface MultimodalAdminConfig {
   enabled: boolean
   strategy: "ocr_then_vision"
+  provider: "builtin" | "http"
   endpoint: string
   auth_type: "none" | "bearer" | "api_key_header"
   api_key_source: "" | "env" | "literal"
@@ -306,6 +307,9 @@ export interface OCRTestResponse {
   latency_ms: number
   result_count?: number
   has_text?: boolean
+  confidence?: number
+  engine?: string
+  language?: string
   error?: string
 }
 

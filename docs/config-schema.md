@@ -193,8 +193,7 @@ multimodal:
   enabled: true
   strategy: ocr_then_vision
   ocr:
-    provider: http
-    endpoint: http://127.0.0.1:32180/v1/ocr
+    provider: builtin
     timeout: 15s
     min_confidence: 0.55
     min_text_chars: 4
@@ -208,12 +207,29 @@ multimodal:
       enabled: true
       max_entries: 256
       ttl: 24h
-    auth:
-      type: none
   vision_fallback_model: ""
 ```
 
-The HTTP OCR endpoint receives:
+`builtin` is the default when `ocr.provider` is omitted and no endpoint is
+present. It embeds a compact Simplified Chinese and English Tesseract model and
+runs it through WASM in a short-lived isolated copy of the vibe-proxy
+executable. This returns the WASM memory to the operating system after a cache
+miss without starting another service, calling the network, downloading a
+model, or requiring a system Tesseract installation.
+
+An explicitly configured external service overrides the built-in provider:
+
+```yaml
+multimodal:
+  enabled: true
+  ocr:
+    provider: http
+    endpoint: http://127.0.0.1:32180/v1/ocr
+    auth:
+      type: none
+```
+
+The external HTTP OCR endpoint receives:
 
 ```json
 {

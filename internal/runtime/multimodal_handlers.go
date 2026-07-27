@@ -3,7 +3,6 @@ package runtime
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
@@ -14,8 +13,6 @@ import (
 	"github.com/a448582655/vibe-proxy/internal/ocr"
 	"github.com/a448582655/vibe-proxy/internal/upstreamauth"
 )
-
-const ocrTestImageBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
 
 func (s *Server) adminMultimodal(w http.ResponseWriter, r *http.Request) {
 	if !s.adminAuthorize(w, r) {
@@ -62,19 +59,39 @@ func (s *Server) adminOCRTest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cfg, err := config.BuildMultimodal(input, &s.current().Config.Multimodal)
-	if err != nil || cfg.OCR.Endpoint == "" {
+	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]any{"error": "invalid_ocr_config", "message": "OCR endpoint and valid authentication are required."})
+		json.NewEncoder(w).Encode(map[string]any{"error": "invalid_ocr_config", "message": err.Error()})
 		return
 	}
-	data, _ := base64.StdEncoding.DecodeString(ocrTestImageBase64)
+	var provider ocr.Provider
+	switch cfg.OCR.Provider {
+	case "builtin":
+		provider = s.builtinOCR
+		if provider == nil {
+			provider = ocr.NewBuiltinProvider()
+		}
+	case "http":
+		if cfg.OCR.Endpoint == "" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]any{"error": "invalid_ocr_config", "message": "An OCR endpoint is required for the external HTTP provider."})
+			return
+		}
+		provider = ocr.NewHTTPProvider(ocr.HTTPOptions{Endpoint: cfg.OCR.Endpoint, Auth: cfg.OCR.Auth, Client: s.ocrHTTPClient})
+	default:
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]any{"error": "invalid_ocr_config", "message": "OCR provider must be builtin or http."})
+		return
+	}
+	mediaType, data := ocr.SelfTestImage()
 	hash := sha256.Sum256(data)
-	provider := ocr.NewHTTPProvider(ocr.HTTPOptions{Endpoint: cfg.OCR.Endpoint, Auth: cfg.OCR.Auth, Client: s.ocrHTTPClient})
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 	started := time.Now()
-	results, recognizeErr := provider.Recognize(ctx, []ocr.Image{{Index: 0, MediaType: "image/png", Data: data, SHA256: hex.EncodeToString(hash[:])}})
+	results, recognizeErr := provider.Recognize(ctx, []ocr.Image{{Index: 0, MediaType: mediaType, Data: data, SHA256: hex.EncodeToString(hash[:])}})
 	latency := time.Since(started).Milliseconds()
 	if recognizeErr != nil {
 		status := http.StatusBadGateway
@@ -89,13 +106,31 @@ func (s *Server) adminOCRTest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	hasText := false
+	var confidence *float64
 	for _, result := range results {
 		if strings.TrimSpace(result.Text) != "" {
 			hasText = true
-			break
+		}
+		if result.Confidence != nil && (confidence == nil || *result.Confidence < *confidence) {
+			value := *result.Confidence
+			confidence = &value
 		}
 	}
-	s.writeJSON(w, map[string]any{"ok": true, "provider": provider.Name(), "latency_ms": latency, "result_count": len(results), "has_text": hasText})
+	response := map[string]any{
+		"ok":           true,
+		"provider":     provider.Name(),
+		"latency_ms":   latency,
+		"result_count": len(results),
+		"has_text":     hasText,
+	}
+	if confidence != nil {
+		response["confidence"] = *confidence
+	}
+	if provider.Name() == ocr.BuiltinProviderName {
+		response["engine"] = ocr.BuiltinEngine
+		response["language"] = ocr.BuiltinLanguage
+	}
+	s.writeJSON(w, response)
 }
 
 func multimodalAdminSnapshot(cfg config.MultimodalConfig) map[string]any {
@@ -103,6 +138,7 @@ func multimodalAdminSnapshot(cfg config.MultimodalConfig) map[string]any {
 	return map[string]any{
 		"enabled":               cfg.Enabled,
 		"strategy":              cfg.Strategy,
+		"provider":              cfg.OCR.Provider,
 		"endpoint":              cfg.OCR.Endpoint,
 		"auth_type":             authType,
 		"api_key_source":        keySource,

@@ -1,19 +1,28 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"log"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/a448582655/vibe-proxy/internal/config"
 	"github.com/a448582655/vibe-proxy/internal/metrics"
+	"github.com/a448582655/vibe-proxy/internal/ocr"
 	"github.com/a448582655/vibe-proxy/internal/runtime"
 	"github.com/a448582655/vibe-proxy/internal/store"
 	"github.com/a448582655/vibe-proxy/internal/telemetry"
 )
 
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == ocr.BuiltinWorkerArgument {
+		if err := ocr.RunBuiltinWorker(context.Background(), os.Stdin, os.Stdout); err != nil {
+			os.Exit(1)
+		}
+		return
+	}
 	cfgPath := flag.String("config", "configs/config.yaml", "configuration file path")
 	flag.Parse()
 	cfg, err := config.LoadRuntime(*cfgPath)

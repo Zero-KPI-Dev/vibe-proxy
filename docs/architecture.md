@@ -236,7 +236,9 @@ LLM provider concurrency is acquired:
 
 1. resolve the selected model's image capability;
 2. decode and validate embedded images under fixed limits;
-3. call the configured OCR provider with a dedicated timeout and auth profile;
+3. call the embedded OCR provider by default, or the external HTTP provider
+   when the user explicitly configures one, with a dedicated timeout and auth
+   profile;
 4. reuse successful in-memory results by image hash with per-key singleflight;
 5. replace image blocks in-place with escaped, explicitly untrusted OCR text;
 6. return a protocol-native error before the LLM call when OCR is unsafe or unusable.
@@ -248,6 +250,16 @@ images. The original image-bearing Canonical IR is retained for that call.
 
 The original Canonical IR is not mutated. Remote image fetching is not part of the first
 OCR release.
+
+The built-in provider embeds a compact Simplified Chinese and English Tesseract
+model and executes it through WASM in a short-lived isolated invocation of the
+same vibe-proxy executable. The worker is serialized, receives only the image
+payload, does not inherit provider credentials, and exits after recognition so
+the WASM memory is returned to the operating system. It does not require a
+second container, Python, ONNX Runtime, a system OCR package, or runtime model
+downloads. The HTTP provider remains an explicit extension point for higher
+accuracy, additional languages, private OCR services, and accelerated
+deployments.
 
 Telemetry stores a structured transformation summary with routing and aggregate OCR
 metadata. It intentionally excludes images, image locations, OCR text, and secrets. Local

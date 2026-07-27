@@ -21,6 +21,7 @@ import (
 	"github.com/a448582655/vibe-proxy/internal/modelcatalog"
 	"github.com/a448582655/vibe-proxy/internal/modelresolver"
 	"github.com/a448582655/vibe-proxy/internal/multimodal"
+	"github.com/a448582655/vibe-proxy/internal/ocr"
 	"github.com/a448582655/vibe-proxy/internal/preprocess"
 	"github.com/a448582655/vibe-proxy/internal/protocol"
 	provideranthropic "github.com/a448582655/vibe-proxy/internal/provideradapters/anthropic"
@@ -45,6 +46,7 @@ type Server struct {
 	authenticator    *auth.Authenticator
 	httpClient       *http.Client
 	ocrHTTPClient    *http.Client
+	builtinOCR       ocr.Provider
 	clientAdapters   []protocol.ClientAdapter
 	providerAdapters map[string]protocol.ProviderAdapter
 	metrics          *metrics.Prometheus
@@ -70,7 +72,7 @@ func New(cfgPath string, cfg *config.RuntimeConfig, sink telemetry.EventSink, pr
 	if provider, ok := sink.(telemetry.ObservabilityReaderProvider); ok {
 		observability = provider.ObservabilityReader()
 	}
-	s := &Server{cfgPath: cfgPath, authenticator: auth.NewAuthenticator(), httpClient: &http.Client{Timeout: 0}, ocrHTTPClient: &http.Client{}, metrics: prom, sink: sink, recent: recent, observability: observability, catalog: modelcatalog.NewService(modelcatalog.Options{CachePath: modelCatalogCachePath(cfgPath, cfg)}), clientAdapters: []protocol.ClientAdapter{clientopenai.ChatAdapter{}, clientopenai.ResponsesAdapter{}, clientanthropic.MessagesAdapter{}}, providerAdapters: map[string]protocol.ProviderAdapter{"anthropic": provideranthropic.Provider{}, "openai-compatible": provideropenai.Provider{}}}
+	s := &Server{cfgPath: cfgPath, authenticator: auth.NewAuthenticator(), httpClient: &http.Client{Timeout: 0}, ocrHTTPClient: &http.Client{}, builtinOCR: ocr.NewBuiltinProvider(), metrics: prom, sink: sink, recent: recent, observability: observability, catalog: modelcatalog.NewService(modelcatalog.Options{CachePath: modelCatalogCachePath(cfgPath, cfg)}), clientAdapters: []protocol.ClientAdapter{clientopenai.ChatAdapter{}, clientopenai.ResponsesAdapter{}, clientanthropic.MessagesAdapter{}}, providerAdapters: map[string]protocol.ProviderAdapter{"anthropic": provideranthropic.Provider{}, "openai-compatible": provideropenai.Provider{}}}
 	s.snapshot.Store(s.buildSnapshot(cfg))
 	return s
 }
@@ -107,11 +109,12 @@ func modelCatalogCachePath(cfgPath string, cfg *config.RuntimeConfig) string {
 func (s *Server) buildSnapshot(cfg *config.RuntimeConfig) *Snapshot {
 	resolver := modelresolver.New(cfg.ModelResolver)
 	processor := multimodal.NewProcessor(multimodal.ProcessorOptions{
-		Config:    cfg.Multimodal,
-		Catalog:   s.catalog,
-		Client:    s.ocrHTTPClient,
-		Resolver:  resolver,
-		Providers: cfg.Providers,
+		Config:     cfg.Multimodal,
+		Catalog:    s.catalog,
+		Client:     s.ocrHTTPClient,
+		BuiltinOCR: s.builtinOCR,
+		Resolver:   resolver,
+		Providers:  cfg.Providers,
 		AdapterCapabilities: func(providerType string) (protocol.Capabilities, bool) {
 			adapter, ok := s.providerAdapters[providerType]
 			if !ok {

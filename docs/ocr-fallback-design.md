@@ -1,6 +1,6 @@
 # vibe-proxy OCR 图片降级设计
 
-> 状态：Proposed
+> 状态：Implemented（builtin + HTTP provider）
 >
 > 目标版本：OCR fallback first usable release
 >
@@ -479,9 +479,9 @@ internal/
     errors.go
   ocr/
     provider.go                   # OCR Provider 接口
-    disabled.go
+    builtin.go                    # 内置 Tesseract WASM
+    assets/chi_sim.traineddata    # 内嵌中英文快速语言包
     http.go
-    registry.go
 ```
 
 ### 7.2 OCR Provider 接口
@@ -517,9 +517,27 @@ type Provider interface {
 4. 声明其响应 confidence 和批量能力；
 5. 不修改三个 Client Adapter 和两个 LLM Provider Adapter。
 
+### 7.3 内置 OCR Provider
+
+`builtin` 是缺省 Provider。它将 Tesseract LSTM OCR 编译为 WASM，并通过
+同一个 vibe-proxy 可执行文件的短生命周期隔离 Worker 执行：
+
+- 无 Python、ONNX Runtime、系统 Tesseract 或独立 Docker 服务；
+- 模型随二进制发布，启动和请求期间不下载依赖；
+- 当前只内嵌一个约 2.4 MB 的 `chi_sim` fast 模型，同时覆盖简体中文和常用英文；
+- Tesseract WASM 约 2.2 MB，Worker 通过单槽并发限制串行运行；
+- Worker 完成后退出，将约 200 MB 的峰值 WASM 内存及时归还操作系统，主服务不常驻这部分内存；
+- `x_wconf` 按字符数加权汇总为图片级 confidence；
+- 无文字图片返回空文本和空 confidence，由既有阈值逻辑进入 Vision fallback；
+- 内存 cache 继续位于 Multimodal Processor，不与 Provider 重复实现。
+
+WASM 方案的目标是最小化安装与跨平台依赖，不追求高并发 OCR 吞吐。用户需要
+更高精度、更多语言或 GPU 加速时，应显式选择 `http` Provider。
+
 ## 8. OCR HTTP Provider 契约
 
-第一版实现通用 HTTP provider，便于接 RapidOCR sidecar、私有 OCR MaaS 或用户已有 OCR 服务。
+HTTP provider 是显式外部覆盖项，便于接 RapidOCR、私有 OCR MaaS 或用户已有 OCR 服务。
+只有配置 `provider: http` 和 endpoint 后，图片才会发送到外部服务。
 
 建议请求：
 
@@ -690,10 +708,7 @@ multimodal:
   enabled: true
   strategy: ocr_then_vision
   ocr:
-    provider: http
-    endpoint: http://127.0.0.1:32180/v1/ocr
-    auth:
-      type: none
+    provider: builtin
   vision_fallback_model: ""  # 可选；没有 Vision 模型时保持为空
 
 providers:
@@ -712,7 +727,7 @@ providers:
 - Provider 模型列表由 new-api 获取；
 - vibe-proxy 自动按模型 ID 从 models.dev 补全 capabilities；
 - 未命中或存在冲突的模型保持 unknown，并在 UI 中提示；
-- 文本模型收到图片时先 OCR；
+- 文本模型收到图片时先使用进程内置 OCR；
 - 没配置 Vision fallback，所以 OCR 不可用时明确报错。
 
 如果该 MaaS 对公开模型能力做了裁剪，可增加本地覆盖：
@@ -761,6 +776,8 @@ multimodal:
 启动和热更新时应校验：
 
 - `enabled: true` 时必须配置有效 OCR provider，或有效 Vision fallback；
+- 未配置 provider 和 endpoint 时缺省为 `builtin`；
+- `provider: builtin` 不需要 endpoint 或 auth；
 - HTTP OCR endpoint 必须是绝对 URL；
 - OCR auth secret 只能以 SecretRef 形式存在；
 - limit 必须大于 0 且不能超过内部硬上限；
@@ -910,21 +927,18 @@ Settings 或 Provider 页面提供轻量状态：
 
 详情中只显示数量、耗时、cache hit、confidence 范围和路由，不显示 OCR 原文。
 
-## 17. 本地 OCR Sidecar 策略
+## 17. 内置与外部 OCR 策略
 
-首个开发版本先实现通用 HTTP provider 和 mock E2E，不把 Python 运行时嵌入 Go 主进程。
+普通本地用户直接使用 `builtin`：
 
-后续可提供 RapidOCR + ONNX Runtime sidecar，但需遵循：
+- 单一可执行文件、离线、无需安装或常驻第二个服务；
+- 模型和 WASM Runtime 随 release 一次性交付；
+- 启动和请求期间不下载依赖；
+- 适合文档截图、终端错误和网页文字等低并发场景。
 
-- sidecar 是可选组件；
-- release 提供预构建产物或明确的一次性安装方式；
-- 模型和依赖放入固定 cache/data 目录；
-- 每次 vibe-proxy 启动不得重新下载；
-- 主进程只负责 health、启动/停止和 HTTP 调用；
-- sidecar 不监听公网，默认仅绑定 loopback；
-- 用户已有 OCR 服务时无需安装 sidecar。
-
-这避免重现“每次启动都下载一堆依赖”的体验问题。
+用户显式配置 `http` 后才使用外部 OCR。外部模式用于 RapidOCR、PaddleOCR、
+企业私有 OCR 或需要 GPU/多语言的部署。vibe-proxy 不自动启动 sidecar，也不会
+把内置 OCR 图片复制给外部服务。
 
 ## 18. 测试策略
 
@@ -1095,21 +1109,22 @@ Settings 或 Provider 页面提供轻量状态：
 - 不发生递归 fallback；
 - original/effective target 均可见。
 
-### Phase O4：控制面与本地 Sidecar
+### Phase O4：控制面与内置 OCR
 
 内容：
 
 - Settings 图片降级卡片；
 - Provider/模型能力设置；
 - OCR health/test API；
-- 可选 RapidOCR 预构建 sidecar 和一次性安装流程；
+- 内置 Tesseract WASM 和中英文 compact model；
+- 用户显式选择外部 HTTP OCR；
 - 中英文词条。
 
 验收：
 
 - 常规用户无需编辑 YAML 即可启用；
 - UI 不展示过多高级参数；
-- sidecar 不重复下载依赖；
+- 内置 OCR 不下载依赖、不要求额外容器；
 - 配置和密钥均遵循现有本地安全规则。
 
 ## 20. 第一版完成标准
@@ -1142,10 +1157,10 @@ vibe-proxy 不需要先成为一个庞大的多模态平台。正确的第一步
 1. models.dev Catalog、匹配、缓存和本地覆盖；
 2. 三态模型能力；
 3. Canonical IR 级图片检测和预处理接口；
-4. 通用 HTTP OCR provider；
-5. OCR 文本安全注入和 cache；
-6. OCR 失败后的可选 Vision fallback；
-7. 遥测和简洁控制面；
-8. 最后再提供可选本地 RapidOCR sidecar。
+4. 内置 OCR provider；
+5. 通用 HTTP OCR provider 作为显式覆盖；
+6. OCR 文本安全注入和 cache；
+7. OCR 失败后的可选 Vision fallback；
+8. 遥测和简洁控制面。
 
 这样既能满足“后端没有 Vision 模型时有限识别图片文字”的核心需求，也不会让普通文本请求、现有 Provider 或本地使用体验承担不必要复杂度。

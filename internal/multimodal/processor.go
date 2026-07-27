@@ -63,6 +63,7 @@ type ProcessorOptions struct {
 	Config              config.MultimodalConfig
 	Catalog             *modelcatalog.Service
 	Client              *http.Client
+	BuiltinOCR          ocr.Provider
 	Resolver            *modelresolver.Resolver
 	Providers           map[string]config.ProviderConfig
 	AdapterCapabilities func(providerType string) (protocol.Capabilities, bool)
@@ -88,10 +89,23 @@ func NewProcessor(opts ProcessorOptions) *Processor {
 		Providers:           opts.Providers,
 		AdapterCapabilities: opts.AdapterCapabilities,
 	}
-	if !cfg.Enabled || cfg.OCR.Provider != "http" || cfg.OCR.Endpoint == "" {
+	if !cfg.Enabled {
 		return processor
 	}
-	processor.OCR = ocr.NewHTTPProvider(ocr.HTTPOptions{Endpoint: cfg.OCR.Endpoint, Auth: cfg.OCR.Auth, Client: opts.Client})
+	switch cfg.OCR.Provider {
+	case "builtin":
+		processor.OCR = opts.BuiltinOCR
+		if processor.OCR == nil {
+			processor.OCR = ocr.NewBuiltinProvider()
+		}
+	case "http":
+		if cfg.OCR.Endpoint != "" {
+			processor.OCR = ocr.NewHTTPProvider(ocr.HTTPOptions{Endpoint: cfg.OCR.Endpoint, Auth: cfg.OCR.Auth, Client: opts.Client})
+		}
+	}
+	if processor.OCR == nil {
+		return processor
+	}
 	if cfg.OCR.Cache.IsEnabled() {
 		processor.Cache = NewOCRCache(cfg.OCR.Cache.MaxEntries, cfg.OCR.Cache.TTL.Duration)
 	}

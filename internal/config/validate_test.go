@@ -99,6 +99,19 @@ func TestValidateRuntimeAcceptsHTTPOCRFallback(t *testing.T) {
 	}
 }
 
+func TestValidateRuntimeDefaultsToBuiltinOCRFallback(t *testing.T) {
+	cfg, err := CompileSimple(SimpleConfig{Multimodal: MultimodalConfig{Enabled: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Multimodal.OCR.Provider != "builtin" {
+		t.Fatalf("expected built-in OCR default: %+v", cfg.Multimodal.OCR)
+	}
+	if issues := ValidateRuntime(cfg); HasErrors(issues) {
+		t.Fatalf("unexpected built-in OCR validation errors: %+v", issues)
+	}
+}
+
 func TestValidateRuntimeRejectsUnsafeOCRConfig(t *testing.T) {
 	cfg, err := CompileSimple(SimpleConfig{Multimodal: MultimodalConfig{
 		Enabled: true,

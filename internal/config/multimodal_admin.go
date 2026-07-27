@@ -11,6 +11,7 @@ import (
 
 type MultimodalAdminInput struct {
 	Enabled             bool    `json:"enabled"`
+	Provider            string  `json:"provider"`
 	Endpoint            string  `json:"endpoint"`
 	AuthType            string  `json:"auth_type"`
 	APIKeySource        string  `json:"api_key_source"`
@@ -70,7 +71,20 @@ func BuildMultimodal(input MultimodalAdminInput, existing *MultimodalConfig) (Mu
 		result.OCR.Cache = existing.OCR.Cache
 	}
 	endpoint := strings.TrimSpace(input.Endpoint)
-	if endpoint != "" {
+	provider := strings.TrimSpace(input.Provider)
+	if provider == "" {
+		if endpoint != "" {
+			// Backward compatibility for older control planes that did not
+			// submit an explicit provider.
+			provider = "http"
+		} else {
+			provider = "builtin"
+		}
+	}
+	switch provider {
+	case "builtin":
+		result.OCR.Provider = "builtin"
+	case "http":
 		result.OCR.Provider = "http"
 		result.OCR.Endpoint = endpoint
 		auth, err := buildMultimodalAuth(input, existing)
@@ -78,6 +92,8 @@ func BuildMultimodal(input MultimodalAdminInput, existing *MultimodalConfig) (Mu
 			return MultimodalConfig{}, err
 		}
 		result.OCR.Auth = auth
+	default:
+		return MultimodalConfig{}, fmt.Errorf("unsupported OCR provider %q", provider)
 	}
 	if input.MinConfidence > 0 {
 		result.OCR.MinConfidence = input.MinConfidence

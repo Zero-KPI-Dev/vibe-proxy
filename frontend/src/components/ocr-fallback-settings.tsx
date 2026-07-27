@@ -15,6 +15,7 @@ import type { MultimodalAdminInput, ProviderConfig } from "@/lib/types"
 const defaultConfig: MultimodalAdminInput = {
   enabled: false,
   strategy: "ocr_then_vision",
+  provider: "builtin",
   endpoint: "",
   auth_type: "none",
   api_key_source: "",
@@ -88,14 +89,17 @@ export function OCRFallbackSettings({ authVersion }: OCRFallbackSettingsProps) {
   }
 
   const handleTest = async () => {
-    if (!config.endpoint) {
+    if (config.provider === "http" && !config.endpoint) {
       toast.error(t("settings.ocrEndpointRequired"))
       return
     }
     setTesting(true)
     try {
       const result = await multimodalApi.testOCR(config)
-      toast.success(t("settings.ocrTestSucceeded", { latency: result.latency_ms }))
+      toast.success(t(
+        result.provider === "builtin" ? "settings.builtinOCRTestSucceeded" : "settings.ocrTestSucceeded",
+        { latency: result.latency_ms, confidence: result.confidence != null ? Math.round(result.confidence * 100) : "-" },
+      ))
     } catch (error) {
       toast.error(t("settings.ocrTestFailed", {
         error: error instanceof Error ? error.message : t("common.unknownError"),
@@ -133,92 +137,121 @@ export function OCRFallbackSettings({ authVersion }: OCRFallbackSettingsProps) {
         </div>
 
         <div className="space-y-2">
-          <Label htmlFor="ocrEndpoint">{t("settings.ocrEndpoint")}</Label>
-          <Input
-            id="ocrEndpoint"
-            value={config.endpoint}
-            onChange={(event) => update("endpoint", event.target.value)}
-            placeholder="http://127.0.0.1:32180/v1/ocr"
+          <Label>{t("settings.ocrProvider")}</Label>
+          <Select
+            value={config.provider}
+            onValueChange={(value) => update("provider", value as MultimodalAdminInput["provider"])}
             disabled={loading}
-          />
-          <p className="text-xs text-muted-foreground">{t("settings.ocrContractHelp")}</p>
+          >
+            <SelectTrigger><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="builtin">{t("settings.ocrProviderBuiltin")}</SelectItem>
+              <SelectItem value="http">{t("settings.ocrProviderHTTP")}</SelectItem>
+            </SelectContent>
+          </Select>
+          <p className="text-xs text-muted-foreground">{t("settings.ocrProviderHelp")}</p>
         </div>
 
-        <div className="grid gap-4 sm:grid-cols-2">
-          <div className="space-y-2">
-            <Label>{t("settings.ocrAuthType")}</Label>
-            <Select
-              value={config.auth_type}
-              onValueChange={(value) => update("auth_type", value as MultimodalAdminInput["auth_type"])}
-              disabled={loading}
-            >
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="none">{t("providerForm.none")}</SelectItem>
-                <SelectItem value="bearer">{t("providerForm.bearerToken")}</SelectItem>
-                <SelectItem value="api_key_header">{t("providerForm.apiKeyHeader")}</SelectItem>
-              </SelectContent>
-            </Select>
+        {config.provider === "builtin" ? (
+          <div className="rounded-lg border border-primary/20 bg-primary/5 p-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge variant="success">{t("settings.builtinOCRReady")}</Badge>
+              <Badge variant="secondary">Tesseract WASM</Badge>
+              <Badge variant="secondary">{t("settings.builtinOCRLanguages")}</Badge>
+            </div>
+            <p className="mt-2 text-sm text-muted-foreground">{t("settings.builtinOCRDescription")}</p>
           </div>
-
-          {config.auth_type !== "none" && (
+        ) : (
+          <>
             <div className="space-y-2">
-              <Label>{t("providerForm.keySource")}</Label>
-              <Select
-                value={config.api_key_source || "env"}
-                onValueChange={(value) => update("api_key_source", value as "env" | "literal")}
-                disabled={loading}
-              >
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="env">{t("providerForm.environmentVariable")}</SelectItem>
-                  <SelectItem value="literal">{t("providerForm.pasteKey")}</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-          )}
-
-          {config.auth_type !== "none" && (config.api_key_source || "env") === "env" && (
-            <div className="space-y-2">
-              <Label htmlFor="ocrKeyEnv">{t("providerForm.apiKeyEnv")}</Label>
+              <Label htmlFor="ocrEndpoint">{t("settings.ocrEndpoint")}</Label>
               <Input
-                id="ocrKeyEnv"
-                value={config.api_key_env}
-                onChange={(event) => update("api_key_env", event.target.value)}
-                placeholder="OCR_API_KEY"
+                id="ocrEndpoint"
+                value={config.endpoint}
+                onChange={(event) => update("endpoint", event.target.value)}
+                placeholder="http://127.0.0.1:32180/v1/ocr"
                 disabled={loading}
               />
+              <p className="text-xs text-muted-foreground">{t("settings.ocrContractHelp")}</p>
             </div>
-          )}
 
-          {config.auth_type !== "none" && config.api_key_source === "literal" && (
-            <div className="space-y-2">
-              <Label htmlFor="ocrKey">{t("providerForm.apiKey")}</Label>
-              <Input
-                id="ocrKey"
-                type="password"
-                autoComplete="off"
-                value={config.api_key ?? ""}
-                onChange={(event) => update("api_key", event.target.value)}
-                placeholder={t("providerForm.keepCurrentKey")}
-                disabled={loading}
-              />
-            </div>
-          )}
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label>{t("settings.ocrAuthType")}</Label>
+                <Select
+                  value={config.auth_type}
+                  onValueChange={(value) => update("auth_type", value as MultimodalAdminInput["auth_type"])}
+                  disabled={loading}
+                >
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">{t("providerForm.none")}</SelectItem>
+                    <SelectItem value="bearer">{t("providerForm.bearerToken")}</SelectItem>
+                    <SelectItem value="api_key_header">{t("providerForm.apiKeyHeader")}</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
 
-          {config.auth_type === "api_key_header" && (
-            <div className="space-y-2">
-              <Label htmlFor="ocrHeader">{t("providerForm.headerName")}</Label>
-              <Input
-                id="ocrHeader"
-                value={config.header}
-                onChange={(event) => update("header", event.target.value)}
-                placeholder="x-api-key"
-                disabled={loading}
-              />
+              {config.auth_type !== "none" && (
+                <div className="space-y-2">
+                  <Label>{t("providerForm.keySource")}</Label>
+                  <Select
+                    value={config.api_key_source || "env"}
+                    onValueChange={(value) => update("api_key_source", value as "env" | "literal")}
+                    disabled={loading}
+                  >
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="env">{t("providerForm.environmentVariable")}</SelectItem>
+                      <SelectItem value="literal">{t("providerForm.pasteKey")}</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+
+              {config.auth_type !== "none" && (config.api_key_source || "env") === "env" && (
+                <div className="space-y-2">
+                  <Label htmlFor="ocrKeyEnv">{t("providerForm.apiKeyEnv")}</Label>
+                  <Input
+                    id="ocrKeyEnv"
+                    value={config.api_key_env}
+                    onChange={(event) => update("api_key_env", event.target.value)}
+                    placeholder="OCR_API_KEY"
+                    disabled={loading}
+                  />
+                </div>
+              )}
+
+              {config.auth_type !== "none" && config.api_key_source === "literal" && (
+                <div className="space-y-2">
+                  <Label htmlFor="ocrKey">{t("providerForm.apiKey")}</Label>
+                  <Input
+                    id="ocrKey"
+                    type="password"
+                    autoComplete="off"
+                    value={config.api_key ?? ""}
+                    onChange={(event) => update("api_key", event.target.value)}
+                    placeholder={t("providerForm.keepCurrentKey")}
+                    disabled={loading}
+                  />
+                </div>
+              )}
+
+              {config.auth_type === "api_key_header" && (
+                <div className="space-y-2">
+                  <Label htmlFor="ocrHeader">{t("providerForm.headerName")}</Label>
+                  <Input
+                    id="ocrHeader"
+                    value={config.header}
+                    onChange={(event) => update("header", event.target.value)}
+                    placeholder="x-api-key"
+                    disabled={loading}
+                  />
+                </div>
+              )}
             </div>
-          )}
-        </div>
+          </>
+        )}
 
         <div className="space-y-2">
           <Label>{t("settings.visionFallbackModel")}</Label>
@@ -263,7 +296,7 @@ export function OCRFallbackSettings({ authVersion }: OCRFallbackSettingsProps) {
             {saving ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Save className="mr-1 h-4 w-4" />}
             {saving ? t("common.saving") : t("settings.saveOCR")}
           </Button>
-          <Button type="button" variant="outline" onClick={() => void handleTest()} disabled={loading || saving || testing || !config.endpoint}>
+          <Button type="button" variant="outline" onClick={() => void handleTest()} disabled={loading || saving || testing || (config.provider === "http" && !config.endpoint)}>
             {testing ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <TestTube2 className="mr-1 h-4 w-4" />}
             {testing ? t("settings.ocrTesting") : t("settings.testOCR")}
           </Button>
