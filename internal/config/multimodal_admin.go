@@ -25,6 +25,8 @@ type MultimodalAdminInput struct {
 }
 
 func SaveMultimodal(path string, input MultimodalAdminInput) (*RuntimeConfig, error) {
+	unlock := lockConfigMutation(path)
+	defer unlock()
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -49,7 +51,7 @@ func SaveMultimodal(path string, input MultimodalAdminInput) (*RuntimeConfig, er
 	if err != nil {
 		return nil, err
 	}
-	if err := os.WriteFile(path, out, 0600); err != nil {
+	if err := writeConfigFile(path, out); err != nil {
 		return nil, err
 	}
 	return compiled, nil

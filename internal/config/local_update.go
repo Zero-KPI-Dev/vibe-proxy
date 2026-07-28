@@ -30,6 +30,8 @@ type LocalProviderInput struct {
 }
 
 func UpsertLocalProvider(path string, input LocalProviderInput) (*RuntimeConfig, error) {
+	unlock := lockConfigMutation(path)
+	defer unlock()
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -70,7 +72,7 @@ func UpsertLocalProvider(path string, input LocalProviderInput) (*RuntimeConfig,
 	if err != nil {
 		return nil, err
 	}
-	if err := os.WriteFile(path, out, 0600); err != nil {
+	if err := writeConfigFile(path, out); err != nil {
 		return nil, err
 	}
 	return compiled, nil
@@ -104,6 +106,11 @@ func BuildLocalProvider(input LocalProviderInput, existing *ProviderConfig) (Pro
 	if existing != nil {
 		provider.DefaultCapabilities = existing.DefaultCapabilities
 		provider.ModelCapabilities = existing.ModelCapabilities
+		provider.Priority = existing.Priority
+		provider.Timeout = existing.Timeout
+		if input.MaxConcurrency <= 0 {
+			provider.MaxConcurrency = existing.MaxConcurrency
+		}
 	}
 	if input.DefaultImageInput != nil {
 		state := modelcapability.SupportState(*input.DefaultImageInput)
@@ -140,6 +147,12 @@ func buildProviderAuth(input LocalProviderInput, authType string, providerType s
 	if authType == "none" {
 		return upstreamauth.Profile{Type: "none"}, nil
 	}
+	if authType == "custom_headers" || authType == "custom_query" {
+		if existing != nil && existing.Auth.Type == authType {
+			return existing.Auth, nil
+		}
+		return upstreamauth.Profile{}, fmt.Errorf("%s auth must be configured in the raw YAML editor", authType)
+	}
 	source := input.APIKeySource
 	if source == "" {
 		if input.APIKey != "" {
@@ -163,8 +176,7 @@ func buildProviderAuth(input LocalProviderInput, authType string, providerType s
 		}
 		auth.Value = secret
 	default:
-		auth.Type = "bearer"
-		auth.Token = secret
+		return upstreamauth.Profile{}, fmt.Errorf("unsupported provider auth type %q", authType)
 	}
 	return auth, nil
 }

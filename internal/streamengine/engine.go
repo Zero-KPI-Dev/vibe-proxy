@@ -28,21 +28,25 @@ func Track(ctx context.Context, in <-chan ir.StreamEvent, onStats func(Stats)) <
 	go func() {
 		defer close(out)
 		stats := Stats{StartedAt: time.Now()}
+		reported := false
+		report := func() {
+			if reported {
+				return
+			}
+			reported = true
+			stats.CompletedAt = time.Now()
+			if onStats != nil {
+				onStats(stats)
+			}
+		}
 		for {
 			select {
 			case <-ctx.Done():
-				stats.CompletedAt = time.Now()
-				if onStats != nil {
-					onStats(stats)
-				}
-				out <- ir.StreamEvent{Type: ir.EventError, Time: time.Now(), Error: &ir.GatewayError{StatusCode: 499, Kind: "canceled", Code: "client_closed", Message: "Client closed the request."}}
+				report()
 				return
 			case ev, ok := <-in:
 				if !ok {
-					stats.CompletedAt = time.Now()
-					if onStats != nil {
-						onStats(stats)
-					}
+					report()
 					return
 				}
 				if countsAsToken(ev) {
@@ -55,12 +59,17 @@ func Track(ctx context.Context, in <-chan ir.StreamEvent, onStats func(Stats)) <
 					stats.Usage = mergeUsage(stats.Usage, *ev.Usage)
 				}
 				if ev.Type == ir.EventMessageDone {
-					stats.CompletedAt = time.Now()
-					if onStats != nil {
-						onStats(stats)
-					}
+					report()
 				}
-				out <- ev
+				if ev.Error != nil {
+					report()
+				}
+				select {
+				case out <- ev:
+				case <-ctx.Done():
+					report()
+					return
+				}
 			}
 		}
 	}()

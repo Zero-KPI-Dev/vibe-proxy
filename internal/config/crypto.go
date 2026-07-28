@@ -3,14 +3,17 @@ package config
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 
 	"golang.org/x/crypto/bcrypt"
 )
 
-func generateAPIKey() string {
+func generateAPIKey() (string, error) {
 	b := make([]byte, 32)
-	rand.Read(b)
-	return "sk-" + hex.EncodeToString(b)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("generate client key: %w", err)
+	}
+	return "sk-" + hex.EncodeToString(b), nil
 }
 
 func hashKey(key string) (string, error) {

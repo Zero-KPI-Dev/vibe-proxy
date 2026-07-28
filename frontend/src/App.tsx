@@ -1,5 +1,5 @@
-import { lazy, Suspense } from "react"
-import { BrowserRouter, Routes, Route } from "react-router-dom"
+import { lazy, Suspense, useEffect, useState } from "react"
+import { BrowserRouter, Routes, Route } from "react-router"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { Toaster } from "sonner"
 import { AppLayout } from "@/layouts/app-layout"
@@ -41,6 +41,19 @@ const queryClient = new QueryClient({
 })
 
 function App() {
+  const [theme, setTheme] = useState<"light" | "dark">(
+    () => localStorage.getItem("vibe_theme") === "light" ? "light" : "dark"
+  )
+
+  useEffect(() => {
+    const handleThemeChange = (event: Event) => {
+      const next = (event as CustomEvent<"light" | "dark">).detail
+      if (next === "light" || next === "dark") setTheme(next)
+    }
+    window.addEventListener("vibe-theme-change", handleThemeChange)
+    return () => window.removeEventListener("vibe-theme-change", handleThemeChange)
+  }, [])
+
   return (
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
@@ -63,12 +76,12 @@ function App() {
       </BrowserRouter>
       <Toaster
         position="bottom-right"
-        theme="dark"
+        theme={theme}
         toastOptions={{
           style: {
-            background: "#0d0f14",
-            border: "1px solid #222631",
-            color: "#f5f7fb",
+            background: theme === "light" ? "#ffffff" : "#0d0f14",
+            border: theme === "light" ? "1px solid #e2e8f0" : "1px solid #222631",
+            color: theme === "light" ? "#0f172a" : "#f5f7fb",
           },
         }}
       />

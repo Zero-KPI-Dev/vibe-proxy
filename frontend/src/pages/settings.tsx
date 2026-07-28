@@ -24,6 +24,7 @@ function applyTheme(theme: Theme) {
   localStorage.setItem("vibe_theme", theme)
   document.documentElement.classList.toggle("light", theme === "light")
   document.documentElement.classList.toggle("dark", theme === "dark")
+  window.dispatchEvent(new CustomEvent<Theme>("vibe-theme-change", { detail: theme }))
 }
 
 export function SettingsPage() {

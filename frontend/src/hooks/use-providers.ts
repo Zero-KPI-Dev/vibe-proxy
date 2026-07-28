@@ -13,8 +13,14 @@ export function useCreateProvider() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (data: ProviderFormData) => providerApi.create(data),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["providers"] })
+    onSuccess: async () => {
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ["providers"] }),
+        qc.invalidateQueries({ queryKey: ["aliases"] }),
+        qc.invalidateQueries({ queryKey: ["models"] }),
+        qc.invalidateQueries({ queryKey: ["provider-health"] }),
+        qc.invalidateQueries({ queryKey: ["metrics-summary"] }),
+      ])
     },
   })
 }
@@ -23,8 +29,14 @@ export function useUpdateProvider() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (data: ProviderFormData) => providerApi.update(data),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["providers"] })
+    onSuccess: async () => {
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ["providers"] }),
+        qc.invalidateQueries({ queryKey: ["aliases"] }),
+        qc.invalidateQueries({ queryKey: ["models"] }),
+        qc.invalidateQueries({ queryKey: ["provider-health"] }),
+        qc.invalidateQueries({ queryKey: ["metrics-summary"] }),
+      ])
     },
   })
 }
@@ -33,8 +45,14 @@ export function useDeleteProvider() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (id: string) => providerApi.remove(id),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["providers"] })
+    onSuccess: async () => {
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ["providers"] }),
+        qc.invalidateQueries({ queryKey: ["aliases"] }),
+        qc.invalidateQueries({ queryKey: ["models"] }),
+        qc.invalidateQueries({ queryKey: ["provider-health"] }),
+        qc.invalidateQueries({ queryKey: ["metrics-summary"] }),
+      ])
     },
   })
 }

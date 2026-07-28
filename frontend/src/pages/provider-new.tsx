@@ -1,4 +1,4 @@
-import { useNavigate } from "react-router-dom"
+import { useNavigate } from "react-router"
 import { useCreateProvider } from "@/hooks/use-providers"
 import { ProviderForm } from "@/components/provider-form"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"

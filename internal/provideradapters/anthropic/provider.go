@@ -24,7 +24,7 @@ func (p Provider) Capabilities() protocol.Capabilities {
 }
 
 func (p Provider) BuildRequest(ctx context.Context, req *ir.Request, target modelresolver.Target) (*http.Request, error) {
-	out := anthropicRequest{Model: target.Model, Stream: req.Stream, MaxTokens: 1024}
+	out := anthropicRequest{Model: target.Model, Stream: req.Stream, MaxTokens: 1024, StopSequences: req.Stop}
 	if req.MaxTokens != nil {
 		out.MaxTokens = int64(*req.MaxTokens)
 	}
@@ -40,6 +40,14 @@ func (p Provider) BuildRequest(ctx context.Context, req *ir.Request, target mode
 			out.Messages = append(out.Messages, anthropicMessage{Role: "user", Content: toBlocks(m.Content)})
 		}
 	}
+	for _, tool := range req.Tools {
+		schema := tool.Parameters
+		if len(schema) == 0 {
+			schema = json.RawMessage(`{"type":"object","properties":{}}`)
+		}
+		out.Tools = append(out.Tools, anthropicTool{Name: tool.Name, Description: tool.Description, InputSchema: schema})
+	}
+	out.ToolChoice = anthropicToolChoiceFromIR(req.ToolChoice)
 	body, err := json.Marshal(out)
 	if err != nil {
 		return nil, err
@@ -78,17 +86,17 @@ func (p Provider) ParseStream(ctx context.Context, resp *http.Response) (<-chan 
 		defer resp.Body.Close()
 		reader := bufio.NewReader(resp.Body)
 		var eventName string
+		toolCalls := map[int]ir.ToolCall{}
 		for {
 			select {
 			case <-ctx.Done():
-				out <- ir.StreamEvent{Type: ir.EventError, Time: time.Now(), Error: &ir.GatewayError{StatusCode: 499, Kind: "canceled", Code: "client_closed", Message: "Client closed the request."}}
 				return
 			default:
 			}
 			line, err := reader.ReadString('\n')
 			if err != nil {
-				if err != io.EOF {
-					out <- ir.StreamEvent{Type: ir.EventError, Time: time.Now(), Error: &ir.GatewayError{StatusCode: 502, Kind: "upstream_error", Code: "stream_interrupted", Message: "Upstream stream interrupted."}}
+				if ctx.Err() == nil {
+					emitStreamEvent(ctx, out, ir.StreamEvent{Type: ir.EventError, Time: time.Now(), Error: &ir.GatewayError{StatusCode: 502, Kind: "upstream_error", Code: "stream_interrupted", Message: "Upstream stream interrupted."}})
 				}
 				return
 			}
@@ -110,23 +118,82 @@ func (p Provider) ParseStream(ctx context.Context, resp *http.Response) (<-chan 
 			}
 			switch eventName {
 			case "message_start":
-				out <- ir.StreamEvent{Type: ir.EventMessageStart, Time: time.Now(), Raw: []byte(data)}
+				if !emitStreamEvent(ctx, out, ir.StreamEvent{Type: ir.EventMessageStart, Time: time.Now(), Raw: []byte(data)}) {
+					return
+				}
+				if usage := parseMessageStartUsage(frame["message"]); usage.TotalTokens > 0 || usage.PromptTokens > 0 {
+					if !emitStreamEvent(ctx, out, ir.StreamEvent{Type: ir.EventUsageDelta, Time: time.Now(), Usage: &usage, Raw: []byte(data)}) {
+						return
+					}
+				}
+			case "content_block_start":
+				index, block := parseContentBlockStart(data)
+				if block.Type == "tool_use" {
+					arguments := block.Input
+					if string(arguments) == "{}" {
+						arguments = nil
+					}
+					call := ir.ToolCall{ID: block.ID, Name: block.Name, Arguments: arguments}
+					toolCalls[index] = call
+					if !emitStreamEvent(ctx, out, ir.StreamEvent{Type: ir.EventToolCallStart, Time: time.Now(), Index: index, ToolCall: &call, Raw: []byte(data)}) {
+						return
+					}
+				}
 			case "content_block_delta":
-				if txt := parseTextDelta(frame["delta"]); txt != "" {
-					out <- ir.StreamEvent{Type: ir.EventContentDelta, Time: time.Now(), Delta: ir.ContentBlock{Type: ir.ContentText, Text: txt}, Raw: []byte(data)}
+				index, delta := parseContentBlockDelta(data)
+				if delta.Text != "" || delta.Thinking != "" {
+					text := delta.Text
+					eventType := ir.EventContentDelta
+					contentType := ir.ContentText
+					if text == "" {
+						text = delta.Thinking
+						eventType = ir.EventReasoningDelta
+						contentType = ir.ContentReasoning
+					}
+					if !emitStreamEvent(ctx, out, ir.StreamEvent{Type: eventType, Time: time.Now(), Index: index, Delta: ir.ContentBlock{Type: contentType, Text: text}, Raw: []byte(data)}) {
+						return
+					}
+				}
+				if delta.PartialJSON != "" {
+					call := toolCalls[index]
+					fragment := ir.ToolCall{ID: call.ID, Name: call.Name, Arguments: json.RawMessage(delta.PartialJSON)}
+					call.Arguments = append(call.Arguments, delta.PartialJSON...)
+					toolCalls[index] = call
+					if !emitStreamEvent(ctx, out, ir.StreamEvent{Type: ir.EventToolCallDelta, Time: time.Now(), Index: index, ToolCall: &fragment, Raw: []byte(data)}) {
+						return
+					}
+				}
+			case "content_block_stop":
+				index := parseContentBlockIndex(data)
+				if call, exists := toolCalls[index]; exists {
+					if !emitStreamEvent(ctx, out, ir.StreamEvent{Type: ir.EventToolCallDone, Time: time.Now(), Index: index, ToolCall: &call, Raw: []byte(data)}) {
+						return
+					}
+					delete(toolCalls, index)
 				}
 			case "message_delta":
 				u := parseUsage(frame["usage"])
 				if u.TotalTokens > 0 || u.PromptTokens > 0 || u.CompletionTokens > 0 {
-					out <- ir.StreamEvent{Type: ir.EventUsageDelta, Time: time.Now(), Usage: &u, Raw: []byte(data)}
+					if !emitStreamEvent(ctx, out, ir.StreamEvent{Type: ir.EventUsageDelta, Time: time.Now(), Usage: &u, Raw: []byte(data)}) {
+						return
+					}
 				}
 			case "message_stop":
-				out <- ir.StreamEvent{Type: ir.EventMessageDone, Time: time.Now(), Raw: []byte(data)}
+				emitStreamEvent(ctx, out, ir.StreamEvent{Type: ir.EventMessageDone, Time: time.Now(), Raw: []byte(data)})
 				return
 			}
 		}
 	}()
 	return out, nil
+}
+
+func emitStreamEvent(ctx context.Context, out chan<- ir.StreamEvent, event ir.StreamEvent) bool {
+	select {
+	case out <- event:
+		return true
+	case <-ctx.Done():
+		return false
+	}
 }
 
 func (p Provider) NormalizeError(ctx context.Context, resp *http.Response) ir.GatewayError {
@@ -178,6 +245,12 @@ func fromBlocks(blocks []contentBlock) []ir.ContentBlock {
 			out = append(out, ir.ContentBlock{Type: ir.ContentText, Text: b.Text})
 		case "thinking":
 			out = append(out, ir.ContentBlock{Type: ir.ContentReasoning, Text: b.Thinking})
+		case "tool_use":
+			arguments := b.Input
+			if len(arguments) == 0 {
+				arguments = json.RawMessage(`{}`)
+			}
+			out = append(out, ir.ContentBlock{Type: ir.ContentToolCall, ToolCall: &ir.ToolCall{ID: b.ID, Name: b.Name, Arguments: arguments}})
 		}
 	}
 	return out
@@ -191,16 +264,42 @@ func flatten(blocks []ir.ContentBlock) string {
 	}
 	return sb.String()
 }
-func parseTextDelta(raw json.RawMessage) string {
-	var d struct {
-		Text     string `json:"text"`
-		Thinking string `json:"thinking"`
+func parseMessageStartUsage(raw json.RawMessage) ir.Usage {
+	var message struct {
+		Usage anthropicUsage `json:"usage"`
 	}
-	json.Unmarshal(raw, &d)
-	if d.Text != "" {
-		return d.Text
+	_ = json.Unmarshal(raw, &message)
+	return usageFromAnthropic(message.Usage)
+}
+func parseContentBlockStart(raw string) (int, contentBlock) {
+	var frame struct {
+		Index        int          `json:"index"`
+		ContentBlock contentBlock `json:"content_block"`
 	}
-	return d.Thinking
+	_ = json.Unmarshal([]byte(raw), &frame)
+	return frame.Index, frame.ContentBlock
+}
+
+type contentBlockDelta struct {
+	Text        string `json:"text"`
+	Thinking    string `json:"thinking"`
+	PartialJSON string `json:"partial_json"`
+}
+
+func parseContentBlockDelta(raw string) (int, contentBlockDelta) {
+	var frame struct {
+		Index int               `json:"index"`
+		Delta contentBlockDelta `json:"delta"`
+	}
+	_ = json.Unmarshal([]byte(raw), &frame)
+	return frame.Index, frame.Delta
+}
+func parseContentBlockIndex(raw string) int {
+	var frame struct {
+		Index int `json:"index"`
+	}
+	_ = json.Unmarshal([]byte(raw), &frame)
+	return frame.Index
 }
 func parseUsage(raw json.RawMessage) ir.Usage {
 	var u anthropicUsage
@@ -218,13 +317,25 @@ func usageFromAnthropic(u anthropicUsage) ir.Usage {
 }
 
 type anthropicRequest struct {
-	Model       string             `json:"model"`
-	MaxTokens   int64              `json:"max_tokens"`
-	System      []contentBlock     `json:"system,omitempty"`
-	Messages    []anthropicMessage `json:"messages"`
-	Temperature *float64           `json:"temperature,omitempty"`
-	TopP        *float64           `json:"top_p,omitempty"`
-	Stream      bool               `json:"stream"`
+	Model         string               `json:"model"`
+	MaxTokens     int64                `json:"max_tokens"`
+	System        []contentBlock       `json:"system,omitempty"`
+	Messages      []anthropicMessage   `json:"messages"`
+	Temperature   *float64             `json:"temperature,omitempty"`
+	TopP          *float64             `json:"top_p,omitempty"`
+	Stream        bool                 `json:"stream"`
+	StopSequences []string             `json:"stop_sequences,omitempty"`
+	Tools         []anthropicTool      `json:"tools,omitempty"`
+	ToolChoice    *anthropicToolChoice `json:"tool_choice,omitempty"`
+}
+type anthropicTool struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	InputSchema json.RawMessage `json:"input_schema"`
+}
+type anthropicToolChoice struct {
+	Type string `json:"type"`
+	Name string `json:"name,omitempty"`
 }
 type anthropicMessage struct {
 	Role    string         `json:"role"`
@@ -259,4 +370,18 @@ type anthropicUsage struct {
 	OutputTokens             int64 `json:"output_tokens"`
 	CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
 	CacheCreationInputTokens int64 `json:"cache_creation_input_tokens"`
+}
+
+func anthropicToolChoiceFromIR(choice *ir.ToolChoice) *anthropicToolChoice {
+	if choice == nil || choice.Type == "" {
+		return nil
+	}
+	switch choice.Type {
+	case "required":
+		return &anthropicToolChoice{Type: "any"}
+	case "function":
+		return &anthropicToolChoice{Type: "tool", Name: choice.Name}
+	default:
+		return &anthropicToolChoice{Type: choice.Type, Name: choice.Name}
+	}
 }

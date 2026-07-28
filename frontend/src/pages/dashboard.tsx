@@ -53,7 +53,10 @@ export function DashboardPage() {
   const modelCount = providers.reduce((acc, p) => acc + (p.models?.length ?? 0), 0)
   const recentRequests = requests?.recent ?? []
   const healthList = providerHealth?.providers ?? []
-  const firstKeyPrefix = clientKeys?.keys?.[0]?.key_prefix
+  const firstClientKey = clientKeys?.keys?.[0]
+  const firstKeyPrefix = firstClientKey?.key_prefix
+  const hasClientKey = Boolean(firstClientKey)
+  const localOrigin = window.location.origin
 
   return (
     <div className="space-y-6">
@@ -76,15 +79,27 @@ export function DashboardPage() {
           <div className="grid gap-3 sm:grid-cols-3">
             <CopyBox
               label={t("dashboard.openaiEndpoint")}
-              value="http://127.0.0.1:8080/v1"
+              value={`${localOrigin}/v1`}
             />
             <CopyBox
               label={t("dashboard.anthropicEndpoint")}
-              value="http://127.0.0.1:8080/anthropic"
+              value={`${localOrigin}/anthropic`}
             />
             <CopyBox
-              label={firstKeyPrefix ? t("dashboard.clientKeyPrefix") : t("dashboard.noClientKey")}
-              value={firstKeyPrefix ? `${firstKeyPrefix}...` : t("dashboard.createClientKey")}
+              label={
+                hasClientKey
+                  ? firstKeyPrefix
+                    ? t("dashboard.clientKeyPrefix")
+                    : t("dashboard.clientKeyConfigured")
+                  : t("dashboard.noClientKey")
+              }
+              value={
+                firstKeyPrefix
+                  ? `${firstKeyPrefix}...`
+                  : hasClientKey
+                    ? t("dashboard.clientKeyPrefixUnavailable")
+                    : t("dashboard.createClientKey")
+              }
             />
           </div>
         </CardContent>

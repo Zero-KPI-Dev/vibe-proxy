@@ -37,6 +37,7 @@ func (a ResponsesAdapter) ParseRequest(ctx context.Context, r *http.Request) (*i
 	for _, t := range in.Tools {
 		req.Tools = append(req.Tools, ir.Tool{Name: t.Name, Description: t.Description, Parameters: t.Parameters})
 	}
+	req.ToolChoice = parseOpenAIToolChoice(in.ToolChoice)
 	if in.Text.Format.Type != "" {
 		raw, _ := json.Marshal(in.Text.Format)
 		req.ResponseFormat = &ir.ResponseFormat{Type: in.Text.Format.Type, JSONSchema: raw}
@@ -46,14 +47,22 @@ func (a ResponsesAdapter) ParseRequest(ctx context.Context, r *http.Request) (*i
 
 func (a ResponsesAdapter) EncodeUnary(ctx context.Context, w http.ResponseWriter, resp *ir.Response) error {
 	text := ""
+	var blocks []ir.ContentBlock
 	if len(resp.Messages) > 0 {
-		text = flattenText(resp.Messages[len(resp.Messages)-1].Content)
+		blocks = resp.Messages[len(resp.Messages)-1].Content
+		text = flattenText(blocks)
 	}
 	id := resp.ID
 	if id == "" {
 		id = "resp_" + uuid.NewString()
 	}
-	out := map[string]any{"id": id, "object": "response", "created_at": time.Now().Unix(), "status": "completed", "model": resp.Model, "output": []any{map[string]any{"id": "msg_" + uuid.NewString(), "type": "message", "status": "completed", "role": "assistant", "content": []any{map[string]any{"type": "output_text", "text": text, "annotations": []any{}}}}}, "usage": map[string]any{"input_tokens": resp.Usage.PromptTokens, "output_tokens": resp.Usage.CompletionTokens, "total_tokens": resp.Usage.TotalTokens}}
+	output := []any{}
+	toolCalls := responseToolCalls(blocks)
+	if text != "" || len(toolCalls) == 0 {
+		output = append(output, map[string]any{"id": "msg_" + uuid.NewString(), "type": "message", "status": "completed", "role": "assistant", "content": []any{map[string]any{"type": "output_text", "text": text, "annotations": []any{}}}})
+	}
+	output = append(output, toolCalls...)
+	out := map[string]any{"id": id, "object": "response", "created_at": time.Now().Unix(), "status": "completed", "model": resp.Model, "output": output, "usage": map[string]any{"input_tokens": resp.Usage.PromptTokens, "output_tokens": resp.Usage.CompletionTokens, "total_tokens": resp.Usage.TotalTokens}}
 	w.Header().Set("Content-Type", "application/json")
 	return json.NewEncoder(w).Encode(out)
 }
@@ -66,8 +75,18 @@ func (a ResponsesAdapter) EncodeStream(ctx context.Context, w http.ResponseWrite
 	itemID := "msg_" + uuid.NewString()
 	writeResponsesEvent(w, "response.created", map[string]any{"type": "response.created", "response": map[string]any{"id": responseID, "object": "response", "status": "in_progress"}})
 	flushOpenAI(flusher)
-	writeResponsesEvent(w, "response.output_item.added", map[string]any{"type": "response.output_item.added", "output_index": 0, "item": map[string]any{"id": itemID, "type": "message", "status": "in_progress", "role": "assistant", "content": []any{}}})
-	flushOpenAI(flusher)
+	messageAdded := false
+	messageIndex := -1
+	nextOutputIndex := 0
+	type functionItem struct {
+		OutputIndex int
+		ItemID      string
+		CallID      string
+		Name        string
+		Arguments   strings.Builder
+	}
+	functionItems := map[string]*functionItem{}
+	functionOrder := []*functionItem{}
 	for {
 		select {
 		case <-ctx.Done():
@@ -86,21 +105,84 @@ func (a ResponsesAdapter) EncodeStream(ctx context.Context, w http.ResponseWrite
 				if ev.Delta.Text == "" {
 					continue
 				}
-				writeResponsesEvent(w, "response.output_text.delta", map[string]any{"type": "response.output_text.delta", "item_id": itemID, "output_index": 0, "content_index": 0, "delta": ev.Delta.Text})
+				if !messageAdded {
+					messageIndex = nextOutputIndex
+					nextOutputIndex++
+					messageAdded = true
+					writeResponsesEvent(w, "response.output_item.added", map[string]any{"type": "response.output_item.added", "output_index": messageIndex, "item": map[string]any{"id": itemID, "type": "message", "status": "in_progress", "role": "assistant", "content": []any{}}})
+				}
+				writeResponsesEvent(w, "response.output_text.delta", map[string]any{"type": "response.output_text.delta", "item_id": itemID, "output_index": messageIndex, "content_index": 0, "delta": ev.Delta.Text})
 				flushOpenAI(flusher)
 			case ir.EventToolCallDelta, ir.EventToolCallStart:
 				if ev.ToolCall != nil {
-					writeResponsesEvent(w, "response.function_call_arguments.delta", map[string]any{"type": "response.function_call_arguments.delta", "item_id": ev.ToolCall.ID, "output_index": 0, "delta": string(ev.ToolCall.Arguments)})
+					indexKey := fmt.Sprintf("index:%d", ev.Index)
+					key := ev.ToolCall.ID
+					if key == "" {
+						key = indexKey
+					}
+					item := functionItems[key]
+					if item == nil {
+						item = functionItems[indexKey]
+					}
+					if item == nil {
+						callID := ev.ToolCall.ID
+						if callID == "" {
+							callID = "call_" + uuid.NewString()
+						}
+						item = &functionItem{OutputIndex: nextOutputIndex, ItemID: "fc_" + uuid.NewString(), CallID: callID, Name: ev.ToolCall.Name}
+						nextOutputIndex++
+						functionItems[key] = item
+						functionItems[indexKey] = item
+						functionOrder = append(functionOrder, item)
+						writeResponsesEvent(w, "response.output_item.added", map[string]any{"type": "response.output_item.added", "output_index": item.OutputIndex, "item": map[string]any{"id": item.ItemID, "type": "function_call", "status": "in_progress", "call_id": item.CallID, "name": item.Name, "arguments": ""}})
+					}
+					arguments := string(ev.ToolCall.Arguments)
+					if arguments != "" && !(ev.Type == ir.EventToolCallStart && arguments == "{}") {
+						item.Arguments.WriteString(arguments)
+						writeResponsesEvent(w, "response.function_call_arguments.delta", map[string]any{"type": "response.function_call_arguments.delta", "item_id": item.ItemID, "output_index": item.OutputIndex, "delta": arguments})
+					}
 					flushOpenAI(flusher)
 				}
 			case ir.EventMessageDone:
-				writeResponsesEvent(w, "response.output_item.done", map[string]any{"type": "response.output_item.done", "output_index": 0, "item": map[string]any{"id": itemID, "type": "message", "status": "completed", "role": "assistant"}})
+				if !messageAdded && len(functionOrder) == 0 {
+					messageIndex = nextOutputIndex
+					messageAdded = true
+					writeResponsesEvent(w, "response.output_item.added", map[string]any{"type": "response.output_item.added", "output_index": messageIndex, "item": map[string]any{"id": itemID, "type": "message", "status": "in_progress", "role": "assistant", "content": []any{}}})
+				}
+				if messageAdded {
+					writeResponsesEvent(w, "response.output_item.done", map[string]any{"type": "response.output_item.done", "output_index": messageIndex, "item": map[string]any{"id": itemID, "type": "message", "status": "completed", "role": "assistant"}})
+				}
+				for _, item := range functionOrder {
+					writeResponsesEvent(w, "response.output_item.done", map[string]any{"type": "response.output_item.done", "output_index": item.OutputIndex, "item": map[string]any{"id": item.ItemID, "type": "function_call", "status": "completed", "call_id": item.CallID, "name": item.Name, "arguments": item.Arguments.String()}})
+				}
 				writeResponsesDone(w, responseID)
 				flushOpenAI(flusher)
 				return nil
 			}
 		}
 	}
+}
+
+func responseToolCalls(blocks []ir.ContentBlock) []any {
+	out := []any{}
+	for _, block := range blocks {
+		if block.Type != ir.ContentToolCall || block.ToolCall == nil {
+			continue
+		}
+		callID := block.ToolCall.ID
+		if callID == "" {
+			callID = "call_" + uuid.NewString()
+		}
+		out = append(out, map[string]any{
+			"id":        "fc_" + uuid.NewString(),
+			"type":      "function_call",
+			"status":    "completed",
+			"call_id":   callID,
+			"name":      block.ToolCall.Name,
+			"arguments": string(block.ToolCall.Arguments),
+		})
+	}
+	return out
 }
 
 func (a ResponsesAdapter) EncodeError(ctx context.Context, w http.ResponseWriter, err ir.GatewayError) error {
@@ -186,6 +268,7 @@ type responsesRequest struct {
 	Temperature     *float64        `json:"temperature"`
 	TopP            *float64        `json:"top_p"`
 	Tools           []responsesTool `json:"tools"`
+	ToolChoice      any             `json:"tool_choice"`
 	Text            struct {
 		Format struct {
 			Type   string          `json:"type"`

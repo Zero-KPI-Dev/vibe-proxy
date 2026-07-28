@@ -1,5 +1,5 @@
 import { useState } from "react"
-import { useNavigate } from "react-router-dom"
+import { useNavigate } from "react-router"
 import { useProviders, useDeleteProvider, useTestProvider } from "@/hooks/use-providers"
 import { EmptyState } from "@/components/empty-state"
 import { Button } from "@/components/ui/button"

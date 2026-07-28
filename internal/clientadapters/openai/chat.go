@@ -40,15 +40,34 @@ func (a ChatAdapter) ParseRequest(ctx context.Context, r *http.Request) (*ir.Req
 	for _, t := range in.Tools {
 		req.Tools = append(req.Tools, ir.Tool{Name: t.Function.Name, Description: t.Function.Description, Parameters: t.Function.Parameters})
 	}
+	req.ToolChoice = parseOpenAIToolChoice(in.ToolChoice)
+	if len(in.ResponseFormat) > 0 {
+		var format struct {
+			Type string `json:"type"`
+		}
+		if json.Unmarshal(in.ResponseFormat, &format) == nil && format.Type != "" {
+			req.ResponseFormat = &ir.ResponseFormat{Type: format.Type, JSONSchema: append(json.RawMessage(nil), in.ResponseFormat...)}
+		}
+	}
 	return req, nil
 }
 
 func (a ChatAdapter) EncodeUnary(ctx context.Context, w http.ResponseWriter, resp *ir.Response) error {
 	content := ""
+	var toolCalls []any
 	if len(resp.Messages) > 0 {
-		content = flattenText(resp.Messages[len(resp.Messages)-1].Content)
+		blocks := resp.Messages[len(resp.Messages)-1].Content
+		content = flattenText(blocks)
+		toolCalls = openAIToolCalls(blocks)
 	}
-	out := map[string]any{"id": resp.ID, "object": "chat.completion", "created": time.Now().Unix(), "model": resp.Model, "choices": []any{map[string]any{"index": 0, "message": map[string]any{"role": "assistant", "content": content}, "finish_reason": finishReason(resp.StopReason)}}, "usage": openAIUsage(resp.Usage)}
+	message := map[string]any{"role": "assistant", "content": content}
+	if len(toolCalls) > 0 {
+		message["tool_calls"] = toolCalls
+		if content == "" {
+			message["content"] = nil
+		}
+	}
+	out := map[string]any{"id": resp.ID, "object": "chat.completion", "created": time.Now().Unix(), "model": resp.Model, "choices": []any{map[string]any{"index": 0, "message": message, "finish_reason": finishReason(resp.StopReason, len(toolCalls) > 0)}}, "usage": openAIUsage(resp.Usage)}
 	w.Header().Set("Content-Type", "application/json")
 	return json.NewEncoder(w).Encode(out)
 }
@@ -61,6 +80,7 @@ func (a ChatAdapter) EncodeStream(ctx context.Context, w http.ResponseWriter, ev
 	id := "chatcmpl-" + uuid.NewString()
 	created := time.Now().Unix()
 	model := ""
+	sawToolCall := false
 	for {
 		select {
 		case <-ctx.Done():
@@ -91,12 +111,17 @@ func (a ChatAdapter) EncodeStream(ctx context.Context, w http.ResponseWriter, ev
 					flusher.Flush()
 				}
 			case ir.EventToolCallStart, ir.EventToolCallDelta:
+				sawToolCall = sawToolCall || ev.ToolCall != nil
 				writeSSE(w, toolChunk(id, created, model, ev.ToolCall))
 				if flusher != nil {
 					flusher.Flush()
 				}
 			case ir.EventMessageDone:
-				writeSSE(w, streamChunk(id, created, model, "", "stop"))
+				finish := "stop"
+				if sawToolCall {
+					finish = "tool_calls"
+				}
+				writeSSE(w, streamChunk(id, created, model, "", finish))
 				writeRawSSE(w, "[DONE]")
 				if flusher != nil {
 					flusher.Flush()
@@ -175,11 +200,20 @@ func flattenText(blocks []ir.ContentBlock) string {
 	}
 	return b.String()
 }
-func finishReason(s string) string {
-	if s == "" {
+func finishReason(s string, hasToolCalls bool) string {
+	switch s {
+	case "tool_use", "tool_calls":
+		return "tool_calls"
+	case "max_tokens", "length":
+		return "length"
+	case "", "end_turn", "stop_sequence", "stop":
+		if hasToolCalls {
+			return "tool_calls"
+		}
 		return "stop"
+	default:
+		return s
 	}
-	return s
 }
 func intPtrFromInt64(v int64) *int {
 	if v == 0 {
@@ -206,6 +240,23 @@ func stringSlice(v any) []string {
 }
 func openAIUsage(u ir.Usage) map[string]any {
 	return map[string]any{"prompt_tokens": u.PromptTokens, "completion_tokens": u.CompletionTokens, "total_tokens": u.TotalTokens}
+}
+func openAIToolCalls(blocks []ir.ContentBlock) []any {
+	out := []any{}
+	for _, block := range blocks {
+		if block.Type != ir.ContentToolCall || block.ToolCall == nil {
+			continue
+		}
+		out = append(out, map[string]any{
+			"id":   block.ToolCall.ID,
+			"type": "function",
+			"function": map[string]any{
+				"name":      block.ToolCall.Name,
+				"arguments": string(block.ToolCall.Arguments),
+			},
+		})
+	}
+	return out
 }
 func openAIErrorType(err ir.GatewayError) string {
 	if err.Kind != "" {
@@ -244,14 +295,16 @@ func toolChunk(id string, created int64, model string, tc *ir.ToolCall) map[stri
 }
 
 type chatRequest struct {
-	Model       string        `json:"model"`
-	Messages    []chatMessage `json:"messages"`
-	Stream      bool          `json:"stream"`
-	MaxTokens   int64         `json:"max_tokens"`
-	Temperature *float64      `json:"temperature"`
-	TopP        *float64      `json:"top_p"`
-	Stop        any           `json:"stop"`
-	Tools       []chatTool    `json:"tools"`
+	Model          string          `json:"model"`
+	Messages       []chatMessage   `json:"messages"`
+	Stream         bool            `json:"stream"`
+	MaxTokens      int64           `json:"max_tokens"`
+	Temperature    *float64        `json:"temperature"`
+	TopP           *float64        `json:"top_p"`
+	Stop           any             `json:"stop"`
+	Tools          []chatTool      `json:"tools"`
+	ToolChoice     any             `json:"tool_choice"`
+	ResponseFormat json.RawMessage `json:"response_format"`
 }
 type chatMessage struct {
 	Role       string         `json:"role"`
@@ -284,4 +337,28 @@ type chatToolCall struct {
 		Name      string `json:"name"`
 		Arguments string `json:"arguments"`
 	} `json:"function"`
+}
+
+func parseOpenAIToolChoice(value any) *ir.ToolChoice {
+	switch choice := value.(type) {
+	case string:
+		if choice == "" {
+			return nil
+		}
+		return &ir.ToolChoice{Type: choice}
+	case map[string]any:
+		choiceType, _ := choice["type"].(string)
+		if choiceType == "" {
+			return nil
+		}
+		if choiceType == "function" {
+			function, _ := choice["function"].(map[string]any)
+			name, _ := function["name"].(string)
+			return &ir.ToolChoice{Type: "tool", Name: name}
+		}
+		name, _ := choice["name"].(string)
+		return &ir.ToolChoice{Type: choiceType, Name: name}
+	default:
+		return nil
+	}
 }

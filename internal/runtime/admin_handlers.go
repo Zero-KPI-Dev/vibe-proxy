@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -21,8 +22,17 @@ func (s *Server) adminAuthorize(w http.ResponseWriter, r *http.Request) bool {
 }
 
 func (s *Server) writeJSON(w http.ResponseWriter, v any) {
+	s.writeJSONStatus(w, http.StatusOK, v)
+}
+
+func (s *Server) writeJSONStatus(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(v)
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+func (s *Server) writeJSONError(w http.ResponseWriter, status int, message string) {
+	s.writeJSONStatus(w, status, map[string]string{"error": message})
 }
 
 // ---- Provider Delete ----
@@ -48,7 +58,7 @@ func (s *Server) adminProviderDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	next, err := config.DeleteProvider(s.cfgPath, body.ID)
 	if err != nil {
-		http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadRequest)
+		s.writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	s.snapshot.Store(s.buildSnapshot(next))
@@ -80,7 +90,7 @@ func (s *Server) adminProviderUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	next, err := config.UpdateProvider(s.cfgPath, input)
 	if err != nil {
-		http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadRequest)
+		s.writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	s.snapshot.Store(s.buildSnapshot(next))
@@ -149,7 +159,7 @@ func (s *Server) adminAliasesCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	next, err := config.UpsertAlias(s.cfgPath, body.Alias, body.Target)
 	if err != nil {
-		http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadRequest)
+		s.writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	s.snapshot.Store(s.buildSnapshot(next))
@@ -175,7 +185,7 @@ func (s *Server) adminAliasesDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	next, err := config.DeleteAlias(s.cfgPath, alias)
 	if err != nil {
-		http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadRequest)
+		s.writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	s.snapshot.Store(s.buildSnapshot(next))
@@ -204,7 +214,7 @@ func (s *Server) adminAliasesDefaults(w http.ResponseWriter, r *http.Request) {
 	}
 	next, err := config.UpdateAliasDefaults(s.cfgPath, body.DefaultModel, body.AllowRaw)
 	if err != nil {
-		http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadRequest)
+		s.writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	s.snapshot.Store(s.buildSnapshot(next))
@@ -232,13 +242,9 @@ func (s *Server) adminClientKeysList(w http.ResponseWriter, r *http.Request) {
 	}
 	keys := make([]keyResp, 0, len(snap.Config.ClientKeys))
 	for _, k := range snap.Config.ClientKeys {
-		prefix := ""
-		if len(k.KeyHash) > 12 {
-			prefix = k.KeyHash[:12]
-		}
 		keys = append(keys, keyResp{
 			Name:          k.Name,
-			KeyPrefix:     prefix,
+			KeyPrefix:     k.KeyPrefix,
 			Enabled:       k.Enabled,
 			AllowedModels: k.AllowedModels,
 			RPM:           k.RPM,
@@ -270,7 +276,7 @@ func (s *Server) adminClientKeysCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	next, rawKey, err := config.UpsertClientKey(s.cfgPath, input)
 	if err != nil {
-		http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadRequest)
+		s.writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	s.snapshot.Store(s.buildSnapshot(next))
@@ -310,7 +316,7 @@ func (s *Server) adminClientKeysUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	next, err := config.UpdateClientKey(s.cfgPath, name, update)
 	if err != nil {
-		http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadRequest)
+		s.writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	s.snapshot.Store(s.buildSnapshot(next))
@@ -336,7 +342,7 @@ func (s *Server) adminClientKeysDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	next, err := config.DeleteClientKey(s.cfgPath, name)
 	if err != nil {
-		http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadRequest)
+		s.writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	s.snapshot.Store(s.buildSnapshot(next))
@@ -469,24 +475,31 @@ func (s *Server) adminProviderHealth(w http.ResponseWriter, r *http.Request) {
 			BaseURL: p.BaseURL,
 			Healthy: false,
 		}
-		// Do a quick probe
-		testURL := providerProbeURL(p)
-		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-		defer cancel()
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, testURL, nil)
-		if err == nil {
-			if authErr := p.Auth.Apply(req); authErr == nil {
-				started := time.Now()
-				if resp, err := s.httpClient.Do(req); err == nil {
-					resp.Body.Close()
-					h.Healthy = resp.StatusCode >= 200 && resp.StatusCode < 400
-					h.LatencyMs = time.Since(started).Milliseconds()
-				}
-			}
-		}
+		h.Healthy, h.LatencyMs = s.probeProviderHealth(r.Context(), p)
 		healthList = append(healthList, h)
 	}
 	s.writeJSON(w, map[string]any{"providers": healthList})
+}
+
+func (s *Server) probeProviderHealth(parent context.Context, provider config.ProviderConfig) (bool, int64) {
+	ctx, cancel := context.WithTimeout(parent, 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, providerProbeURL(provider), nil)
+	if err != nil {
+		return false, 0
+	}
+	if authErr := provider.Auth.Apply(req); authErr != nil {
+		return false, 0
+	}
+	started := time.Now()
+	resp, err := s.httpClient.Do(req)
+	latency := time.Since(started).Milliseconds()
+	if err != nil {
+		return false, latency
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1024))
+	return resp.StatusCode >= 200 && resp.StatusCode < 400, latency
 }
 
 // ---- Raw Config ----
@@ -503,7 +516,7 @@ func (s *Server) adminRawConfig(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		yamlContent, err := config.RawConfig(s.cfgPath)
 		if err != nil {
-			http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusInternalServerError)
+			s.writeJSONError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 		s.writeJSON(w, map[string]string{"yaml": yamlContent})
@@ -517,7 +530,7 @@ func (s *Server) adminRawConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		next, err := config.SaveRawConfig(s.cfgPath, body.YAML)
 		if err != nil {
-			http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadRequest)
+			s.writeJSONError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		s.snapshot.Store(s.buildSnapshot(next))

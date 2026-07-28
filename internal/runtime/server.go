@@ -193,14 +193,25 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().Unix()
 	seen := map[string]bool{}
 	data := []map[string]any{}
+	aliases := make([]string, 0, len(snap.Config.ModelResolver.Aliases))
 	for alias := range snap.Config.ModelResolver.Aliases {
+		aliases = append(aliases, alias)
+	}
+	sort.Strings(aliases)
+	for _, alias := range aliases {
 		if alias == "" || seen[alias] {
 			continue
 		}
 		seen[alias] = true
 		data = append(data, map[string]any{"id": alias, "object": "model", "created": now, "owned_by": "vibe-proxy", "vibe_type": "alias"})
 	}
-	for providerID, provider := range snap.Config.Providers {
+	providerIDs := make([]string, 0, len(snap.Config.Providers))
+	for providerID := range snap.Config.Providers {
+		providerIDs = append(providerIDs, providerID)
+	}
+	sort.Strings(providerIDs)
+	for _, providerID := range providerIDs {
+		provider := snap.Config.Providers[providerID]
 		for _, model := range provider.Models {
 			if model == "" || seen[model] {
 				continue
@@ -344,17 +355,11 @@ func (s *Server) handleWithClient(w http.ResponseWriter, r *http.Request, truste
 			return
 		}
 		var streamStats streamengine.Stats
+		var streamStatsMu sync.Mutex
 		tracked := streamengine.Track(ctx, events, func(stats streamengine.Stats) {
+			streamStatsMu.Lock()
 			streamStats = stats
-			tracker.Event.Usage = toTelemetryUsage(stats.Usage)
-			if !stats.FirstTokenAt.IsZero() {
-				firstTokenAt := stats.FirstTokenAt
-				tracker.Event.FirstTokenAt = &firstTokenAt
-				tracker.Event.TTFTMillis = firstTokenAt.Sub(tracker.Event.StartedAt).Milliseconds()
-			}
-			if stats.OutputTokenCount > 1 && !stats.FirstTokenAt.IsZero() && !stats.CompletedAt.IsZero() {
-				tracker.Event.TPOTMillis = float64(stats.CompletedAt.Sub(stats.FirstTokenAt).Milliseconds()) / float64(stats.OutputTokenCount-1)
-			}
+			streamStatsMu.Unlock()
 		})
 		if err := clientAdapter.EncodeStream(ctx, w, tracked); err != nil {
 			ge := errorToIR(err)
@@ -364,7 +369,19 @@ func (s *Server) handleWithClient(w http.ResponseWriter, r *http.Request, truste
 			}
 			return
 		}
-		tracker.Finish(http.StatusOK, toTelemetryUsage(streamStats.Usage), "")
+		streamStatsMu.Lock()
+		finalStreamStats := streamStats
+		streamStatsMu.Unlock()
+		tracker.Event.Usage = toTelemetryUsage(finalStreamStats.Usage)
+		if !finalStreamStats.FirstTokenAt.IsZero() {
+			firstTokenAt := finalStreamStats.FirstTokenAt
+			tracker.Event.FirstTokenAt = &firstTokenAt
+			tracker.Event.TTFTMillis = firstTokenAt.Sub(tracker.Event.StartedAt).Milliseconds()
+		}
+		if finalStreamStats.OutputTokenCount > 1 && !finalStreamStats.FirstTokenAt.IsZero() && !finalStreamStats.CompletedAt.IsZero() {
+			tracker.Event.TPOTMillis = float64(finalStreamStats.CompletedAt.Sub(finalStreamStats.FirstTokenAt).Milliseconds()) / float64(finalStreamStats.OutputTokenCount-1)
+		}
+		tracker.Finish(http.StatusOK, toTelemetryUsage(finalStreamStats.Usage), "")
 		return
 	}
 	out, err := providerAdapter.ParseUnary(ctx, resp)
@@ -447,12 +464,15 @@ func (s *Server) reload(w http.ResponseWriter, r *http.Request) {
 	}
 	cfg, err := config.LoadRuntime(s.cfgPath)
 	if err != nil {
-		http.Error(w, err.Error(), 400)
+		s.writeJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if issues := config.ValidateRuntime(cfg); config.HasErrors(issues) {
+		s.writeJSONStatus(w, http.StatusBadRequest, map[string]any{"error": "invalid configuration", "issues": issues})
 		return
 	}
 	s.snapshot.Store(s.buildSnapshot(cfg))
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"reloaded": true, "loaded_at": s.current().LoadedAt})
+	s.writeJSON(w, map[string]any{"reloaded": true, "loaded_at": s.current().LoadedAt})
 }
 func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 	snap := s.current()
@@ -461,7 +481,13 @@ func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	providers := []map[string]any{}
-	for id, p := range snap.Config.Providers {
+	providerIDs := make([]string, 0, len(snap.Config.Providers))
+	for id := range snap.Config.Providers {
+		providerIDs = append(providerIDs, id)
+	}
+	sort.Strings(providerIDs)
+	for _, id := range providerIDs {
+		p := snap.Config.Providers[id]
 		authType, keySource, keyEnv := providerAuthMeta(p)
 		providers = append(providers, map[string]any{"id": id, "type": p.Type, "base_url": p.BaseURL, "catalog_provider": p.CatalogProvider, "default_capabilities": p.DefaultCapabilities, "model_capabilities": p.ModelCapabilities, "models": p.Models, "max_concurrency": p.MaxConcurrency, "auth_type": authType, "api_key_source": keySource, "api_key_env": keyEnv})
 	}

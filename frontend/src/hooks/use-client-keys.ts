@@ -13,7 +13,9 @@ export function useCreateClientKey() {
   return useMutation({
     mutationFn: (data: { name: string; allowed_models?: string[]; rpm?: number }) =>
       clientKeyApi.create(data),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["client-keys"] }),
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ["client-keys"] })
+    },
   })
 }
 
@@ -22,7 +24,9 @@ export function useUpdateClientKey() {
   return useMutation({
     mutationFn: ({ name, ...data }: { name: string; enabled?: boolean; allowed_models?: string[]; rpm?: number }) =>
       clientKeyApi.update(name, data),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["client-keys"] }),
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ["client-keys"] })
+    },
   })
 }
 
@@ -30,6 +34,8 @@ export function useDeleteClientKey() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (name: string) => clientKeyApi.remove(name),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["client-keys"] }),
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ["client-keys"] })
+    },
   })
 }

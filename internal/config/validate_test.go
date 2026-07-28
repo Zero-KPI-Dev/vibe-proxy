@@ -165,3 +165,67 @@ func TestValidateRuntimeRequiresExplicitVisionFallbackCapability(t *testing.T) {
 		t.Fatalf("expected explicit Vision capability error: %+v", issues)
 	}
 }
+
+func TestValidateRuntimeRejectsRelativeProviderURLAndUnsupportedAuth(t *testing.T) {
+	cfg, err := CompileSimple(SimpleConfig{Providers: map[string]ProviderConfig{
+		"bad": {
+			Type:    "openai-compatible",
+			BaseURL: "/relative",
+			Auth:    upstreamauth.Profile{Type: "magic"},
+		},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	issues := ValidateRuntime(cfg)
+	if !hasIssueCode(issues, "invalid_base_url") || !hasIssueCode(issues, "unsupported_auth_type") {
+		t.Fatalf("missing URL or auth validation issues: %+v", issues)
+	}
+}
+
+func TestValidateRuntimeRejectsUnresolvableDefaultModel(t *testing.T) {
+	cfg, err := CompileSimple(SimpleConfig{
+		Providers: map[string]ProviderConfig{
+			"local": {
+				Type:    "openai-compatible",
+				BaseURL: "http://127.0.0.1:3000/v1",
+				Auth:    upstreamauth.Profile{Type: "none"},
+				Models:  []string{"chat"},
+			},
+		},
+		Models: ModelsConfig{Default: "missing", AllowRaw: false},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if issues := ValidateRuntime(cfg); !hasIssueCode(issues, "default_model_invalid") {
+		t.Fatalf("missing default model validation issue: %+v", issues)
+	}
+}
+
+func TestValidateRuntimeRejectsInvalidAndDuplicateClientKeys(t *testing.T) {
+	cfg, err := CompileSimple(SimpleConfig{
+		ClientKeys: []ClientKeyConfig{
+			{Name: "agent", KeyHash: "hash", Enabled: true, AllowedModels: []string{"*"}, RPM: 60},
+			{Name: "agent", Enabled: true, RPM: 0},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	issues := ValidateRuntime(cfg)
+	for _, code := range []string{"duplicate_client_key_name", "missing_client_key_hash", "missing_allowed_models", "invalid_client_key_rpm"} {
+		if !hasIssueCode(issues, code) {
+			t.Fatalf("missing %s validation issue: %+v", code, issues)
+		}
+	}
+}
+
+func hasIssueCode(issues []ValidationIssue, code string) bool {
+	for _, validationIssue := range issues {
+		if validationIssue.Code == code {
+			return true
+		}
+	}
+	return false
+}

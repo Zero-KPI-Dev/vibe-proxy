@@ -5,8 +5,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/a448582655/vibe-proxy/internal/modelcapability"
+	"github.com/a448582655/vibe-proxy/internal/upstreamauth"
 )
 
 func TestUpsertLocalProvider(t *testing.T) {
@@ -35,17 +37,24 @@ func TestUpsertLocalProvider(t *testing.T) {
 
 func TestBuildLocalProviderPreservesCapabilityOverrides(t *testing.T) {
 	existing := ProviderConfig{
+		Auth:                upstreamauth.Profile{Type: "custom_headers", Headers: map[string]upstreamauth.SecretRef{"X-Tenant": "literal:team-a"}},
+		Priority:            7,
+		Timeout:             Duration{Duration: 45 * time.Second},
+		MaxConcurrency:      11,
 		DefaultCapabilities: modelcapability.ModelCapabilities{ImageInput: modelcapability.SupportUnsupported},
 		ModelCapabilities: map[string]modelcapability.ModelCapabilities{
 			"vision": {ImageInput: modelcapability.SupportSupported},
 		},
 	}
-	provider, err := BuildLocalProvider(LocalProviderInput{ID: "local", Type: "openai-compatible", BaseURL: "http://127.0.0.1:3000/v1", AuthType: "none"}, &existing)
+	provider, err := BuildLocalProvider(LocalProviderInput{ID: "local", Type: "openai-compatible", BaseURL: "http://127.0.0.1:3000/v1", AuthType: "custom_headers"}, &existing)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if provider.DefaultCapabilities.ImageInput != modelcapability.SupportUnsupported || provider.ModelCapabilities["vision"].ImageInput != modelcapability.SupportSupported {
 		t.Fatalf("capability overrides were lost: %+v", provider)
+	}
+	if provider.Priority != 7 || provider.Timeout.Duration != 45*time.Second || provider.MaxConcurrency != 11 || provider.Auth.Headers["X-Tenant"] != "literal:team-a" {
+		t.Fatalf("advanced provider settings were lost: %+v", provider)
 	}
 }
 

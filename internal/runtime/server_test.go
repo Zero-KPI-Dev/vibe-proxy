@@ -3,6 +3,7 @@ package runtime
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -765,6 +766,41 @@ func TestRuntimeAdminAliasAndClientKeyCRUD(t *testing.T) {
 	}
 }
 
+func TestRuntimeAdminDynamicErrorsAreValidJSON(t *testing.T) {
+	t.Setenv("VIBE_PROXY_ADMIN_TOKEN", "admin-token")
+	path := writeAdminTestConfig(t)
+	cfg, err := config.LoadRuntime(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	testPromOnce.Do(func() { testProm = metrics.New() })
+	s := New(path, cfg, metrics.MultiSink{}, testProm)
+
+	create := func() *httptest.ResponseRecorder {
+		req := adminJSONRequest(http.MethodPost, "/admin/client-keys", `{"name":"agent","rpm":10}`)
+		response := httptest.NewRecorder()
+		s.Routes().ServeHTTP(response, req)
+		return response
+	}
+	if first := create(); first.Code != http.StatusOK {
+		t.Fatalf("initial client key create failed: %d %s", first.Code, first.Body.String())
+	}
+	second := create()
+	if second.Code != http.StatusBadRequest {
+		t.Fatalf("expected duplicate key error, got %d %s", second.Code, second.Body.String())
+	}
+	if contentType := second.Header().Get("Content-Type"); !strings.HasPrefix(contentType, "application/json") {
+		t.Fatalf("unexpected content type %q", contentType)
+	}
+	if !json.Valid(second.Body.Bytes()) {
+		t.Fatalf("dynamic error is not valid JSON: %s", second.Body.String())
+	}
+	var payload map[string]string
+	if err := json.Unmarshal(second.Body.Bytes(), &payload); err != nil || !strings.Contains(payload["error"], `"agent"`) {
+		t.Fatalf("unexpected error payload: %v, %s", err, second.Body.String())
+	}
+}
+
 func TestRuntimeAdminRawConfigRejectsInvalidYAMLWithoutOverwriting(t *testing.T) {
 	t.Setenv("VIBE_PROXY_ADMIN_TOKEN", "admin-token")
 	path := writeAdminTestConfig(t)
@@ -791,6 +827,30 @@ func TestRuntimeAdminRawConfigRejectsInvalidYAMLWithoutOverwriting(t *testing.T)
 	}
 	if string(after) != string(before) {
 		t.Fatalf("invalid raw config overwrote file:\n%s", after)
+	}
+}
+
+func TestRuntimeReloadRejectsInvalidRuntimeAndKeepsCurrentSnapshot(t *testing.T) {
+	t.Setenv("VIBE_PROXY_ADMIN_TOKEN", "admin-token")
+	path := writeAdminTestConfig(t)
+	cfg, err := config.LoadRuntime(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	testPromOnce.Do(func() { testProm = metrics.New() })
+	s := New(path, cfg, metrics.MultiSink{}, testProm)
+	if err := os.WriteFile(path, []byte("version: vibeproxy.io/v1alpha1\nsecurity:\n  admin_bearer_token_env: VIBE_PROXY_ADMIN_TOKEN\nproviders:\n  bad:\n    type: openai-compatible\n    base_url: /relative\n    auth: {type: none}\nmodels:\n  allow_raw: true\n  aliases: {}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	req := adminJSONRequest(http.MethodPost, "/admin/config/reload", "")
+	response := httptest.NewRecorder()
+	s.Routes().ServeHTTP(response, req)
+	if response.Code != http.StatusBadRequest || !json.Valid(response.Body.Bytes()) {
+		t.Fatalf("unexpected invalid reload response: %d %s", response.Code, response.Body.String())
+	}
+	if _, exists := s.current().Config.Providers["mockai"]; !exists {
+		t.Fatalf("invalid reload replaced the current snapshot: %+v", s.current().Config.Providers)
 	}
 }
 

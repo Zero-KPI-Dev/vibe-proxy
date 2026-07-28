@@ -3,6 +3,7 @@ package auth
 import (
 	"crypto/subtle"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -74,7 +75,11 @@ func (a *Authenticator) AuthenticateDataPlane(r *http.Request, keys []config.Cli
 			continue
 		}
 		if bcrypt.CompareHashAndPassword([]byte(k.KeyHash), []byte(token)) == nil {
-			limAny, _ := a.limiters.LoadOrStore(k.Name, NewLimiter(k.RPM))
+			// Include the key material and configured limit so deleting,
+			// recreating, or editing a same-named key cannot accidentally
+			// reuse a stale limiter.
+			limiterID := k.Name + "\x00" + k.KeyHash + "\x00" + strconv.Itoa(k.RPM)
+			limAny, _ := a.limiters.LoadOrStore(limiterID, NewLimiter(k.RPM))
 			lim := limAny.(*Limiter)
 			if !lim.Allow() {
 				return Client{}, &types.GatewayError{StatusCode: http.StatusTooManyRequests, Type: "rate_limit_error", Code: "rate_limit_exceeded", Message: "Rate limit exceeded.", RetryAfter: "60"}

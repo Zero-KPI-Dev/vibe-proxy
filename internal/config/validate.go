@@ -42,17 +42,43 @@ func ValidateRuntime(cfg *RuntimeConfig) []ValidationIssue {
 		}
 		if p.BaseURL == "" {
 			issues = append(issues, issue("error", path+".base_url", "missing_base_url", "Provider base_url is required."))
-		} else if _, err := url.ParseRequestURI(p.BaseURL); err != nil {
+		} else if !isAbsoluteHTTPURL(p.BaseURL) {
 			issues = append(issues, issue("error", path+".base_url", "invalid_base_url", "Provider base_url must be a valid absolute URL."))
 		}
-		if p.Auth.Type == "" {
+		switch p.Auth.Type {
+		case "":
 			issues = append(issues, issue("warning", path+".auth", "missing_auth", "Provider auth is not configured; this is only valid for local/private providers without auth."))
-		}
-		if p.Auth.Type == "bearer" && p.Auth.Token == "" {
-			issues = append(issues, issue("error", path+".auth.token", "missing_bearer_token", "Bearer auth requires token."))
-		}
-		if p.Auth.Type == "api_key_header" && (p.Auth.Header == "" || p.Auth.Value == "") {
-			issues = append(issues, issue("error", path+".auth", "invalid_api_key_header", "API key header auth requires header and value."))
+		case "none":
+		case "bearer":
+			if p.Auth.Token == "" {
+				issues = append(issues, issue("error", path+".auth.token", "missing_bearer_token", "Bearer auth requires token."))
+			}
+		case "api_key_header":
+			if strings.TrimSpace(p.Auth.Header) == "" || p.Auth.Value == "" {
+				issues = append(issues, issue("error", path+".auth", "invalid_api_key_header", "API key header auth requires header and value."))
+			}
+		case "custom_headers":
+			if len(p.Auth.Headers) == 0 {
+				issues = append(issues, issue("error", path+".auth.headers", "missing_custom_headers", "Custom header auth requires at least one header."))
+			}
+			for header, value := range p.Auth.Headers {
+				if strings.TrimSpace(header) == "" || value == "" {
+					issues = append(issues, issue("error", path+".auth.headers", "invalid_custom_header", "Custom header names and values cannot be empty."))
+					break
+				}
+			}
+		case "custom_query":
+			if len(p.Auth.Query) == 0 {
+				issues = append(issues, issue("error", path+".auth.query", "missing_custom_query", "Custom query auth requires at least one parameter."))
+			}
+			for name, value := range p.Auth.Query {
+				if strings.TrimSpace(name) == "" || value == "" {
+					issues = append(issues, issue("error", path+".auth.query", "invalid_custom_query", "Custom query parameter names and values cannot be empty."))
+					break
+				}
+			}
+		default:
+			issues = append(issues, issue("error", path+".auth.type", "unsupported_auth_type", fmt.Sprintf("Provider auth type %q is not supported.", p.Auth.Type)))
 		}
 		if !p.DefaultCapabilities.ImageInput.Valid() {
 			issues = append(issues, issue("error", path+".default_capabilities.image_input", "invalid_image_input_capability", "image_input must be unknown, supported, or unsupported."))
@@ -76,9 +102,41 @@ func ValidateRuntime(cfg *RuntimeConfig) []ValidationIssue {
 			issues = append(issues, issue("error", "models.aliases."+alias, "alias_provider_not_found", "Alias points to an unknown provider."))
 		}
 	}
+	if cfg.ModelResolver.DefaultModel != "" {
+		resolver := modelresolver.New(cfg.ModelResolver)
+		if _, resolveErr := resolver.Resolve(&ir.Request{RequestedModel: cfg.ModelResolver.DefaultModel}); resolveErr != nil {
+			issues = append(issues, issue("error", "models.default", "default_model_invalid", "Default model cannot be resolved."))
+		}
+	}
+	seenClientKeys := make(map[string]struct{}, len(cfg.ClientKeys))
+	for i, clientKey := range cfg.ClientKeys {
+		path := fmt.Sprintf("client_keys.%d", i)
+		name := strings.TrimSpace(clientKey.Name)
+		if name == "" {
+			issues = append(issues, issue("error", path+".name", "missing_client_key_name", "Client key name is required."))
+		} else if _, exists := seenClientKeys[name]; exists {
+			issues = append(issues, issue("error", path+".name", "duplicate_client_key_name", "Client key names must be unique."))
+		} else {
+			seenClientKeys[name] = struct{}{}
+		}
+		if strings.TrimSpace(clientKey.KeyHash) == "" {
+			issues = append(issues, issue("error", path+".key_hash", "missing_client_key_hash", "Client key hash is required."))
+		}
+		if len(clientKey.AllowedModels) == 0 {
+			issues = append(issues, issue("error", path+".allowed_models", "missing_allowed_models", "Client key must allow at least one model or wildcard."))
+		}
+		if clientKey.RPM <= 0 {
+			issues = append(issues, issue("error", path+".rpm", "invalid_client_key_rpm", "Client key RPM must be greater than zero."))
+		}
+	}
 	issues = append(issues, validateMultimodal(cfg.Multimodal)...)
 	issues = append(issues, validateVisionFallback(cfg)...)
 	return issues
+}
+
+func isAbsoluteHTTPURL(raw string) bool {
+	parsed, err := url.Parse(raw)
+	return err == nil && parsed.Host != "" && (parsed.Scheme == "http" || parsed.Scheme == "https")
 }
 
 func validateMultimodal(cfg MultimodalConfig) []ValidationIssue {

@@ -119,7 +119,7 @@ export function ClientKeysPage() {
         rpm: parseInt(editRpm) || editingKey.rpm,
         allowed_models: editModels.trim()
           ? editModels.split(",").map((s) => s.trim()).filter(Boolean)
-          : [],
+          : ["*"],
       })
       setEditingKey(null)
       toast.success(t("clientKeys.updated", { name: editingKey.name }))
@@ -257,7 +257,7 @@ export function ClientKeysPage() {
                   <TableRow key={k.name}>
                     <TableCell className="font-medium">{k.name}</TableCell>
                     <TableCell className="font-mono text-xs text-muted-foreground">
-                      {k.key_prefix}...
+                      {k.key_prefix ? `${k.key_prefix}...` : t("clientKeys.prefixUnavailable")}
                     </TableCell>
                     <TableCell>
                       {k.allowed_models && k.allowed_models.length > 0 ? (
