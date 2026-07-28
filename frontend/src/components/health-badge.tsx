@@ -1,10 +1,21 @@
+import { useEffect, useState } from "react"
 import { cn } from "@/lib/utils"
 import { useHealth } from "@/hooks/use-health"
+import { formatUptime } from "@/lib/runtime-status"
 import { useTranslation } from "react-i18next"
 
 export function HealthBadge({ className }: { className?: string }) {
-  const { t, i18n } = useTranslation()
+  const { t } = useTranslation()
   const { data: health } = useHealth()
+  const [now, setNow] = useState(Date.now)
+
+  useEffect(() => {
+    if (!health?.started_at) return
+    setNow(Date.now())
+    const timer = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [health?.started_at])
+
   return (
     <span className={cn("inline-flex items-center gap-2 text-sm text-muted-foreground", className)}>
       <span
@@ -15,7 +26,7 @@ export function HealthBadge({ className }: { className?: string }) {
       />
       {health?.ok
         ? t("status.running", {
-            time: new Date(health.loaded_at).toLocaleTimeString(i18n.language),
+            duration: formatUptime(health.started_at, now),
           })
         : t("status.offline")}
     </span>

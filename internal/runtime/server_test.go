@@ -51,6 +51,47 @@ func TestMetricsRange(t *testing.T) {
 	}
 }
 
+func TestRuntimeHealthzReportsStableServerStartTime(t *testing.T) {
+	s := newTestServer(t, func(r *http.Request) (*http.Response, error) {
+		return jsonResponse(http.StatusOK, `{}`), nil
+	})
+	startedAt := time.Date(2026, time.July, 28, 12, 0, 0, 0, time.UTC)
+	s.startedAt = startedAt
+
+	readHealth := func() struct {
+		OK        bool      `json:"ok"`
+		StartedAt time.Time `json:"started_at"`
+		LoadedAt  time.Time `json:"loaded_at"`
+	} {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+		w := httptest.NewRecorder()
+		s.Routes().ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("unexpected health response: %d %s", w.Code, w.Body.String())
+		}
+		var response struct {
+			OK        bool      `json:"ok"`
+			StartedAt time.Time `json:"started_at"`
+			LoadedAt  time.Time `json:"loaded_at"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+			t.Fatal(err)
+		}
+		return response
+	}
+
+	first := readHealth()
+	if !first.OK || !first.StartedAt.Equal(startedAt) || first.LoadedAt.IsZero() {
+		t.Fatalf("unexpected health payload: %+v", first)
+	}
+	s.snapshot.Store(s.buildSnapshot(s.current().Config))
+	second := readHealth()
+	if !second.StartedAt.Equal(startedAt) || second.LoadedAt.Before(first.LoadedAt) {
+		t.Fatalf("server start time changed with the config snapshot: first=%+v second=%+v", first, second)
+	}
+}
+
 func TestRuntimeModelsEndpoint(t *testing.T) {
 	s := newTestServer(t, func(r *http.Request) (*http.Response, error) { return jsonResponse(200, `{}`), nil })
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)

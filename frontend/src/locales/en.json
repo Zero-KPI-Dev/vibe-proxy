@@ -35,7 +35,7 @@
     "settings": "Settings"
   },
   "status": {
-    "running": "Running · {{time}}",
+    "running": "Uptime {{duration}}",
     "offline": "Offline",
     "healthy": "OK",
     "down": "DOWN"

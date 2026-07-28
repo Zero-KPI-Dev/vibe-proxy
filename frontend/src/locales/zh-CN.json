@@ -35,7 +35,7 @@
     "settings": "设置"
   },
   "status": {
-    "running": "运行中 · {{time}}",
+    "running": "已运行 {{duration}}",
     "offline": "离线",
     "healthy": "正常",
     "down": "异常"

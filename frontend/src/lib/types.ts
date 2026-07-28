@@ -1,6 +1,7 @@
 // ---- Health ----
 export interface HealthzResponse {
   ok: boolean
+  started_at: string
   loaded_at: string
 }
 

@@ -6,9 +6,10 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "test": "npm run test:i18n && npm run test:playground",
+    "test": "npm run test:i18n && npm run test:playground && npm run test:runtime-status",
     "test:i18n": "node ./scripts/check-i18n.mjs",
     "test:playground": "node ./scripts/check-playground.mjs",
+    "test:runtime-status": "node ./scripts/check-runtime-status.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

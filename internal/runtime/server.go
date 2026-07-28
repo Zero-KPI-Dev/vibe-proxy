@@ -42,6 +42,7 @@ type Snapshot struct {
 
 type Server struct {
 	cfgPath          string
+	startedAt        time.Time
 	snapshot         atomic.Value
 	authenticator    *auth.Authenticator
 	httpClient       *http.Client
@@ -72,7 +73,7 @@ func New(cfgPath string, cfg *config.RuntimeConfig, sink telemetry.EventSink, pr
 	if provider, ok := sink.(telemetry.ObservabilityReaderProvider); ok {
 		observability = provider.ObservabilityReader()
 	}
-	s := &Server{cfgPath: cfgPath, authenticator: auth.NewAuthenticator(), httpClient: &http.Client{Timeout: 0}, ocrHTTPClient: &http.Client{}, builtinOCR: ocr.NewBuiltinProvider(), metrics: prom, sink: sink, recent: recent, observability: observability, catalog: modelcatalog.NewService(modelcatalog.Options{CachePath: modelCatalogCachePath(cfgPath, cfg)}), clientAdapters: []protocol.ClientAdapter{clientopenai.ChatAdapter{}, clientopenai.ResponsesAdapter{}, clientanthropic.MessagesAdapter{}}, providerAdapters: map[string]protocol.ProviderAdapter{"anthropic": provideranthropic.Provider{}, "openai-compatible": provideropenai.Provider{}}}
+	s := &Server{cfgPath: cfgPath, startedAt: time.Now(), authenticator: auth.NewAuthenticator(), httpClient: &http.Client{Timeout: 0}, ocrHTTPClient: &http.Client{}, builtinOCR: ocr.NewBuiltinProvider(), metrics: prom, sink: sink, recent: recent, observability: observability, catalog: modelcatalog.NewService(modelcatalog.Options{CachePath: modelCatalogCachePath(cfgPath, cfg)}), clientAdapters: []protocol.ClientAdapter{clientopenai.ChatAdapter{}, clientopenai.ResponsesAdapter{}, clientanthropic.MessagesAdapter{}}, providerAdapters: map[string]protocol.ProviderAdapter{"anthropic": provideranthropic.Provider{}, "openai-compatible": provideropenai.Provider{}}}
 	s.snapshot.Store(s.buildSnapshot(cfg))
 	return s
 }
@@ -450,7 +451,7 @@ func (s *Server) release(id string) {
 
 func (s *Server) healthz(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"ok": true, "loaded_at": s.current().LoadedAt})
+	json.NewEncoder(w).Encode(map[string]any{"ok": true, "started_at": s.startedAt, "loaded_at": s.current().LoadedAt})
 }
 func (s *Server) reload(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {

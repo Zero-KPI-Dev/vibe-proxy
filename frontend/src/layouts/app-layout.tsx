@@ -14,10 +14,10 @@ import {
   X,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { useHealth } from "@/hooks/use-health"
 import { NAV_ITEMS } from "@/lib/constants"
 import { Button } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
+import { HealthBadge } from "@/components/health-badge"
 
 const iconMap: Record<string, React.ReactNode> = {
   LayoutDashboard: <LayoutDashboard className="h-4 w-4" />,
@@ -31,10 +31,9 @@ const iconMap: Record<string, React.ReactNode> = {
 }
 
 export function AppLayout({ children }: { children: React.ReactNode }) {
-  const { t, i18n } = useTranslation()
+  const { t } = useTranslation()
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const location = useLocation()
-  const { data: health } = useHealth()
 
   return (
     <div className="flex h-screen overflow-hidden bg-background">
@@ -74,17 +73,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
 
           <div className="p-3 border-t border-border">
             <div className="flex items-center gap-2 rounded-lg px-3 py-2 text-xs text-muted-foreground">
-              <span
-                className={cn(
-                  "h-2 w-2 rounded-full",
-                  health?.ok ? "bg-green-500 shadow-[0_0_8px] shadow-green-500" : "bg-red-500"
-                )}
-              />
-              {health?.ok
-                ? t("status.running", {
-                    time: new Date(health.loaded_at).toLocaleTimeString(i18n.language),
-                  })
-                : t("status.offline")}
+              <HealthBadge className="text-xs" />
             </div>
           </div>
         </div>
