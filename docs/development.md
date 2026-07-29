@@ -2,6 +2,10 @@
 
 ## Run Tests
 
+vibe-proxy supports the two Go major versions maintained upstream. The module
+minimum is the older supported release (currently Go 1.25), while release and
+container builds use the latest security patch of the newest release.
+
 ```bash
 go test ./...
 ```
@@ -9,7 +13,7 @@ go test ./...
 If Go is not installed locally, use Docker:
 
 ```bash
-docker run --rm -v "$PWD":/src -w /src golang:1.22 sh -lc '/usr/local/go/bin/go test ./...'
+docker run --rm -v "$PWD":/src -w /src golang:1.26.5 sh -lc '/usr/local/go/bin/go test ./...'
 ```
 
 ## Run Locally

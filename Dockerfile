@@ -1,17 +1,18 @@
-FROM golang:1.22 AS build
+FROM golang:1.26.5 AS build
 
 WORKDIR /src
+ARG GOPROXY=https://proxy.golang.org,direct
 COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod \
-    go mod download
+    GOPROXY="${GOPROXY}" go mod download
 
 COPY . .
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=1 go build \
+    CGO_ENABLED=0 go build \
     -tags="netgo osusergo" \
     -trimpath \
-    -ldflags='-s -w -linkmode external -extldflags "-static"' \
+    -ldflags='-s -w' \
     -o /out/vibe-proxy ./cmd/vibe-proxy && \
     mkdir -m 1777 /out/tmp
 

@@ -32,8 +32,8 @@ macOS DMG、Linux tar.gz/DEB Release 提供无 CGO 的单文件构建基础。
 ### 当前基线
 
 - `go.mod`: `go 1.25.0`
-- CI 最低版本：最新 Go 1.25.x
-- CI 当前版本：最新 Go 1.26.x
+- CI 最低版本：Go 1.25.12
+- CI 当前版本：Go 1.26.5
 - Docker/Release 工具链：Go 1.26.5
 
 ### 长期规则
@@ -84,13 +84,16 @@ request_logs
 
 ```go
 func sqliteDSN(path string) (string, error)
+func sqliteDSNFromAbsolutePath(absolutePath, goos string) string
 ```
 
 职责：
 
 1. 将数据库路径转换为绝对路径。
 2. 使用 `file:` URI，正确编码空格、`?`、`#` 和平台路径分隔符。
-3. 为每个数据库连接设置：
+3. Windows 盘符使用空 authority 的 `file:///C:/...`，UNC 路径保留为
+   `file:////server/share/...`。
+4. 为每个数据库连接设置：
    - `_busy_timeout=5000`
    - `_journal_mode=WAL`
 
@@ -110,6 +113,7 @@ sql.Open("sqlite", dsn)
 - 数据库实际处于 WAL 模式。
 - 每个连接的 `busy_timeout` 为 5000ms。
 - 带空格、`?` 和 `#` 的数据库路径可以正常创建和重新打开。
+- Windows 盘符和 UNC 路径生成 SQLite 可接受的空-authority file URI。
 
 ### 旧数据库
 
@@ -119,6 +123,7 @@ sql.Open("sqlite", dsn)
 - transformation JSON 保持可解析。
 - 可以向旧数据库继续写入新请求。
 - 重新打开后新旧数据均存在。
+- 可以恢复异常退出后仅存在于旧 `-wal` 文件中的已提交请求。
 
 ### 现有行为
 
@@ -168,7 +173,7 @@ Dockerfile 更新为 Go 1.26.5，并使用 `CGO_ENABLED=0`。删除外部链接�
 
 ## CI
 
-现有测试工作流调整为 Go 1.25.x/1.26.x 矩阵，并执行：
+现有测试工作流调整为 Go 1.25.12/1.26.5 精确版本矩阵，并执行：
 
 ```bash
 go test ./...
@@ -176,6 +181,8 @@ go vet ./...
 ```
 
 增加一个无 CGO 构建验证步骤，确保后续依赖变更不会重新引入 CGO。
+增加 Windows + Go 1.26.5 的无 CGO 全量测试任务，验证真实 Windows 路径、
+文件锁和 SQLite 运行时行为。
 
 ## 风险与回退
 

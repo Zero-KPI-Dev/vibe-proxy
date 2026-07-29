@@ -52,5 +52,5 @@ docker run --rm \
   -e "ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}" \
   -e "DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}" \
   -e "NEW_API_KEY=${NEW_API_KEY:-}" \
-  golang:1.22 \
+  golang:1.26.5 \
   sh -lc "/usr/local/go/bin/go run ./cmd/vibe-proxy -config /tmp/vibe-proxy-docker.yaml"

@@ -4,11 +4,14 @@ import (
 	"database/sql"
 	"encoding/json"
 	"math"
+	"net/url"
+	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 
 	"github.com/a448582655/vibe-proxy/internal/telemetry"
 )
@@ -16,12 +19,59 @@ import (
 type SQLite struct{ db *sql.DB }
 
 func Open(path string) (*SQLite, error) {
-	db, err := sql.Open("sqlite3", path+"?_busy_timeout=5000&_journal_mode=WAL")
+	dsn, err := sqliteDSN(path)
 	if err != nil {
 		return nil, err
 	}
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, err
+	}
+	if err := db.Ping(); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	s := &SQLite{db: db}
-	return s, s.migrate()
+	if err := s.migrate(); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	return s, nil
+}
+
+func sqliteDSN(path string) (string, error) {
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	return sqliteDSNFromAbsolutePath(absolute, runtime.GOOS), nil
+}
+
+func sqliteDSNFromAbsolutePath(absolutePath, goos string) string {
+	uriPath := filepath.ToSlash(absolutePath)
+	if goos == "windows" {
+		uriPath = strings.ReplaceAll(absolutePath, `\`, "/")
+		if hasWindowsDrivePrefix(uriPath) && !strings.HasPrefix(uriPath, "/") {
+			uriPath = "/" + uriPath
+		}
+	}
+	databaseURL := url.URL{
+		Scheme: "file",
+		Path:   uriPath,
+	}
+	query := databaseURL.Query()
+	query.Set("_busy_timeout", "5000")
+	query.Set("_journal_mode", "WAL")
+	databaseURL.RawQuery = query.Encode()
+	return databaseURL.String()
+}
+
+func hasWindowsDrivePrefix(path string) bool {
+	if len(path) < 2 || path[1] != ':' {
+		return false
+	}
+	drive := path[0]
+	return drive >= 'A' && drive <= 'Z' || drive >= 'a' && drive <= 'z'
 }
 
 func (s *SQLite) migrate() error {

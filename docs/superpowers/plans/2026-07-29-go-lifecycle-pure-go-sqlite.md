@@ -12,7 +12,7 @@
 
 - `go.mod` minimum version is exactly `go 1.25.0`.
 - Docker and release builds use exactly Go 1.26.5 for this 2026-07-29 change.
-- CI covers the latest Go 1.25.x and Go 1.26.x patch releases.
+- CI pins Go 1.25.12 and Go 1.26.5, the latest supported patch releases on 2026-07-29.
 - The existing `Open(path string) (*SQLite, error)` API and `request_logs` schema remain unchanged.
 - Existing SQLite database files must open without export, import, or schema rebuilding.
 - Production and test builds pass with `CGO_ENABLED=0`.
@@ -25,6 +25,9 @@
 - `internal/store/sqlite.go`: pure-Go driver import, URI construction, connection lifecycle.
 - `internal/store/sqlite_test.go`: PRAGMA, special-path, legacy database, and existing observability tests.
 - `internal/store/testdata/legacy-mattn.db`: pre-migration database compatibility fixture.
+- `internal/store/testdata/legacy-mattn-wal.db`: checkpointed base for the legacy WAL recovery fixture.
+- `internal/store/testdata/legacy-mattn-wal.db-wal`: committed row left by an unclean legacy-driver exit.
+- `.gitignore`: narrow exception that allows only the committed legacy database fixture.
 - `go.mod`, `go.sum`: Go floor and driver dependency lock.
 - `Dockerfile`: current supported Go builder and CGO-free link.
 - `.github/workflows/test.yml`: supported Go matrix, vet, and no-CGO build checks.
@@ -35,6 +38,9 @@
 
 **Files:**
 - Create: `internal/store/testdata/legacy-mattn.db`
+- Create: `internal/store/testdata/legacy-mattn-wal.db`
+- Create: `internal/store/testdata/legacy-mattn-wal.db-wal`
+- Modify: `.gitignore`
 - Modify: `internal/store/sqlite_test.go`
 
 **Interfaces:**
@@ -56,17 +62,32 @@ status_code: 200
 transformation_json: {"multimodal_route":"ocr_fallback","ocr_processed":1}
 ```
 
-Close the database cleanly so no `-wal` or `-shm` sidecar is committed.
+Close the primary fixture cleanly so no sidecar is committed. Create the WAL
+fixture separately by checkpointing its schema, disabling auto-checkpoint,
+committing one row, and terminating the legacy-driver process without closing
+the database. Commit the base database and `-wal`, but not `-shm`.
+
+Add narrow `.gitignore` exceptions for these three fixture files after the
+runtime database ignore patterns so no other local database files are admitted.
 
 - [ ] **Step 2: Write failing behavior tests**
 
 Add these tests to `internal/store/sqlite_test.go`:
 
 ```go
+func TestSQLiteDSNFormatsWindowsDrivePath(t *testing.T)
+func TestSQLiteDSNFormatsWindowsUNCPath(t *testing.T)
 func TestSQLiteSupportsSpecialCharactersInPath(t *testing.T)
 func TestSQLiteConfiguresWALAndBusyTimeout(t *testing.T)
+func TestSQLiteConfiguresBusyTimeoutOnPooledConnections(t *testing.T)
+func TestSQLitePersistsConcurrentWrites(t *testing.T)
 func TestSQLiteOpensAndExtendsLegacyMattnDatabase(t *testing.T)
+func TestSQLiteRecoversLegacyMattnWAL(t *testing.T)
 ```
+
+The Windows URI tests call `sqliteDSNFromAbsolutePath` with drive and UNC
+inputs and assert empty authority, slash normalization, percent encoding, and
+connection options without requiring a Windows test runner.
 
 `TestSQLiteSupportsSpecialCharactersInPath` uses a database filename containing
 spaces, `?`, and `#`, writes one event, closes it, reopens the same path, and
@@ -81,9 +102,19 @@ PRAGMA busy_timeout
 
 and asserts `wal` and `5000`.
 
+`TestSQLiteConfiguresBusyTimeoutOnPooledConnections` reserves two pool
+connections and deterministically checks that both report `busy_timeout=5000`.
+`TestSQLitePersistsConcurrentWrites` starts 16 writers behind a barrier,
+collects every real insert error, and checks that all rows were persisted
+without relying on scheduler timing or sleeps.
+
 `TestSQLiteOpensAndExtendsLegacyMattnDatabase` copies the fixture to `t.TempDir`,
 opens the copy, checks the legacy transformation, writes `modernc-request`,
 reopens it, and checks both rows.
+
+`TestSQLiteRecoversLegacyMattnWAL` copies the old base database and its
+uncheckpointed `-wal` sidecar, opens them with the new driver, and checks that
+the committed WAL-only row and transformation are recovered.
 
 - [ ] **Step 3: Run the special-path test and verify RED**
 
@@ -123,7 +154,9 @@ Expected: FAIL with the current `go-sqlite3` CGO-disabled stub.
 
 **Interfaces:**
 - Consumes: regression tests from Task 1.
-- Produces: `sqliteDSN(path string) (string, error)` and a CGO-free implementation of the unchanged `Open` API.
+- Produces: `sqliteDSN(path string) (string, error)`,
+  `sqliteDSNFromAbsolutePath(absolutePath, goos string) string`, and a CGO-free
+  implementation of the unchanged `Open` API.
 
 - [ ] **Step 1: Upgrade the module and replace the dependency**
 
@@ -149,6 +182,8 @@ import (
     "database/sql"
     "net/url"
     "path/filepath"
+    "runtime"
+    "strings"
 
     _ "modernc.org/sqlite"
 )
@@ -158,15 +193,34 @@ func sqliteDSN(path string) (string, error) {
     if err != nil {
         return "", err
     }
+    return sqliteDSNFromAbsolutePath(absolute, runtime.GOOS), nil
+}
+
+func sqliteDSNFromAbsolutePath(absolutePath, goos string) string {
+    uriPath := filepath.ToSlash(absolutePath)
+    if goos == "windows" {
+        uriPath = strings.ReplaceAll(absolutePath, `\`, "/")
+        if hasWindowsDrivePrefix(uriPath) && !strings.HasPrefix(uriPath, "/") {
+            uriPath = "/" + uriPath
+        }
+    }
     databaseURL := url.URL{
         Scheme: "file",
-        Path:   filepath.ToSlash(absolute),
+        Path:   uriPath,
     }
     query := databaseURL.Query()
     query.Set("_busy_timeout", "5000")
     query.Set("_journal_mode", "WAL")
     databaseURL.RawQuery = query.Encode()
-    return databaseURL.String(), nil
+    return databaseURL.String()
+}
+
+func hasWindowsDrivePrefix(path string) bool {
+    if len(path) < 2 || path[1] != ':' {
+        return false
+    }
+    drive := path[0]
+    return drive >= 'A' && drive <= 'Z' || drive >= 'a' && drive <= 'z'
 }
 ```
 
@@ -192,7 +246,7 @@ Run:
 CGO_ENABLED=0 go test ./...
 ```
 
-using Go 1.25.x. Expected: PASS.
+using Go 1.25.12. Expected: PASS.
 
 ### Task 3: Align Docker, CI, scripts, and documentation
 
@@ -226,7 +280,7 @@ Change `.github/workflows/test.yml` to a matrix with:
 ```yaml
 strategy:
   matrix:
-    go-version: ['1.25.x', '1.26.x']
+    go-version: ['1.25.12', '1.26.5']
 ```
 
 For each version run:
@@ -236,6 +290,10 @@ go test ./...
 go vet ./...
 CGO_ENABLED=0 go build -trimpath -o /tmp/vibe-proxy ./cmd/vibe-proxy
 ```
+
+Add a `windows-test` job on `windows-latest` with Go 1.26.5 and job-level
+`CGO_ENABLED: 0`; run `go test ./...` to exercise the real Windows path,
+locking, and SQLite runtime behavior.
 
 - [ ] **Step 3: Update local development references**
 

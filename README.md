@@ -100,7 +100,7 @@ models:
 
 ## Run Current Skeleton
 
-Install Go 1.22+, then:
+Install Go 1.25+, then:
 
 ```bash
 export VIBE_PROXY_ADMIN_TOKEN='change-me-admin-token'
