@@ -103,6 +103,9 @@ func Run(ctx context.Context) error {
 		go func() {
 			if err := host.Start(ctx); err != nil {
 				fmt.Fprintln(os.Stderr, "vibe-proxy desktop startup:", err)
+				if recoveryErr := host.RecoverStartup(ctx, err); recoveryErr != nil {
+					fmt.Fprintln(os.Stderr, "vibe-proxy desktop recovery:", recoveryErr)
+				}
 				return
 			}
 			mainWindow.Show()

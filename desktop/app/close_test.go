@@ -299,15 +299,18 @@ func (f *fakeWindow) activationCounts() (int, int) {
 }
 
 type fakeDialogs struct {
-	mu           sync.Mutex
-	choice       DialogChoice
-	err          error
-	asks         int
-	entered      chan struct{}
-	release      chan struct{}
-	selectedPath string
-	selected     bool
-	selectErr    error
+	mu                    sync.Mutex
+	choice                DialogChoice
+	err                   error
+	asks                  int
+	entered               chan struct{}
+	release               chan struct{}
+	selectedPath          string
+	selected              bool
+	selectErr             error
+	recoveryChoice        RecoveryChoice
+	recoveryErr           error
+	recoveryPresentations []StartupPresentation
 }
 
 func (f *fakeDialogs) AskClose(context.Context) (DialogChoice, error) {
@@ -324,8 +327,15 @@ func (f *fakeDialogs) AskClose(context.Context) (DialogChoice, error) {
 	}
 	return choice, err
 }
-func (f *fakeDialogs) ShowStartupError(context.Context, StartupPresentation) (RecoveryChoice, error) {
-	return RecoveryExit, nil
+func (f *fakeDialogs) ShowStartupError(_ context.Context, presentation StartupPresentation) (RecoveryChoice, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.recoveryPresentations = append(f.recoveryPresentations, presentation)
+	choice := f.recoveryChoice
+	if choice == "" {
+		choice = RecoveryExit
+	}
+	return choice, f.recoveryErr
 }
 func (f *fakeDialogs) SelectConfig(context.Context) (string, bool, error) {
 	f.mu.Lock()

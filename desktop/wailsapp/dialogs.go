@@ -58,19 +58,36 @@ func (d *nativeDialogs) AskClose(ctx context.Context) (app.DialogChoice, error) 
 }
 
 func (d *nativeDialogs) ShowStartupError(ctx context.Context, presentation app.StartupPresentation) (app.RecoveryChoice, error) {
-	finished := make(chan struct{}, 1)
-	dialog := d.application.Dialog.Error().
+	choice := make(chan app.RecoveryChoice, 1)
+	dialog := d.application.Dialog.Question().
 		SetTitle(presentation.Title).
 		SetMessage(presentation.Summary).
 		AttachToWindow(d.window)
-	dialog.AddButton(exitVibeProxyButton).SetAsDefault().OnClick(func() { finished <- struct{}{} })
+	if presentation.Address != "" {
+		label := "Open Existing Control Plane"
+		if presentation.Kind == app.RecoveryWebView {
+			label = "Open in Browser"
+		}
+		dialog.AddButton(label).SetAsDefault().OnClick(func() { choice <- app.RecoveryOpenExisting })
+	}
+	dataLabel := "Open Application Data"
+	if presentation.Kind == app.RecoveryWebView {
+		dataLabel = "Open Logs Folder"
+	}
+	dialog.AddButton(dataLabel).OnClick(func() { choice <- app.RecoveryOpenData })
+	dialog.AddButton(exitVibeProxyButton).SetAsCancel().OnClick(func() { choice <- app.RecoveryExit })
 	dialog.Show()
 	if runtime.GOOS == "windows" {
-		return app.RecoveryExit, nil
+		select {
+		case result := <-choice:
+			return result, nil
+		default:
+			return app.RecoveryExit, nil
+		}
 	}
 	select {
-	case <-finished:
-		return app.RecoveryExit, nil
+	case result := <-choice:
+		return result, nil
 	case <-ctx.Done():
 		return app.RecoveryExit, ctx.Err()
 	}

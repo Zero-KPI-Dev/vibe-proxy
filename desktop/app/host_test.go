@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -101,7 +102,7 @@ func TestHostStartCreatesPrivateConfigAndBootstrapsRealGateway(t *testing.T) {
 	assertSecretsAbsentFromDesktopFiles(t, fixture.paths.DataDir, options.Runtime.AdminTokenOverride, nonce)
 }
 
-func TestHostStartNavigationFailureShutsDownOwnedGateway(t *testing.T) {
+func TestHostStartNavigationFailureKeepsGatewayForBrowserFallback(t *testing.T) {
 	fixture := newHostStartFixture(t)
 	navigateErr := errors.New("webview navigation failed")
 	fixture.window.navigateErr = navigateErr
@@ -114,14 +115,25 @@ func TestHostStartNavigationFailureShutsDownOwnedGateway(t *testing.T) {
 	_, gateway := fixture.startCapture.values()
 	select {
 	case <-gateway.Done():
-	case <-time.After(time.Second):
-		t.Fatal("owned gateway was not cleaned up after navigation failure")
+		t.Fatal("owned gateway was stopped after WebView navigation failure")
+	default:
 	}
 	if got := fixture.tray.destroyCount(); got != 0 {
 		t.Fatalf("Tray.Destroy calls = %d, want 0 before terminal shutdown", got)
 	}
-	if got := fixture.tray.statusValues(); len(got) != 2 || got[0] != "Starting" || got[1] != "Error: "+navigateErr.Error() {
+	if got := fixture.tray.statusValues(); len(got) != 2 || got[0] != "Starting" || got[1] != "Running; desktop window unavailable" {
 		t.Fatalf("tray statuses = %v", got)
+	}
+	if snapshot := fixture.host.controller.Snapshot(); !snapshot.OwnsGateway || snapshot.ListenAddress != gateway.Address() {
+		t.Fatalf("desktop snapshot = %+v, want owned running gateway", snapshot)
+	}
+	if err := fixture.host.OpenControlPlaneInBrowser(); err != nil {
+		t.Fatalf("OpenControlPlaneInBrowser() error = %v", err)
+	}
+	fixture.system.mu.Lock()
+	defer fixture.system.mu.Unlock()
+	if got, want := fixture.system.browsed, []string{"http://" + gateway.Address()}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("browser targets = %v, want %v", got, want)
 	}
 }
 

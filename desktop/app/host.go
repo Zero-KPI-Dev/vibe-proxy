@@ -177,8 +177,10 @@ func (h *Host) Start(ctx context.Context) error {
 	target := "http://" + gateway.Address() + "/desktop/bootstrap/" + nonce
 	if err := h.window.Navigate(target); err != nil {
 		if !h.isShutdownRequested() {
-			h.setStartupErrorStatus(err)
-			return h.cleanupStartupGateway(err, gateway, sessions)
+			webViewErr := &webViewStartupError{address: gateway.Address(), err: err}
+			h.writeStartupErrorLog(webViewErr)
+			h.tray.SetStatus("Running; desktop window unavailable")
+			return webViewErr
 		}
 		return h.cleanupStartupGateway(errors.Join(errHostShuttingDown, err), gateway, sessions)
 	}
@@ -320,6 +322,7 @@ func (h *Host) gatewayBaseURL() (string, error) {
 }
 
 func (h *Host) setStartupErrorStatus(err error) {
+	h.writeStartupErrorLog(err)
 	h.setStatusUnlessShuttingDown("Error: " + err.Error())
 }
 
