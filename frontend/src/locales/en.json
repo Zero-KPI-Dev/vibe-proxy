@@ -442,6 +442,7 @@
     },
     "modelCatalog": "Model capability catalog",
     "modelCatalogDescription": "models.dev supplies baseline modalities, tools, reasoning, and context limits. Restricted networks can import api.json offline.",
+    "catalogDownload": "Download the official api.json on an online computer",
     "catalogModels": "Catalog models",
     "catalogUpdated": "Last updated",
     "catalogNever": "Not downloaded",

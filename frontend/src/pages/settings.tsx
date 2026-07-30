@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { toast } from "sonner"
-import { Database, FileUp, Languages, Palette, RefreshCw, Shield, Save } from "lucide-react"
+import { Database, ExternalLink, FileUp, Languages, Palette, RefreshCw, Shield, Save } from "lucide-react"
 import { desktopApi, setToken, getToken, modelCatalogApi } from "@/lib/api"
 import type { DesktopSnapshot, ModelCatalogState } from "@/lib/types"
 import { normalizeLanguage, setAppLanguage, type AppLanguage } from "@/i18n"
@@ -183,6 +183,15 @@ export function SettingsPage() {
             <CardTitle className="text-base">{t("settings.modelCatalog")}</CardTitle>
           </div>
           <CardDescription>{t("settings.modelCatalogDescription")}</CardDescription>
+          <a
+            href="https://models.dev/api.json"
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex w-fit items-center gap-1 text-xs font-medium text-primary underline-offset-4 hover:underline"
+          >
+            <ExternalLink className="h-3.5 w-3.5" />
+            {t("settings.catalogDownload")}
+          </a>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid grid-cols-2 gap-3 text-sm">

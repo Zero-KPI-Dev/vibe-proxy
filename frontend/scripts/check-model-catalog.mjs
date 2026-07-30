@@ -20,6 +20,8 @@ assert.match(settings, /file\.size > 10 \* 1024 \* 1024/,
   "Settings must reject files larger than the backend catalog limit")
 assert.match(settings, /modelCatalogApi\.importFile\(file\)/,
   "Settings must submit the selected catalog file")
+assert.match(settings, /href="https:\/\/models\.dev\/api\.json"/,
+  "Settings must link to the official catalog download")
 assert.match(types, /origin\?: "remote" \| "upload" \| "cache"/,
   "catalog state must expose its data origin")
 
