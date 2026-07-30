@@ -58,7 +58,14 @@ type Server struct {
 	semaphore        sync.Map
 }
 
+// New builds a runtime server with the default options.
 func New(cfgPath string, cfg *config.RuntimeConfig, sink telemetry.EventSink, prom *metrics.Prometheus) *Server {
+	return NewWithOptions(cfgPath, cfg, sink, prom, Options{})
+}
+
+// NewWithOptions builds a runtime server with optional behavior.
+func NewWithOptions(cfgPath string, cfg *config.RuntimeConfig, sink telemetry.EventSink, prom *metrics.Prometheus, options Options) *Server {
+	_ = options
 	var recent *telemetry.RecentStore
 	if r, ok := sink.(*telemetry.RecentStore); ok {
 		recent = r
