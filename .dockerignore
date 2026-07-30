@@ -1,0 +1,10 @@
+.git
+.github
+.vibe-proxy
+*.db
+*.db-shm
+*.db-wal
+*.log
+frontend/node_modules
+frontend/dist
+frontend/tsconfig.tsbuildinfo

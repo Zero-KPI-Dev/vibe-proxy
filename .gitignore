@@ -2,6 +2,9 @@
 *.db
 *.db-shm
 *.db-wal
+!internal/store/testdata/legacy-mattn.db
+!internal/store/testdata/legacy-mattn-wal.db
+!internal/store/testdata/legacy-mattn-wal.db-wal
 vibe-proxy
 
 # editor / OS
@@ -14,3 +17,8 @@ vibe-proxy
 
 # local generated config
 .vibe-proxy/
+
+# frontend local dependencies / root build output
+frontend/node_modules/
+frontend/dist/
+frontend/tsconfig.tsbuildinfo

@@ -31,6 +31,8 @@ func (p Provider) BuildRequest(ctx context.Context, req *ir.Request, target mode
 	for _, t := range req.Tools {
 		out.Tools = append(out.Tools, chatTool{Type: "function", Function: chatFunction{Name: t.Name, Description: t.Description, Parameters: t.Parameters}})
 	}
+	out.ToolChoice = openAIToolChoice(req.ToolChoice)
+	out.ResponseFormat = openAIResponseFormat(req.ResponseFormat)
 	body, err := json.Marshal(out)
 	if err != nil {
 		return nil, err
@@ -75,14 +77,13 @@ func (p Provider) ParseStream(ctx context.Context, resp *http.Response) (<-chan 
 		for {
 			select {
 			case <-ctx.Done():
-				out <- ir.StreamEvent{Type: ir.EventError, Time: time.Now(), Error: &ir.GatewayError{StatusCode: 499, Kind: "canceled", Code: "client_closed", Message: "Client closed the request."}}
 				return
 			default:
 			}
 			line, err := reader.ReadString('\n')
 			if err != nil {
-				if err != io.EOF {
-					out <- ir.StreamEvent{Type: ir.EventError, Time: time.Now(), Error: &ir.GatewayError{StatusCode: 502, Kind: "upstream_error", Code: "stream_interrupted", Message: "Upstream stream interrupted."}}
+				if ctx.Err() == nil {
+					emitStreamEvent(ctx, out, ir.StreamEvent{Type: ir.EventError, Time: time.Now(), Error: &ir.GatewayError{StatusCode: 502, Kind: "upstream_error", Code: "stream_interrupted", Message: "Upstream stream interrupted."}})
 				}
 				return
 			}
@@ -95,7 +96,7 @@ func (p Provider) ParseStream(ctx context.Context, resp *http.Response) (<-chan 
 				continue
 			}
 			if data == "[DONE]" {
-				out <- ir.StreamEvent{Type: ir.EventMessageDone, Time: time.Now()}
+				emitStreamEvent(ctx, out, ir.StreamEvent{Type: ir.EventMessageDone, Time: time.Now()})
 				return
 			}
 			var chunk streamChunk
@@ -104,26 +105,47 @@ func (p Provider) ParseStream(ctx context.Context, resp *http.Response) (<-chan 
 			}
 			for _, ch := range chunk.Choices {
 				if ch.Delta.ReasoningContent != "" {
-					out <- ir.StreamEvent{Type: ir.EventReasoningDelta, Time: time.Now(), Delta: ir.ContentBlock{Type: ir.ContentReasoning, Text: ch.Delta.ReasoningContent}, Raw: []byte(data)}
+					if !emitStreamEvent(ctx, out, ir.StreamEvent{Type: ir.EventReasoningDelta, Time: time.Now(), Delta: ir.ContentBlock{Type: ir.ContentReasoning, Text: ch.Delta.ReasoningContent}, Raw: []byte(data)}) {
+						return
+					}
 				}
 				if ch.Delta.Content != "" {
-					out <- ir.StreamEvent{Type: ir.EventContentDelta, Time: time.Now(), Delta: ir.ContentBlock{Type: ir.ContentText, Text: ch.Delta.Content}, Raw: []byte(data)}
+					if !emitStreamEvent(ctx, out, ir.StreamEvent{Type: ir.EventContentDelta, Time: time.Now(), Delta: ir.ContentBlock{Type: ir.ContentText, Text: ch.Delta.Content}, Raw: []byte(data)}) {
+						return
+					}
 				}
 				for _, tc := range ch.Delta.ToolCalls {
-					out <- ir.StreamEvent{Type: ir.EventToolCallDelta, Time: time.Now(), ToolCall: &ir.ToolCall{ID: tc.ID, Name: tc.Function.Name, Arguments: json.RawMessage(tc.Function.Arguments)}, Raw: []byte(data)}
+					eventType := ir.EventToolCallDelta
+					if tc.ID != "" || tc.Function.Name != "" {
+						eventType = ir.EventToolCallStart
+					}
+					if !emitStreamEvent(ctx, out, ir.StreamEvent{Type: eventType, Time: time.Now(), Index: tc.Index, ToolCall: &ir.ToolCall{ID: tc.ID, Name: tc.Function.Name, Arguments: json.RawMessage(tc.Function.Arguments)}, Raw: []byte(data)}) {
+						return
+					}
 				}
 				if ch.FinishReason != "" {
-					out <- ir.StreamEvent{Type: ir.EventMessageDone, Time: time.Now(), Raw: []byte(data)}
+					emitStreamEvent(ctx, out, ir.StreamEvent{Type: ir.EventMessageDone, Time: time.Now(), Raw: []byte(data)})
 					return
 				}
 			}
 			if chunk.Usage.TotalTokens > 0 {
 				u := ir.Usage{PromptTokens: chunk.Usage.PromptTokens, CompletionTokens: chunk.Usage.CompletionTokens, TotalTokens: chunk.Usage.TotalTokens}
-				out <- ir.StreamEvent{Type: ir.EventUsageDelta, Time: time.Now(), Usage: &u, Raw: []byte(data)}
+				if !emitStreamEvent(ctx, out, ir.StreamEvent{Type: ir.EventUsageDelta, Time: time.Now(), Usage: &u, Raw: []byte(data)}) {
+					return
+				}
 			}
 		}
 	}()
 	return out, nil
+}
+
+func emitStreamEvent(ctx context.Context, out chan<- ir.StreamEvent, event ir.StreamEvent) bool {
+	select {
+	case out <- event:
+		return true
+	case <-ctx.Done():
+		return false
+	}
 }
 
 func (p Provider) NormalizeError(ctx context.Context, resp *http.Response) ir.GatewayError {
@@ -212,14 +234,16 @@ func flatten(blocks []ir.ContentBlock) string {
 }
 
 type chatRequest struct {
-	Model       string        `json:"model"`
-	Messages    []chatMessage `json:"messages"`
-	Stream      bool          `json:"stream"`
-	MaxTokens   *int          `json:"max_tokens,omitempty"`
-	Temperature *float64      `json:"temperature,omitempty"`
-	TopP        *float64      `json:"top_p,omitempty"`
-	Stop        []string      `json:"stop,omitempty"`
-	Tools       []chatTool    `json:"tools,omitempty"`
+	Model          string        `json:"model"`
+	Messages       []chatMessage `json:"messages"`
+	Stream         bool          `json:"stream"`
+	MaxTokens      *int          `json:"max_tokens,omitempty"`
+	Temperature    *float64      `json:"temperature,omitempty"`
+	TopP           *float64      `json:"top_p,omitempty"`
+	Stop           []string      `json:"stop,omitempty"`
+	Tools          []chatTool    `json:"tools,omitempty"`
+	ToolChoice     any           `json:"tool_choice,omitempty"`
+	ResponseFormat any           `json:"response_format,omitempty"`
 }
 type chatMessage struct {
 	Role             string         `json:"role"`
@@ -239,6 +263,7 @@ type chatFunction struct {
 	Parameters  json.RawMessage `json:"parameters,omitempty"`
 }
 type chatToolCall struct {
+	Index    int                  `json:"index,omitempty"`
 	ID       string               `json:"id,omitempty"`
 	Type     string               `json:"type,omitempty"`
 	Function chatToolCallFunction `json:"function"`
@@ -271,4 +296,53 @@ type usage struct {
 	PromptTokens     int64 `json:"prompt_tokens"`
 	CompletionTokens int64 `json:"completion_tokens"`
 	TotalTokens      int64 `json:"total_tokens"`
+}
+
+func openAIToolChoice(choice *ir.ToolChoice) any {
+	if choice == nil || choice.Type == "" {
+		return nil
+	}
+	switch choice.Type {
+	case "tool", "function":
+		if choice.Name == "" {
+			return "required"
+		}
+		return map[string]any{"type": "function", "function": map[string]string{"name": choice.Name}}
+	case "any":
+		return "required"
+	default:
+		return choice.Type
+	}
+}
+
+func openAIResponseFormat(format *ir.ResponseFormat) any {
+	if format == nil || format.Type == "" || format.Type == "text" {
+		return nil
+	}
+	if format.Type == "json_object" {
+		return map[string]any{"type": "json_object"}
+	}
+	if format.Type != "json_schema" {
+		return map[string]any{"type": format.Type}
+	}
+	var raw map[string]any
+	if json.Unmarshal(format.JSONSchema, &raw) != nil {
+		return nil
+	}
+	if _, exists := raw["json_schema"]; exists {
+		return raw
+	}
+	schema, exists := raw["schema"]
+	if !exists {
+		schema = raw
+	}
+	name, _ := raw["name"].(string)
+	if name == "" {
+		name = "response"
+	}
+	jsonSchema := map[string]any{"name": name, "schema": schema}
+	if strict, exists := raw["strict"]; exists {
+		jsonSchema["strict"] = strict
+	}
+	return map[string]any{"type": "json_schema", "json_schema": jsonSchema}
 }

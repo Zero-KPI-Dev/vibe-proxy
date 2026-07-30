@@ -6,16 +6,195 @@ on:
   pull_request:
     branches: [main, develop]
 
+permissions:
+  contents: read
+
 jobs:
+  frontend-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+      - name: Verify embedded frontend is current
+        run: git diff --exit-code -- internal/runtime/web/dist
+
   go-test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        go-version: ['1.25.12', '1.26.5']
     steps:
       - name: Checkout
         uses: actions/checkout@v4
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.22.x'
+          go-version: ${{ matrix.go-version }}
+          cache: true
+      - name: Go test
+        run: CGO_ENABLED=0 go test ./...
+      - name: Go vet
+        run: CGO_ENABLED=0 go vet ./...
+      - name: Build without CGO
+        run: CGO_ENABLED=0 go build -trimpath -o /tmp/vibe-proxy ./cmd/vibe-proxy
+
+  windows-test:
+    runs-on: windows-latest
+    env:
+      CGO_ENABLED: 0
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.5'
           cache: true
       - name: Go test
         run: go test ./...
+
+  release-packaging-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.5'
+          cache: true
+      - name: Test release packaging contracts
+        run: bash scripts/release/test-packaging.sh
+      - name: Cross-build portable and Debian packages
+        shell: bash
+        run: |
+          version=v0.0.0-ci
+          binary_dir=$(mktemp -d)
+          asset_dir=$(mktemp -d)
+
+          for target in \
+            windows/amd64 windows/arm64 \
+            darwin/amd64 darwin/arm64 \
+            linux/amd64 linux/arm64; do
+            goos=${target%/*}
+            goarch=${target#*/}
+            extension=
+            if [[ "$goos" == windows ]]; then
+              extension=.exe
+            fi
+
+            binary="$binary_dir/vibe-proxy-${goos}-${goarch}${extension}"
+            scripts/release/build-binary.sh \
+              "$version" "$goos" "$goarch" "$binary" >/dev/null
+            scripts/release/package-portable.sh \
+              "$version" "$goos" "$goarch" "$binary" "$asset_dir" >/dev/null
+
+            if [[ "$goos" == linux ]]; then
+              scripts/release/package-deb.sh \
+                "$version" "$goarch" "$binary" "$asset_dir" >/dev/null
+            fi
+          done
+
+          printf '%s\n' \
+            vibe-proxy_0.0.0-ci_darwin_amd64.tar.gz \
+            vibe-proxy_0.0.0-ci_darwin_arm64.tar.gz \
+            vibe-proxy_0.0.0-ci_linux_amd64.deb \
+            vibe-proxy_0.0.0-ci_linux_amd64.tar.gz \
+            vibe-proxy_0.0.0-ci_linux_arm64.deb \
+            vibe-proxy_0.0.0-ci_linux_arm64.tar.gz \
+            vibe-proxy_0.0.0-ci_windows_amd64.zip \
+            vibe-proxy_0.0.0-ci_windows_arm64.zip \
+            >"$RUNNER_TEMP/release-assets.expected"
+          find "$asset_dir" -maxdepth 1 -type f -exec basename {} \; |
+            LC_ALL=C sort >"$RUNNER_TEMP/release-assets.actual"
+          diff -u \
+            "$RUNNER_TEMP/release-assets.expected" \
+            "$RUNNER_TEMP/release-assets.actual"
+
+  release-packaging-macos:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.5'
+          cache: true
+      - name: Test DMG packaging contract
+        run: RELEASE_TEST_SCOPE=dmg bash scripts/release/test-packaging.sh
+      - name: Build and inspect both macOS DMGs
+        shell: bash
+        run: |
+          version=v0.0.0-ci
+          binary_dir=$(mktemp -d)
+          asset_dir=$(mktemp -d)
+          mounted_dmg=
+          cleanup() {
+            if [[ -n "$mounted_dmg" ]]; then
+              hdiutil detach "$mounted_dmg" -quiet >/dev/null 2>&1 || true
+            fi
+          }
+          trap cleanup EXIT
+
+          for arch in amd64 arm64; do
+            binary="$binary_dir/vibe-proxy-darwin-$arch"
+            scripts/release/build-binary.sh \
+              "$version" darwin "$arch" "$binary" >/dev/null
+
+            actual_arch=$(lipo -archs "$binary")
+            expected_arch=$arch
+            if [[ "$arch" == amd64 ]]; then
+              expected_arch=x86_64
+            fi
+            if [[ "$actual_arch" != "$expected_arch" ]]; then
+              printf 'expected %s binary, got %s\n' \
+                "$expected_arch" "$actual_arch" >&2
+              exit 1
+            fi
+
+            artifact=$(
+              scripts/release/package-dmg.sh \
+                "$version" "$arch" "$binary" "$asset_dir"
+            )
+            hdiutil imageinfo "$artifact" >/dev/null
+
+            mounted_dmg="$RUNNER_TEMP/vibe-proxy-dmg-$arch"
+            mkdir -p "$mounted_dmg"
+            hdiutil attach \
+              -nobrowse \
+              -readonly \
+              -mountpoint "$mounted_dmg" \
+              "$artifact" >/dev/null
+            test -x "$mounted_dmg/vibe-proxy"
+            test -f "$mounted_dmg/configs/bootstrap.yaml"
+            test -f "$mounted_dmg/configs/simple.yaml"
+            hdiutil detach "$mounted_dmg" -quiet
+            mounted_dmg=
+          done
+
+          printf '%s\n' \
+            vibe-proxy_0.0.0-ci_darwin_amd64.dmg \
+            vibe-proxy_0.0.0-ci_darwin_arm64.dmg \
+            >"$RUNNER_TEMP/release-dmgs.expected"
+          find "$asset_dir" -maxdepth 1 -type f -exec basename {} \; |
+            LC_ALL=C sort >"$RUNNER_TEMP/release-dmgs.actual"
+          diff -u \
+            "$RUNNER_TEMP/release-dmgs.expected" \
+            "$RUNNER_TEMP/release-dmgs.actual"

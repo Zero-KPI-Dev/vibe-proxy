@@ -15,24 +15,44 @@ type EventSink interface {
 }
 
 type Event struct {
-	RequestID        string      `json:"request_id"`
-	ClientName       string      `json:"client_name"`
-	VirtualModel     string      `json:"virtual_model"`
-	UpstreamModel    string      `json:"upstream_model"`
-	ChannelID        string      `json:"channel_id"`
-	ProtocolIn       string      `json:"protocol_in"`
-	ProtocolOut      string      `json:"protocol_out"`
-	StartedAt        time.Time   `json:"started_at"`
-	FirstTokenAt     *time.Time  `json:"first_token_at,omitempty"`
-	CompletedAt      *time.Time  `json:"completed_at,omitempty"`
-	TTFTMillis       int64       `json:"ttft_ms"`
-	TPOTMillis       float64     `json:"tpot_ms"`
-	TPS              float64     `json:"tps"`
-	StatusCode       int         `json:"status_code"`
-	ErrorCode        string      `json:"error_code,omitempty"`
-	Usage            types.Usage `json:"usage"`
-	InputLabelsJSON  string      `json:"input_labels_json,omitempty"`
-	OutputLabelsJSON string      `json:"output_labels_json,omitempty"`
+	RequestID        string                 `json:"request_id"`
+	ClientName       string                 `json:"client_name"`
+	VirtualModel     string                 `json:"virtual_model"`
+	UpstreamModel    string                 `json:"upstream_model"`
+	ChannelID        string                 `json:"channel_id"`
+	ProtocolIn       string                 `json:"protocol_in"`
+	ProtocolOut      string                 `json:"protocol_out"`
+	StartedAt        time.Time              `json:"started_at"`
+	FirstTokenAt     *time.Time             `json:"first_token_at,omitempty"`
+	CompletedAt      *time.Time             `json:"completed_at,omitempty"`
+	TTFTMillis       int64                  `json:"ttft_ms"`
+	TPOTMillis       float64                `json:"tpot_ms"`
+	TPS              float64                `json:"tps"`
+	StatusCode       int                    `json:"status_code"`
+	ErrorCode        string                 `json:"error_code,omitempty"`
+	Usage            types.Usage            `json:"usage"`
+	InputLabelsJSON  string                 `json:"input_labels_json,omitempty"`
+	OutputLabelsJSON string                 `json:"output_labels_json,omitempty"`
+	Transformation   *TransformationSummary `json:"transformation,omitempty"`
+}
+
+type TransformationSummary struct {
+	MultimodalRoute   string   `json:"multimodal_route,omitempty"`
+	RouteReason       string   `json:"route_reason,omitempty"`
+	ModelImageSupport string   `json:"model_image_support,omitempty"`
+	CapabilitySource  string   `json:"capability_source,omitempty"`
+	CatalogMatch      string   `json:"catalog_match,omitempty"`
+	InputImages       int      `json:"input_images,omitempty"`
+	OriginalProvider  string   `json:"original_provider,omitempty"`
+	OriginalModel     string   `json:"original_model,omitempty"`
+	EffectiveProvider string   `json:"effective_provider,omitempty"`
+	EffectiveModel    string   `json:"effective_model,omitempty"`
+	OCRProvider       string   `json:"ocr_provider,omitempty"`
+	OCRProcessed      int      `json:"ocr_processed,omitempty"`
+	OCRCacheHits      int      `json:"ocr_cache_hits,omitempty"`
+	OCRLatencyMS      int64    `json:"ocr_latency_ms,omitempty"`
+	OCRMinConfidence  *float64 `json:"ocr_min_confidence,omitempty"`
+	OCRFailureCode    string   `json:"ocr_failure_code,omitempty"`
 }
 
 type Tracker struct {

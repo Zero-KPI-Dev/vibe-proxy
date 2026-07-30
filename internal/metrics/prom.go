@@ -89,3 +89,17 @@ func (m MultiSink) RecentStore() *telemetry.RecentStore {
 	}
 	return nil
 }
+
+func (m MultiSink) ObservabilityReader() telemetry.ObservabilityReader {
+	for _, s := range m {
+		if reader, ok := s.(telemetry.ObservabilityReader); ok {
+			return reader
+		}
+		if provider, ok := s.(telemetry.ObservabilityReaderProvider); ok {
+			if reader := provider.ObservabilityReader(); reader != nil {
+				return reader
+			}
+		}
+	}
+	return nil
+}

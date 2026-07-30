@@ -1,0 +1,286 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  GO_VERSION: '1.26.5'
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate release tag
+        shell: bash
+        run: |
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]; then
+            echo "Invalid release tag: $GITHUB_REF_NAME" >&2
+            exit 1
+          fi
+
+      - name: Require release commit on main
+        run: |
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main; then
+            echo "Release tag must point to a commit reachable from main." >&2
+            exit 1
+          fi
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Verify embedded frontend is current
+        run: git diff --exit-code -- internal/runtime/web/dist
+
+      - name: Test without CGO
+        run: CGO_ENABLED=0 go test ./...
+
+      - name: Vet without CGO
+        run: CGO_ENABLED=0 go vet ./...
+
+      - name: Verify modules
+        run: go mod verify
+
+      - name: Test release packaging contracts
+        run: bash scripts/release/test-packaging.sh
+
+  portable:
+    needs: validate
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        goos: [windows, darwin, linux]
+        goarch: [amd64, arm64]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Build binary
+        id: binary
+        shell: bash
+        run: |
+          extension=
+          if [[ "${{ matrix.goos }}" == windows ]]; then
+            extension=.exe
+          fi
+          binary="$RUNNER_TEMP/vibe-proxy-${{ matrix.goos }}-${{ matrix.goarch }}${extension}"
+          scripts/release/build-binary.sh \
+            "$GITHUB_REF_NAME" \
+            "${{ matrix.goos }}" \
+            "${{ matrix.goarch }}" \
+            "$binary" >/dev/null
+          echo "path=$binary" >>"$GITHUB_OUTPUT"
+
+      - name: Package portable artifact
+        id: package
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/release-assets"
+          artifact=$(
+            scripts/release/package-portable.sh \
+              "$GITHUB_REF_NAME" \
+              "${{ matrix.goos }}" \
+              "${{ matrix.goarch }}" \
+              "${{ steps.binary.outputs.path }}" \
+              "$RUNNER_TEMP/release-assets"
+          )
+          echo "path=$artifact" >>"$GITHUB_OUTPUT"
+
+      - name: Smoke-test native Linux binary
+        if: matrix.goos == 'linux' && matrix.goarch == 'amd64'
+        run: |
+          "${{ steps.binary.outputs.path }}" --version |
+            grep -F "vibe-proxy $GITHUB_REF_NAME"
+
+      - name: Upload portable artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: portable-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: ${{ steps.package.outputs.path }}
+          if-no-files-found: error
+          retention-days: 7
+
+  deb:
+    needs: validate
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        goarch: [amd64, arm64]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Build Linux binary
+        id: binary
+        run: |
+          binary="$RUNNER_TEMP/vibe-proxy-linux-${{ matrix.goarch }}"
+          scripts/release/build-binary.sh \
+            "$GITHUB_REF_NAME" linux "${{ matrix.goarch }}" "$binary" >/dev/null
+          echo "path=$binary" >>"$GITHUB_OUTPUT"
+
+      - name: Package DEB
+        id: package
+        run: |
+          mkdir -p "$RUNNER_TEMP/release-assets"
+          artifact=$(
+            scripts/release/package-deb.sh \
+              "$GITHUB_REF_NAME" \
+              "${{ matrix.goarch }}" \
+              "${{ steps.binary.outputs.path }}" \
+              "$RUNNER_TEMP/release-assets"
+          )
+          dpkg-deb --info "$artifact" >/dev/null
+          echo "path=$artifact" >>"$GITHUB_OUTPUT"
+
+      - name: Upload DEB
+        uses: actions/upload-artifact@v4
+        with:
+          name: deb-${{ matrix.goarch }}
+          path: ${{ steps.package.outputs.path }}
+          if-no-files-found: error
+          retention-days: 7
+
+  dmg:
+    needs: validate
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        goarch: [amd64, arm64]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Build macOS binary
+        id: binary
+        run: |
+          binary="$RUNNER_TEMP/vibe-proxy-darwin-${{ matrix.goarch }}"
+          scripts/release/build-binary.sh \
+            "$GITHUB_REF_NAME" darwin "${{ matrix.goarch }}" "$binary" >/dev/null
+          echo "path=$binary" >>"$GITHUB_OUTPUT"
+
+      - name: Package DMG
+        id: package
+        run: |
+          mkdir -p "$RUNNER_TEMP/release-assets"
+          artifact=$(
+            scripts/release/package-dmg.sh \
+              "$GITHUB_REF_NAME" \
+              "${{ matrix.goarch }}" \
+              "${{ steps.binary.outputs.path }}" \
+              "$RUNNER_TEMP/release-assets"
+          )
+          hdiutil imageinfo "$artifact" >/dev/null
+          echo "path=$artifact" >>"$GITHUB_OUTPUT"
+
+      - name: Upload DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: dmg-${{ matrix.goarch }}
+          path: ${{ steps.package.outputs.path }}
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: [portable, deb, dmg]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Verify release asset manifest
+        run: scripts/release/verify-assets.sh "$GITHUB_REF_NAME" dist
+
+      - name: Generate checksums
+        working-directory: dist
+        run: |
+          sha256sum -- * |
+            LC_ALL=C sort -k2 > SHA256SUMS
+
+      - name: Create draft release and upload assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          flags=(
+            --repo "$GITHUB_REPOSITORY"
+            --verify-tag
+            --generate-notes
+            --draft
+            --title "vibe-proxy $GITHUB_REF_NAME"
+          )
+          if [[ "$GITHUB_REF_NAME" == *-* ]]; then
+            flags+=(--prerelease --latest=false)
+          fi
+          gh release create "$GITHUB_REF_NAME" dist/* "${flags[@]}"
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release edit "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --draft=false

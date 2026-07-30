@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -17,7 +18,11 @@ import (
 	"github.com/a448582655/vibe-proxy/internal/config"
 	"github.com/a448582655/vibe-proxy/internal/ir"
 	"github.com/a448582655/vibe-proxy/internal/metrics"
+	"github.com/a448582655/vibe-proxy/internal/modelcatalog"
 	"github.com/a448582655/vibe-proxy/internal/modelresolver"
+	"github.com/a448582655/vibe-proxy/internal/multimodal"
+	"github.com/a448582655/vibe-proxy/internal/ocr"
+	"github.com/a448582655/vibe-proxy/internal/preprocess"
 	"github.com/a448582655/vibe-proxy/internal/protocol"
 	provideranthropic "github.com/a448582655/vibe-proxy/internal/provideradapters/anthropic"
 	provideropenai "github.com/a448582655/vibe-proxy/internal/provideradapters/openai"
@@ -28,22 +33,28 @@ import (
 )
 
 type Snapshot struct {
-	LoadedAt   time.Time
-	Config     *config.RuntimeConfig
-	Resolver   *modelresolver.Resolver
-	AdminToken string
+	LoadedAt      time.Time
+	Config        *config.RuntimeConfig
+	Resolver      *modelresolver.Resolver
+	Preprocessors *preprocess.Pipeline
+	AdminToken    string
 }
 
 type Server struct {
 	cfgPath          string
+	startedAt        time.Time
 	snapshot         atomic.Value
 	authenticator    *auth.Authenticator
 	httpClient       *http.Client
+	ocrHTTPClient    *http.Client
+	builtinOCR       ocr.Provider
 	clientAdapters   []protocol.ClientAdapter
 	providerAdapters map[string]protocol.ProviderAdapter
 	metrics          *metrics.Prometheus
 	sink             telemetry.EventSink
 	recent           *telemetry.RecentStore
+	observability    telemetry.ObservabilityReader
+	catalog          *modelcatalog.Service
 	semaphore        sync.Map
 }
 
@@ -55,7 +66,14 @@ func New(cfgPath string, cfg *config.RuntimeConfig, sink telemetry.EventSink, pr
 	if ms, ok := sink.(interface{ RecentStore() *telemetry.RecentStore }); ok {
 		recent = ms.RecentStore()
 	}
-	s := &Server{cfgPath: cfgPath, authenticator: auth.NewAuthenticator(), httpClient: &http.Client{Timeout: 0}, metrics: prom, sink: sink, recent: recent, clientAdapters: []protocol.ClientAdapter{clientopenai.ChatAdapter{}, clientopenai.ResponsesAdapter{}, clientanthropic.MessagesAdapter{}}, providerAdapters: map[string]protocol.ProviderAdapter{"anthropic": provideranthropic.Provider{}, "openai-compatible": provideropenai.Provider{}}}
+	var observability telemetry.ObservabilityReader
+	if reader, ok := sink.(telemetry.ObservabilityReader); ok {
+		observability = reader
+	}
+	if provider, ok := sink.(telemetry.ObservabilityReaderProvider); ok {
+		observability = provider.ObservabilityReader()
+	}
+	s := &Server{cfgPath: cfgPath, startedAt: time.Now(), authenticator: auth.NewAuthenticator(), httpClient: &http.Client{Timeout: 0}, ocrHTTPClient: &http.Client{}, builtinOCR: ocr.NewBuiltinProvider(), metrics: prom, sink: sink, recent: recent, observability: observability, catalog: modelcatalog.NewService(modelcatalog.Options{CachePath: modelCatalogCachePath(cfgPath, cfg)}), clientAdapters: []protocol.ClientAdapter{clientopenai.ChatAdapter{}, clientopenai.ResponsesAdapter{}, clientanthropic.MessagesAdapter{}}, providerAdapters: map[string]protocol.ProviderAdapter{"anthropic": provideranthropic.Provider{}, "openai-compatible": provideropenai.Provider{}}}
 	s.snapshot.Store(s.buildSnapshot(cfg))
 	return s
 }
@@ -66,12 +84,59 @@ func (s *Server) SetHTTPClient(client *http.Client) {
 	}
 }
 
+func (s *Server) SetCatalogHTTPClient(client *http.Client) {
+	if s.catalog != nil {
+		s.catalog.SetHTTPClient(client)
+	}
+}
+
+func (s *Server) SetOCRHTTPClient(client *http.Client) {
+	if client == nil {
+		return
+	}
+	s.ocrHTTPClient = client
+	if snap, ok := s.snapshot.Load().(*Snapshot); ok && snap != nil {
+		s.snapshot.Store(s.buildSnapshot(snap.Config))
+	}
+}
+
+func modelCatalogCachePath(cfgPath string, cfg *config.RuntimeConfig) string {
+	if cfgPath == "" || cfg == nil || cfg.Storage.SQLitePath == "" || cfg.Storage.SQLitePath == ":memory:" {
+		return ""
+	}
+	return cfg.Storage.SQLitePath + ".models-dev.json"
+}
+
 func (s *Server) buildSnapshot(cfg *config.RuntimeConfig) *Snapshot {
-	return &Snapshot{LoadedAt: time.Now(), Config: cfg, Resolver: modelresolver.New(cfg.ModelResolver), AdminToken: os.Getenv(cfg.Security.AdminBearerTokenEnv)}
+	resolver := modelresolver.New(cfg.ModelResolver)
+	processor := multimodal.NewProcessor(multimodal.ProcessorOptions{
+		Config:     cfg.Multimodal,
+		Catalog:    s.catalog,
+		Client:     s.ocrHTTPClient,
+		BuiltinOCR: s.builtinOCR,
+		Resolver:   resolver,
+		Providers:  cfg.Providers,
+		AdapterCapabilities: func(providerType string) (protocol.Capabilities, bool) {
+			adapter, ok := s.providerAdapters[providerType]
+			if !ok {
+				return protocol.Capabilities{}, false
+			}
+			return adapter.Capabilities(), true
+		},
+	})
+	return &Snapshot{
+		LoadedAt:      time.Now(),
+		Config:        cfg,
+		Resolver:      resolver,
+		Preprocessors: preprocess.New(processor),
+		AdminToken:    os.Getenv(cfg.Security.AdminBearerTokenEnv),
+	}
 }
 
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
+
+	// Data-plane proxy endpoints
 	mux.HandleFunc("/v1/models", s.handleModels)
 	mux.HandleFunc("/v1/chat/completions", s.handle)
 	mux.HandleFunc("/v1/responses", s.handle)
@@ -79,13 +144,36 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/v1/messages", s.handle)
 	mux.Handle("/metrics", s.metrics.Handler())
 	mux.HandleFunc("/healthz", s.healthz)
+
+	// Admin API endpoints
+	mux.HandleFunc("/admin/playground/v1/chat/completions", s.adminPlayground("/v1/chat/completions"))
+	mux.HandleFunc("/admin/playground/v1/responses", s.adminPlayground("/v1/responses"))
+	mux.HandleFunc("/admin/playground/anthropic/v1/messages", s.adminPlayground("/anthropic/v1/messages"))
 	mux.HandleFunc("/admin/config/reload", s.reload)
 	mux.HandleFunc("/admin/config/snapshot", s.adminSnapshot)
 	mux.HandleFunc("/admin/config/validate", s.adminValidateConfig)
+	mux.HandleFunc("/admin/config/raw", s.adminRawConfig)
 	mux.HandleFunc("/admin/providers/test", s.adminProviderTest)
+	mux.HandleFunc("/admin/providers/models", s.adminProviderModels)
+	mux.HandleFunc("/admin/providers/health", s.adminProviderHealth)
+	mux.HandleFunc("/admin/model-catalog/status", s.adminModelCatalogStatus)
+	mux.HandleFunc("/admin/model-catalog/refresh", s.adminModelCatalogRefresh)
+	mux.HandleFunc("/admin/model-catalog/lookup", s.adminModelCatalogLookup)
+	mux.HandleFunc("/admin/multimodal", s.adminMultimodal)
+	mux.HandleFunc("/admin/multimodal/ocr/test", s.adminOCRTest)
+	mux.HandleFunc("/admin/providers", s.adminProviders) // GET (list), POST (create), PUT (update), DELETE (delete)
 	mux.HandleFunc("/admin/local/configure", s.adminLocalConfigure)
+	mux.HandleFunc("/admin/aliases/default", s.adminAliasesDefaults)
+	mux.HandleFunc("/admin/aliases", s.adminAliases)               // GET (list), POST (create)
+	mux.HandleFunc("/admin/aliases/", s.adminAliasesDelete)        // DELETE by alias name
+	mux.HandleFunc("/admin/client-keys", s.adminClientKeys)        // GET (list), POST (create)
+	mux.HandleFunc("/admin/client-keys/", s.adminClientKeysByName) // PUT (update), DELETE (delete)
 	mux.HandleFunc("/admin/requests/recent", s.adminRecentRequests)
-	mux.HandleFunc("/", s.dashboard)
+	mux.HandleFunc("/admin/metrics/summary", s.adminMetricsSummary)
+	mux.HandleFunc("/admin/metrics/history", s.adminMetricsHistory)
+
+	// SPA dashboard (must be last as catch-all)
+	mux.Handle("/", spaFallback(spaHandler(), "index.html"))
 	return limitBody(recordResponse(mux), 32<<20)
 }
 
@@ -106,14 +194,25 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().Unix()
 	seen := map[string]bool{}
 	data := []map[string]any{}
+	aliases := make([]string, 0, len(snap.Config.ModelResolver.Aliases))
 	for alias := range snap.Config.ModelResolver.Aliases {
+		aliases = append(aliases, alias)
+	}
+	sort.Strings(aliases)
+	for _, alias := range aliases {
 		if alias == "" || seen[alias] {
 			continue
 		}
 		seen[alias] = true
 		data = append(data, map[string]any{"id": alias, "object": "model", "created": now, "owned_by": "vibe-proxy", "vibe_type": "alias"})
 	}
-	for providerID, provider := range snap.Config.Providers {
+	providerIDs := make([]string, 0, len(snap.Config.Providers))
+	for providerID := range snap.Config.Providers {
+		providerIDs = append(providerIDs, providerID)
+	}
+	sort.Strings(providerIDs)
+	for _, providerID := range providerIDs {
+		provider := snap.Config.Providers[providerID]
 		for _, model := range provider.Models {
 			if model == "" || seen[model] {
 				continue
@@ -127,6 +226,10 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
+	s.handleWithClient(w, r, nil)
+}
+
+func (s *Server) handleWithClient(w http.ResponseWriter, r *http.Request, trustedClient *auth.Client) {
 	snap := s.current()
 	clientAdapter := s.detectClientAdapter(r)
 	if clientAdapter == nil {
@@ -137,16 +240,23 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 		_ = clientAdapter.EncodeError(r.Context(), w, ir.GatewayError{StatusCode: 405, Kind: "invalid_request_error", Code: "method_not_allowed", Message: "Method not allowed."})
 		return
 	}
-	client, gerr := s.authenticator.AuthenticateDataPlane(r, snap.Config.ClientKeys)
-	if gerr != nil {
-		_ = clientAdapter.EncodeError(r.Context(), w, toIRError(*gerr))
-		return
+	var client auth.Client
+	if trustedClient != nil {
+		client = *trustedClient
+	} else {
+		var gerr *types.GatewayError
+		client, gerr = s.authenticator.AuthenticateDataPlane(r, snap.Config.ClientKeys)
+		if gerr != nil {
+			_ = clientAdapter.EncodeError(r.Context(), w, toIRError(*gerr))
+			return
+		}
 	}
 	creq, err := clientAdapter.ParseRequest(r.Context(), r)
 	if err != nil {
 		_ = clientAdapter.EncodeError(r.Context(), w, errorToIR(err))
 		return
 	}
+	w.Header().Set("X-Vibe-Proxy-Request-ID", creq.ID)
 	if !auth.ModelAllowed(client.AllowedModels, creq.RequestedModel) {
 		_ = clientAdapter.EncodeError(r.Context(), w, ir.GatewayError{StatusCode: 403, Kind: "permission_error", Code: "model_not_allowed", Message: "This API key is not allowed to use the requested model."})
 		return
@@ -168,14 +278,56 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 		_ = clientAdapter.EncodeError(r.Context(), w, ir.GatewayError{StatusCode: 501, Kind: "config_error", Code: "provider_adapter_not_found", Message: "Provider adapter is not available."})
 		return
 	}
+	originalTarget := target
+	tracker := telemetry.NewTracker(telemetry.Event{RequestID: creq.ID, ClientName: client.Name, VirtualModel: creq.RequestedModel, UpstreamModel: target.Model, ChannelID: target.ProviderID, ProtocolIn: string(clientAdapter.Protocol()), ProtocolOut: string(providerAdapter.Protocol()), StartedAt: time.Now()}, s.sink)
+	prepared, err := snap.Preprocessors.Prepare(r.Context(), creq, preprocess.RouteContext{
+		Target:              target,
+		ProviderConfig:      providerCfg,
+		AdapterCapabilities: providerAdapter.Capabilities(),
+	})
+	if err != nil {
+		ge := errorToIR(err)
+		tracker.Event.Transformation = transformationSummary(prepared.Decisions, originalTarget, prepared.Target)
+		tracker.Finish(ge.StatusCode, types.Usage{}, ge.Code)
+		_ = clientAdapter.EncodeError(r.Context(), w, ge)
+		return
+	}
+	creq = prepared.Request
+	if prepared.Target.ProviderID != target.ProviderID || prepared.Target.Model != target.Model {
+		target = prepared.Target
+		creq.ResolvedProvider = target.ProviderID
+		creq.ResolvedModel = target.Model
+		providerCfg, ok = snap.Config.Providers[target.ProviderID]
+		if !ok {
+			ge := ir.GatewayError{StatusCode: 503, Kind: "config_error", Code: "provider_not_found", Message: "Preprocessor target provider is not configured."}
+			tracker.Event.Transformation = transformationSummary(prepared.Decisions, originalTarget, target)
+			tracker.Finish(ge.StatusCode, types.Usage{}, ge.Code)
+			_ = clientAdapter.EncodeError(r.Context(), w, ge)
+			return
+		}
+		providerAdapter = s.providerAdapters[target.ProviderType]
+		if providerAdapter == nil {
+			ge := ir.GatewayError{StatusCode: 501, Kind: "config_error", Code: "provider_adapter_not_found", Message: "Preprocessor target adapter is not available."}
+			tracker.Event.Transformation = transformationSummary(prepared.Decisions, originalTarget, target)
+			tracker.Finish(ge.StatusCode, types.Usage{}, ge.Code)
+			_ = clientAdapter.EncodeError(r.Context(), w, ge)
+			return
+		}
+	}
+	tracker.Event.UpstreamModel = target.Model
+	tracker.Event.ChannelID = target.ProviderID
+	tracker.Event.ProtocolOut = string(providerAdapter.Protocol())
+	tracker.Event.Transformation = transformationSummary(prepared.Decisions, originalTarget, target)
+	applyTransformationHeaders(w, tracker.Event.Transformation)
 	if !s.acquire(target.ProviderID, providerCfg.MaxConcurrency) {
-		_ = clientAdapter.EncodeError(r.Context(), w, ir.GatewayError{StatusCode: 429, Kind: "rate_limit_error", Code: "provider_busy", Message: "Selected provider is busy.", RetryAfter: "1"})
+		ge := ir.GatewayError{StatusCode: 429, Kind: "rate_limit_error", Code: "provider_busy", Message: "Selected provider is busy.", RetryAfter: "1"}
+		tracker.Finish(ge.StatusCode, types.Usage{}, ge.Code)
+		_ = clientAdapter.EncodeError(r.Context(), w, ge)
 		return
 	}
 	defer s.release(target.ProviderID)
 	ctx, cancel := context.WithTimeout(r.Context(), providerCfg.Timeout.Duration)
 	defer cancel()
-	tracker := telemetry.NewTracker(telemetry.Event{RequestID: creq.ID, ClientName: client.Name, VirtualModel: creq.RequestedModel, UpstreamModel: target.Model, ChannelID: target.ProviderID, ProtocolIn: string(clientAdapter.Protocol()), ProtocolOut: string(providerAdapter.Protocol()), StartedAt: time.Now()}, s.sink)
 	upReq, err := providerAdapter.BuildRequest(ctx, creq, target)
 	if err != nil {
 		ge := errorToIR(err)
@@ -204,9 +356,11 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		var streamStats streamengine.Stats
+		var streamStatsMu sync.Mutex
 		tracked := streamengine.Track(ctx, events, func(stats streamengine.Stats) {
+			streamStatsMu.Lock()
 			streamStats = stats
-			tracker.Event.Usage = toTelemetryUsage(stats.Usage)
+			streamStatsMu.Unlock()
 		})
 		if err := clientAdapter.EncodeStream(ctx, w, tracked); err != nil {
 			ge := errorToIR(err)
@@ -216,7 +370,19 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 			}
 			return
 		}
-		tracker.Finish(http.StatusOK, toTelemetryUsage(streamStats.Usage), "")
+		streamStatsMu.Lock()
+		finalStreamStats := streamStats
+		streamStatsMu.Unlock()
+		tracker.Event.Usage = toTelemetryUsage(finalStreamStats.Usage)
+		if !finalStreamStats.FirstTokenAt.IsZero() {
+			firstTokenAt := finalStreamStats.FirstTokenAt
+			tracker.Event.FirstTokenAt = &firstTokenAt
+			tracker.Event.TTFTMillis = firstTokenAt.Sub(tracker.Event.StartedAt).Milliseconds()
+		}
+		if finalStreamStats.OutputTokenCount > 1 && !finalStreamStats.FirstTokenAt.IsZero() && !finalStreamStats.CompletedAt.IsZero() {
+			tracker.Event.TPOTMillis = float64(finalStreamStats.CompletedAt.Sub(finalStreamStats.FirstTokenAt).Milliseconds()) / float64(finalStreamStats.OutputTokenCount-1)
+		}
+		tracker.Finish(http.StatusOK, toTelemetryUsage(finalStreamStats.Usage), "")
 		return
 	}
 	out, err := providerAdapter.ParseUnary(ctx, resp)
@@ -235,6 +401,22 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tracker.Finish(http.StatusOK, toTelemetryUsage(out.Usage), "")
+}
+
+func (s *Server) adminPlayground(targetPath string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		snap := s.current()
+		if !auth.AuthorizeAdmin(r, snap.AdminToken) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		clone := r.Clone(r.Context())
+		clonedURL := *r.URL
+		clonedURL.Path = targetPath
+		clone.URL = &clonedURL
+		client := auth.Client{Name: "admin-playground", AllowedModels: []string{"*"}}
+		s.handleWithClient(w, clone, &client)
+	}
 }
 
 func (s *Server) detectClientAdapter(r *http.Request) protocol.ClientAdapter {
@@ -269,7 +451,7 @@ func (s *Server) release(id string) {
 
 func (s *Server) healthz(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"ok": true, "loaded_at": s.current().LoadedAt})
+	json.NewEncoder(w).Encode(map[string]any{"ok": true, "started_at": s.startedAt, "loaded_at": s.current().LoadedAt})
 }
 func (s *Server) reload(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -283,12 +465,15 @@ func (s *Server) reload(w http.ResponseWriter, r *http.Request) {
 	}
 	cfg, err := config.LoadRuntime(s.cfgPath)
 	if err != nil {
-		http.Error(w, err.Error(), 400)
+		s.writeJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if issues := config.ValidateRuntime(cfg); config.HasErrors(issues) {
+		s.writeJSONStatus(w, http.StatusBadRequest, map[string]any{"error": "invalid configuration", "issues": issues})
 		return
 	}
 	s.snapshot.Store(s.buildSnapshot(cfg))
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"reloaded": true, "loaded_at": s.current().LoadedAt})
+	s.writeJSON(w, map[string]any{"reloaded": true, "loaded_at": s.current().LoadedAt})
 }
 func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 	snap := s.current()
@@ -297,11 +482,43 @@ func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	providers := []map[string]any{}
-	for id, p := range snap.Config.Providers {
-		providers = append(providers, map[string]any{"id": id, "type": p.Type, "base_url": p.BaseURL, "models": p.Models, "max_concurrency": p.MaxConcurrency})
+	providerIDs := make([]string, 0, len(snap.Config.Providers))
+	for id := range snap.Config.Providers {
+		providerIDs = append(providerIDs, id)
+	}
+	sort.Strings(providerIDs)
+	for _, id := range providerIDs {
+		p := snap.Config.Providers[id]
+		authType, keySource, keyEnv := providerAuthMeta(p)
+		providers = append(providers, map[string]any{"id": id, "type": p.Type, "base_url": p.BaseURL, "catalog_provider": p.CatalogProvider, "default_capabilities": p.DefaultCapabilities, "model_capabilities": p.ModelCapabilities, "models": p.Models, "max_concurrency": p.MaxConcurrency, "auth_type": authType, "api_key_source": keySource, "api_key_env": keyEnv})
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{"loaded_at": snap.LoadedAt, "providers": providers, "model_resolver": snap.Config.ModelResolver})
+}
+
+func providerAuthMeta(p config.ProviderConfig) (authType string, keySource string, keyEnv string) {
+	authType = p.Auth.Type
+	if authType == "" {
+		authType = "none"
+	}
+	var ref upstreamauth.SecretRef
+	switch authType {
+	case "bearer":
+		ref = p.Auth.Token
+	case "api_key_header":
+		ref = p.Auth.Value
+	}
+	raw := string(ref)
+	switch {
+	case strings.HasPrefix(raw, "env:"):
+		return authType, "env", strings.TrimPrefix(raw, "env:")
+	case strings.HasPrefix(raw, "literal:"):
+		return authType, "literal", ""
+	case raw != "":
+		return authType, "literal", ""
+	default:
+		return authType, "", ""
+	}
 }
 
 func (s *Server) adminValidateConfig(w http.ResponseWriter, r *http.Request) {
@@ -359,6 +576,102 @@ func (s *Server) adminProviderTest(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]any{"ok": resp.StatusCode >= 200 && resp.StatusCode < 400, "provider": providerID, "status": resp.StatusCode, "latency_ms": latency, "target": testURL})
 }
 
+func (s *Server) adminProviderModels(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	snap := s.current()
+	if !auth.AuthorizeAdmin(r, snap.AdminToken) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	var input config.LocalProviderInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	if input.BaseURL == "" {
+		http.Error(w, "base_url is required", http.StatusBadRequest)
+		return
+	}
+	provider, err := config.BuildLocalProvider(input, nil)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	target := providerProbeURL(provider)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		http.Error(w, "invalid provider url", http.StatusBadRequest)
+		return
+	}
+	if authErr := provider.Auth.Apply(req); authErr != nil {
+		http.Error(w, authErr.Code, http.StatusBadRequest)
+		return
+	}
+	started := time.Now()
+	resp, err := s.httpClient.Do(req)
+	latency := time.Since(started).Milliseconds()
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"ok": false, "models": []string{}, "latency_ms": latency, "target": target, "error": "connection_failed"})
+		return
+	}
+	defer resp.Body.Close()
+	limited := io.LimitReader(resp.Body, 4<<20)
+	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
+		io.Copy(io.Discard, limited)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"ok": false, "models": []string{}, "status": resp.StatusCode, "latency_ms": latency, "target": target})
+		return
+	}
+	models, err := parseProviderModels(limited)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"ok": false, "models": []string{}, "status": resp.StatusCode, "latency_ms": latency, "target": target, "error": "invalid_models_response"})
+		return
+	}
+	sort.Strings(models)
+	catalogErr := s.catalog.Ensure(r.Context(), 24*time.Hour)
+	modelDetails := s.catalogMatches(input.CatalogProvider, input.ID, input.BaseURL, models)
+	w.Header().Set("Content-Type", "application/json")
+	result := map[string]any{"ok": true, "models": models, "model_details": modelDetails, "catalog": s.catalog.State(), "status": resp.StatusCode, "latency_ms": latency, "target": target}
+	if catalogErr != nil {
+		result["catalog_error"] = catalogErr.Error()
+	}
+	json.NewEncoder(w).Encode(result)
+}
+
+func parseProviderModels(r io.Reader) ([]string, error) {
+	var body struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+		Models []string `json:"models"`
+	}
+	if err := json.NewDecoder(r).Decode(&body); err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	models := []string{}
+	for _, m := range body.Models {
+		if m != "" && !seen[m] {
+			seen[m] = true
+			models = append(models, m)
+		}
+	}
+	for _, item := range body.Data {
+		if item.ID != "" && !seen[item.ID] {
+			seen[item.ID] = true
+			models = append(models, item.ID)
+		}
+	}
+	return models, nil
+}
+
 func providerProbeURL(p config.ProviderConfig) string {
 	base := strings.TrimRight(p.BaseURL, "/")
 	switch p.Type {
@@ -394,10 +707,6 @@ func (s *Server) adminLocalConfigure(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "id and base_url are required", 400)
 		return
 	}
-	if input.APIKeyEnv == "" && input.AuthType != "none" {
-		http.Error(w, "api_key_env is required unless auth_type is none", 400)
-		return
-	}
 	next, err := config.UpsertLocalProvider(s.cfgPath, input)
 	if err != nil {
 		http.Error(w, err.Error(), 400)
@@ -415,23 +724,35 @@ func (s *Server) adminRecentRequests(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	limit := 50
-	if s.recent == nil {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"active": []telemetry.Event{}, "recent": []telemetry.Event{}})
-		return
+	active := []telemetry.Event{}
+	recent := []telemetry.Event{}
+	if s.recent != nil {
+		active = s.recent.Active()
+		recent = s.recent.Recent(limit)
+	}
+	if s.observability != nil && len(recent) < limit {
+		persisted, err := s.observability.RecentFinished(limit)
+		if err == nil {
+			seen := make(map[string]struct{}, len(recent))
+			for _, event := range recent {
+				seen[event.RequestID] = struct{}{}
+			}
+			for _, event := range persisted {
+				if len(recent) >= limit {
+					break
+				}
+				if _, exists := seen[event.RequestID]; exists {
+					continue
+				}
+				recent = append(recent, event)
+				seen[event.RequestID] = struct{}{}
+			}
+		}
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"active": s.recent.Active(), "recent": s.recent.Recent(limit)})
+	json.NewEncoder(w).Encode(map[string]any{"active": active, "recent": recent})
 }
 
-func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/" {
-		http.NotFound(w, r)
-		return
-	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	io.WriteString(w, dashboardHTML())
-}
 func (s *Server) notImplemented(message string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		adapter := clientopenai.ChatAdapter{}

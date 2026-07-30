@@ -4,6 +4,11 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"time"
+
+	"github.com/a448582655/vibe-proxy/internal/ir"
+	"github.com/a448582655/vibe-proxy/internal/modelcapability"
+	"github.com/a448582655/vibe-proxy/internal/modelresolver"
 )
 
 type ValidationIssue struct {
@@ -37,17 +42,51 @@ func ValidateRuntime(cfg *RuntimeConfig) []ValidationIssue {
 		}
 		if p.BaseURL == "" {
 			issues = append(issues, issue("error", path+".base_url", "missing_base_url", "Provider base_url is required."))
-		} else if _, err := url.ParseRequestURI(p.BaseURL); err != nil {
+		} else if !isAbsoluteHTTPURL(p.BaseURL) {
 			issues = append(issues, issue("error", path+".base_url", "invalid_base_url", "Provider base_url must be a valid absolute URL."))
 		}
-		if p.Auth.Type == "" {
+		switch p.Auth.Type {
+		case "":
 			issues = append(issues, issue("warning", path+".auth", "missing_auth", "Provider auth is not configured; this is only valid for local/private providers without auth."))
+		case "none":
+		case "bearer":
+			if p.Auth.Token == "" {
+				issues = append(issues, issue("error", path+".auth.token", "missing_bearer_token", "Bearer auth requires token."))
+			}
+		case "api_key_header":
+			if strings.TrimSpace(p.Auth.Header) == "" || p.Auth.Value == "" {
+				issues = append(issues, issue("error", path+".auth", "invalid_api_key_header", "API key header auth requires header and value."))
+			}
+		case "custom_headers":
+			if len(p.Auth.Headers) == 0 {
+				issues = append(issues, issue("error", path+".auth.headers", "missing_custom_headers", "Custom header auth requires at least one header."))
+			}
+			for header, value := range p.Auth.Headers {
+				if strings.TrimSpace(header) == "" || value == "" {
+					issues = append(issues, issue("error", path+".auth.headers", "invalid_custom_header", "Custom header names and values cannot be empty."))
+					break
+				}
+			}
+		case "custom_query":
+			if len(p.Auth.Query) == 0 {
+				issues = append(issues, issue("error", path+".auth.query", "missing_custom_query", "Custom query auth requires at least one parameter."))
+			}
+			for name, value := range p.Auth.Query {
+				if strings.TrimSpace(name) == "" || value == "" {
+					issues = append(issues, issue("error", path+".auth.query", "invalid_custom_query", "Custom query parameter names and values cannot be empty."))
+					break
+				}
+			}
+		default:
+			issues = append(issues, issue("error", path+".auth.type", "unsupported_auth_type", fmt.Sprintf("Provider auth type %q is not supported.", p.Auth.Type)))
 		}
-		if p.Auth.Type == "bearer" && p.Auth.Token == "" {
-			issues = append(issues, issue("error", path+".auth.token", "missing_bearer_token", "Bearer auth requires token."))
+		if !p.DefaultCapabilities.ImageInput.Valid() {
+			issues = append(issues, issue("error", path+".default_capabilities.image_input", "invalid_image_input_capability", "image_input must be unknown, supported, or unsupported."))
 		}
-		if p.Auth.Type == "api_key_header" && (p.Auth.Header == "" || p.Auth.Value == "") {
-			issues = append(issues, issue("error", path+".auth", "invalid_api_key_header", "API key header auth requires header and value."))
+		for model, capabilities := range p.ModelCapabilities {
+			if !capabilities.ImageInput.Valid() {
+				issues = append(issues, issue("error", path+".model_capabilities."+model+".image_input", "invalid_image_input_capability", "image_input must be unknown, supported, or unsupported."))
+			}
 		}
 	}
 	for alias, target := range cfg.ModelResolver.Aliases {
@@ -63,7 +102,117 @@ func ValidateRuntime(cfg *RuntimeConfig) []ValidationIssue {
 			issues = append(issues, issue("error", "models.aliases."+alias, "alias_provider_not_found", "Alias points to an unknown provider."))
 		}
 	}
+	if cfg.ModelResolver.DefaultModel != "" {
+		resolver := modelresolver.New(cfg.ModelResolver)
+		if _, resolveErr := resolver.Resolve(&ir.Request{RequestedModel: cfg.ModelResolver.DefaultModel}); resolveErr != nil {
+			issues = append(issues, issue("error", "models.default", "default_model_invalid", "Default model cannot be resolved."))
+		}
+	}
+	seenClientKeys := make(map[string]struct{}, len(cfg.ClientKeys))
+	for i, clientKey := range cfg.ClientKeys {
+		path := fmt.Sprintf("client_keys.%d", i)
+		name := strings.TrimSpace(clientKey.Name)
+		if name == "" {
+			issues = append(issues, issue("error", path+".name", "missing_client_key_name", "Client key name is required."))
+		} else if _, exists := seenClientKeys[name]; exists {
+			issues = append(issues, issue("error", path+".name", "duplicate_client_key_name", "Client key names must be unique."))
+		} else {
+			seenClientKeys[name] = struct{}{}
+		}
+		if strings.TrimSpace(clientKey.KeyHash) == "" {
+			issues = append(issues, issue("error", path+".key_hash", "missing_client_key_hash", "Client key hash is required."))
+		}
+		if len(clientKey.AllowedModels) == 0 {
+			issues = append(issues, issue("error", path+".allowed_models", "missing_allowed_models", "Client key must allow at least one model or wildcard."))
+		}
+		if clientKey.RPM <= 0 {
+			issues = append(issues, issue("error", path+".rpm", "invalid_client_key_rpm", "Client key RPM must be greater than zero."))
+		}
+	}
+	issues = append(issues, validateMultimodal(cfg.Multimodal)...)
+	issues = append(issues, validateVisionFallback(cfg)...)
 	return issues
+}
+
+func isAbsoluteHTTPURL(raw string) bool {
+	parsed, err := url.Parse(raw)
+	return err == nil && parsed.Host != "" && (parsed.Scheme == "http" || parsed.Scheme == "https")
+}
+
+func validateMultimodal(cfg MultimodalConfig) []ValidationIssue {
+	if !cfg.Enabled {
+		return nil
+	}
+	issues := []ValidationIssue{}
+	if cfg.Strategy != "ocr_then_vision" {
+		issues = append(issues, issue("error", "multimodal.strategy", "unsupported_multimodal_strategy", "Only ocr_then_vision is supported."))
+	}
+	hasOCR := cfg.OCR.Provider != ""
+	if !hasOCR && cfg.VisionFallbackModel == "" {
+		issues = append(issues, issue("error", "multimodal", "missing_multimodal_fallback", "A built-in OCR provider, HTTP OCR endpoint, or Vision fallback model is required when multimodal fallback is enabled."))
+	}
+	if hasOCR {
+		switch cfg.OCR.Provider {
+		case "builtin":
+			// The model and WASM runtime are embedded in the executable.
+		case "http":
+			if cfg.OCR.Endpoint == "" {
+				issues = append(issues, issue("error", "multimodal.ocr.endpoint", "missing_ocr_endpoint", "OCR endpoint is required for provider: http."))
+			} else if endpoint, err := url.Parse(cfg.OCR.Endpoint); err != nil || endpoint.Host == "" || (endpoint.Scheme != "http" && endpoint.Scheme != "https") {
+				issues = append(issues, issue("error", "multimodal.ocr.endpoint", "invalid_ocr_endpoint", "OCR endpoint must be an absolute HTTP or HTTPS URL."))
+			}
+		default:
+			issues = append(issues, issue("error", "multimodal.ocr.provider", "unsupported_ocr_provider", "OCR provider must be builtin or http."))
+		}
+	}
+	if cfg.OCR.Timeout.Duration <= 0 || cfg.OCR.Timeout.Duration > 2*time.Minute {
+		issues = append(issues, issue("error", "multimodal.ocr.timeout", "invalid_ocr_timeout", "OCR timeout must be greater than zero and no more than 2 minutes."))
+	}
+	if cfg.OCR.MinConfidence < 0 || cfg.OCR.MinConfidence > 1 {
+		issues = append(issues, issue("error", "multimodal.ocr.min_confidence", "invalid_ocr_confidence", "OCR min_confidence must be between 0 and 1."))
+	}
+	if cfg.OCR.MinTextChars <= 0 || cfg.OCR.MinTextChars > 1000 {
+		issues = append(issues, issue("error", "multimodal.ocr.min_text_chars", "invalid_ocr_min_text", "OCR min_text_chars must be between 1 and 1000."))
+	}
+	if cfg.OCR.MaxImages <= 0 || cfg.OCR.MaxImages > 16 {
+		issues = append(issues, issue("error", "multimodal.ocr.max_images", "invalid_ocr_image_limit", "OCR max_images must be between 1 and 16."))
+	}
+	if cfg.OCR.MaxImageBytes <= 0 || cfg.OCR.MaxImageBytes > 20<<20 {
+		issues = append(issues, issue("error", "multimodal.ocr.max_image_bytes", "invalid_ocr_image_limit", "OCR max_image_bytes must be between 1 and 20 MiB."))
+	}
+	if cfg.OCR.MaxTotalImageBytes <= 0 || cfg.OCR.MaxTotalImageBytes > 64<<20 || cfg.OCR.MaxTotalImageBytes < cfg.OCR.MaxImageBytes {
+		issues = append(issues, issue("error", "multimodal.ocr.max_total_image_bytes", "invalid_ocr_image_limit", "OCR total image limit must be at least the single-image limit and no more than 64 MiB."))
+	}
+	if cfg.OCR.MaxTextCharsPerImage <= 0 || cfg.OCR.MaxTextCharsPerImage > 50000 || cfg.OCR.MaxTextCharsTotal < cfg.OCR.MaxTextCharsPerImage || cfg.OCR.MaxTextCharsTotal > 200000 {
+		issues = append(issues, issue("error", "multimodal.ocr.max_text_chars_total", "invalid_ocr_text_limit", "OCR text limits are invalid or exceed the hard limit."))
+	}
+	if hasOCR && cfg.OCR.Cache.IsEnabled() && (cfg.OCR.Cache.MaxEntries <= 0 || cfg.OCR.Cache.MaxEntries > 4096 || cfg.OCR.Cache.TTL.Duration <= 0) {
+		issues = append(issues, issue("error", "multimodal.ocr.cache", "invalid_ocr_cache", "OCR cache requires a positive TTL and 1 to 4096 entries."))
+	}
+	return issues
+}
+
+func validateVisionFallback(cfg *RuntimeConfig) []ValidationIssue {
+	if cfg == nil || !cfg.Multimodal.Enabled || cfg.Multimodal.VisionFallbackModel == "" {
+		return nil
+	}
+	resolver := modelresolver.New(cfg.ModelResolver)
+	target, resolveErr := resolver.Resolve(&ir.Request{RequestedModel: cfg.Multimodal.VisionFallbackModel})
+	if resolveErr != nil {
+		return []ValidationIssue{issue("error", "multimodal.vision_fallback_model", "vision_fallback_invalid", "Vision fallback model cannot be resolved.")}
+	}
+	provider, ok := cfg.Providers[target.ProviderID]
+	if !ok {
+		return []ValidationIssue{issue("error", "multimodal.vision_fallback_model", "vision_fallback_invalid", "Vision fallback provider is not configured.")}
+	}
+	support := provider.DefaultCapabilities.ImageInput
+	if model, exists := provider.ModelCapabilities[target.Model]; exists && model.ImageInput != "" {
+		support = model.ImageInput
+	}
+	if support != modelcapability.SupportSupported {
+		return []ValidationIssue{issue("error", "multimodal.vision_fallback_model", "vision_fallback_invalid", "Vision fallback model must be explicitly marked image_input: supported.")}
+	}
+	return nil
 }
 
 func HasErrors(issues []ValidationIssue) bool {

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/a448582655/vibe-proxy/internal/modelcapability"
 	"github.com/a448582655/vibe-proxy/internal/modelresolver"
 	"github.com/a448582655/vibe-proxy/internal/upstreamauth"
 	"gopkg.in/yaml.v3"
@@ -17,6 +18,7 @@ type SimpleConfig struct {
 	Server        ServerConfig                  `yaml:"server"`
 	Security      SecurityConfig                `yaml:"security"`
 	Storage       StorageConfig                 `yaml:"storage"`
+	Multimodal    MultimodalConfig              `yaml:"multimodal,omitempty"`
 	ClientKeys    []ClientKeyConfig             `yaml:"client_keys"`
 	Providers     map[string]ProviderConfig     `yaml:"providers"`
 	Models        ModelsConfig                  `yaml:"models"`
@@ -25,14 +27,17 @@ type SimpleConfig struct {
 }
 
 type ProviderConfig struct {
-	Type           string                 `yaml:"type"`
-	BaseURL        string                 `yaml:"base_url"`
-	APIKey         upstreamauth.SecretRef `yaml:"api_key"`
-	Auth           upstreamauth.Profile   `yaml:"auth"`
-	Models         []string               `yaml:"models"`
-	Priority       int                    `yaml:"priority"`
-	Timeout        Duration               `yaml:"timeout"`
-	MaxConcurrency int                    `yaml:"max_concurrency"`
+	Type                string                                       `yaml:"type"`
+	BaseURL             string                                       `yaml:"base_url"`
+	CatalogProvider     string                                       `yaml:"catalog_provider,omitempty"`
+	DefaultCapabilities modelcapability.ModelCapabilities            `yaml:"default_capabilities,omitempty"`
+	ModelCapabilities   map[string]modelcapability.ModelCapabilities `yaml:"model_capabilities,omitempty"`
+	APIKey              upstreamauth.SecretRef                       `yaml:"api_key"`
+	Auth                upstreamauth.Profile                         `yaml:"auth"`
+	Models              []string                                     `yaml:"models"`
+	Priority            int                                          `yaml:"priority"`
+	Timeout             Duration                                     `yaml:"timeout"`
+	MaxConcurrency      int                                          `yaml:"max_concurrency"`
 }
 
 type ModelsConfig struct {
@@ -61,6 +66,7 @@ type RuntimeConfig struct {
 	Server        ServerConfig
 	Security      SecurityConfig
 	Storage       StorageConfig
+	Multimodal    MultimodalConfig
 	ClientKeys    []ClientKeyConfig
 	ModelResolver modelresolver.Config
 	Providers     map[string]ProviderConfig
@@ -98,6 +104,7 @@ func CompileSimple(cfg SimpleConfig) (*RuntimeConfig, error) {
 	}
 	applyServerDefaults(&cfg.Server)
 	applyStorageDefaults(&cfg.Storage)
+	applyMultimodalDefaults(&cfg.Multimodal)
 	providers := map[string]ProviderConfig{}
 	resolverProviders := make([]modelresolver.Provider, 0, len(cfg.Providers))
 	ids := make([]string, 0, len(cfg.Providers))
@@ -133,7 +140,7 @@ func CompileSimple(cfg SimpleConfig) (*RuntimeConfig, error) {
 		}
 		aliases[name] = alias
 	}
-	return &RuntimeConfig{Server: cfg.Server, Security: cfg.Security, Storage: cfg.Storage, ClientKeys: cfg.ClientKeys, Providers: providers, ModelResolver: modelresolver.Config{DefaultModel: cfg.Models.Default, AllowRaw: cfg.Models.AllowRaw, Aliases: aliases, Providers: resolverProviders}}, nil
+	return &RuntimeConfig{Server: cfg.Server, Security: cfg.Security, Storage: cfg.Storage, Multimodal: cfg.Multimodal, ClientKeys: cfg.ClientKeys, Providers: providers, ModelResolver: modelresolver.Config{DefaultModel: cfg.Models.Default, AllowRaw: cfg.Models.AllowRaw, Aliases: aliases, Providers: resolverProviders}}, nil
 }
 
 func CompileLegacy(cfg *Config) *RuntimeConfig {

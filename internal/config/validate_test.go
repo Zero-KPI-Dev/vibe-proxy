@@ -3,6 +3,7 @@ package config
 import (
 	"testing"
 
+	"github.com/a448582655/vibe-proxy/internal/modelcapability"
 	"github.com/a448582655/vibe-proxy/internal/modelresolver"
 	"github.com/a448582655/vibe-proxy/internal/upstreamauth"
 )
@@ -25,6 +26,32 @@ func TestValidateRuntimeDetectsInvalidProviderAndAlias(t *testing.T) {
 	if !sawType || !sawAlias {
 		t.Fatalf("missing expected issues: %+v", issues)
 	}
+}
+
+func TestValidateRuntimeRejectsInvalidImageCapability(t *testing.T) {
+	cfg, err := CompileSimple(SimpleConfig{Providers: map[string]ProviderConfig{
+		"local": {
+			Type:    "openai-compatible",
+			BaseURL: "http://127.0.0.1:3000/v1",
+			Auth:    upstreamauth.Profile{Type: "none"},
+			DefaultCapabilities: modelcapability.ModelCapabilities{
+				ImageInput: "maybe",
+			},
+		},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	issues := ValidateRuntime(cfg)
+	if !HasErrors(issues) {
+		t.Fatalf("expected invalid capability error: %+v", issues)
+	}
+	for _, issue := range issues {
+		if issue.Code == "invalid_image_input_capability" {
+			return
+		}
+	}
+	t.Fatalf("missing capability validation issue: %+v", issues)
 }
 
 func TestValidateRuntimeAcceptsSimpleConfig(t *testing.T) {
@@ -50,4 +77,155 @@ func TestValidateRuntimeAllowsBootstrapWithoutProviders(t *testing.T) {
 	if len(issues) == 0 || issues[0].Code != "missing_providers" {
 		t.Fatalf("expected missing providers warning: %+v", issues)
 	}
+}
+
+func TestValidateRuntimeAcceptsHTTPOCRFallback(t *testing.T) {
+	cfg, err := CompileSimple(SimpleConfig{Multimodal: MultimodalConfig{
+		Enabled: true,
+		OCR: OCRConfig{
+			Provider: "http",
+			Endpoint: "http://127.0.0.1:32180/v1/ocr",
+			Auth:     upstreamauth.Profile{Type: "none"},
+		},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if issues := ValidateRuntime(cfg); HasErrors(issues) {
+		t.Fatalf("unexpected OCR validation errors: %+v", issues)
+	}
+	if cfg.Multimodal.OCR.MaxImages != 4 || cfg.Multimodal.OCR.Cache.MaxEntries != 256 || !cfg.Multimodal.OCR.Cache.IsEnabled() {
+		t.Fatalf("OCR defaults not applied: %+v", cfg.Multimodal.OCR)
+	}
+}
+
+func TestValidateRuntimeDefaultsToBuiltinOCRFallback(t *testing.T) {
+	cfg, err := CompileSimple(SimpleConfig{Multimodal: MultimodalConfig{Enabled: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Multimodal.OCR.Provider != "builtin" {
+		t.Fatalf("expected built-in OCR default: %+v", cfg.Multimodal.OCR)
+	}
+	if issues := ValidateRuntime(cfg); HasErrors(issues) {
+		t.Fatalf("unexpected built-in OCR validation errors: %+v", issues)
+	}
+}
+
+func TestValidateRuntimeRejectsUnsafeOCRConfig(t *testing.T) {
+	cfg, err := CompileSimple(SimpleConfig{Multimodal: MultimodalConfig{
+		Enabled: true,
+		OCR:     OCRConfig{Provider: "http", Endpoint: "file:///tmp/ocr"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	issues := ValidateRuntime(cfg)
+	if !HasErrors(issues) {
+		t.Fatalf("expected invalid OCR endpoint: %+v", issues)
+	}
+	for _, issue := range issues {
+		if issue.Code == "invalid_ocr_endpoint" {
+			return
+		}
+	}
+	t.Fatalf("missing endpoint issue: %+v", issues)
+}
+
+func TestValidateRuntimeRequiresExplicitVisionFallbackCapability(t *testing.T) {
+	base := SimpleConfig{
+		Multimodal: MultimodalConfig{Enabled: true, VisionFallbackModel: "vibe-vision"},
+		Providers: map[string]ProviderConfig{"vision": {
+			Type:    "openai-compatible",
+			BaseURL: "https://vision.example/v1",
+			Auth:    upstreamauth.Profile{Type: "none"},
+			Models:  []string{"vision-model"},
+			DefaultCapabilities: modelcapability.ModelCapabilities{
+				ImageInput: modelcapability.SupportSupported,
+			},
+		}},
+		Models: ModelsConfig{Aliases: map[string]string{"vibe-vision": "vision/vision-model"}},
+	}
+	cfg, err := CompileSimple(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if issues := ValidateRuntime(cfg); HasErrors(issues) {
+		t.Fatalf("valid Vision fallback rejected: %+v", issues)
+	}
+	provider := base.Providers["vision"]
+	provider.DefaultCapabilities.ImageInput = modelcapability.SupportUnknown
+	base.Providers["vision"] = provider
+	cfg, err = CompileSimple(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	issues := ValidateRuntime(cfg)
+	if !HasErrors(issues) {
+		t.Fatalf("expected explicit Vision capability error: %+v", issues)
+	}
+}
+
+func TestValidateRuntimeRejectsRelativeProviderURLAndUnsupportedAuth(t *testing.T) {
+	cfg, err := CompileSimple(SimpleConfig{Providers: map[string]ProviderConfig{
+		"bad": {
+			Type:    "openai-compatible",
+			BaseURL: "/relative",
+			Auth:    upstreamauth.Profile{Type: "magic"},
+		},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	issues := ValidateRuntime(cfg)
+	if !hasIssueCode(issues, "invalid_base_url") || !hasIssueCode(issues, "unsupported_auth_type") {
+		t.Fatalf("missing URL or auth validation issues: %+v", issues)
+	}
+}
+
+func TestValidateRuntimeRejectsUnresolvableDefaultModel(t *testing.T) {
+	cfg, err := CompileSimple(SimpleConfig{
+		Providers: map[string]ProviderConfig{
+			"local": {
+				Type:    "openai-compatible",
+				BaseURL: "http://127.0.0.1:3000/v1",
+				Auth:    upstreamauth.Profile{Type: "none"},
+				Models:  []string{"chat"},
+			},
+		},
+		Models: ModelsConfig{Default: "missing", AllowRaw: false},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if issues := ValidateRuntime(cfg); !hasIssueCode(issues, "default_model_invalid") {
+		t.Fatalf("missing default model validation issue: %+v", issues)
+	}
+}
+
+func TestValidateRuntimeRejectsInvalidAndDuplicateClientKeys(t *testing.T) {
+	cfg, err := CompileSimple(SimpleConfig{
+		ClientKeys: []ClientKeyConfig{
+			{Name: "agent", KeyHash: "hash", Enabled: true, AllowedModels: []string{"*"}, RPM: 60},
+			{Name: "agent", Enabled: true, RPM: 0},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	issues := ValidateRuntime(cfg)
+	for _, code := range []string{"duplicate_client_key_name", "missing_client_key_hash", "missing_allowed_models", "invalid_client_key_rpm"} {
+		if !hasIssueCode(issues, code) {
+			t.Fatalf("missing %s validation issue: %+v", code, issues)
+		}
+	}
+}
+
+func hasIssueCode(issues []ValidationIssue, code string) bool {
+	for _, validationIssue := range issues {
+		if validationIssue.Code == code {
+			return true
+		}
+	}
+	return false
 }

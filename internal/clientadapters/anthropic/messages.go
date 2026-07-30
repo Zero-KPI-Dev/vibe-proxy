@@ -44,6 +44,13 @@ func (a MessagesAdapter) ParseRequest(ctx context.Context, r *http.Request) (*ir
 	for _, t := range in.Tools {
 		req.Tools = append(req.Tools, ir.Tool{Name: t.Name, Description: t.Description, Parameters: t.InputSchema})
 	}
+	if in.ToolChoice != nil && in.ToolChoice.Type != "" {
+		choiceType := in.ToolChoice.Type
+		if choiceType == "any" {
+			choiceType = "required"
+		}
+		req.ToolChoice = &ir.ToolChoice{Type: choiceType, Name: in.ToolChoice.Name}
+	}
 	return req, nil
 }
 
@@ -60,16 +67,25 @@ func (a MessagesAdapter) EncodeStream(ctx context.Context, w http.ResponseWriter
 	messageID := "msg_" + uuid.NewString()
 	writeEvent(w, "message_start", map[string]any{"type": "message_start", "message": map[string]any{"id": messageID, "type": "message", "role": "assistant", "content": []any{}, "model": "", "stop_reason": nil, "usage": map[string]any{"input_tokens": 0, "output_tokens": 0}}})
 	flush(flusher)
-	blockOpen := false
+	activeBlockIndex := -1
+	activeBlockType := ""
+	nextBlockIndex := 0
+	sawToolCall := false
+	closeActiveBlock := func() {
+		if activeBlockIndex < 0 {
+			return
+		}
+		writeEvent(w, "content_block_stop", map[string]any{"type": "content_block_stop", "index": activeBlockIndex})
+		activeBlockIndex = -1
+		activeBlockType = ""
+	}
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case ev, ok := <-events:
 			if !ok {
-				if blockOpen {
-					writeEvent(w, "content_block_stop", map[string]any{"type": "content_block_stop", "index": 0})
-				}
+				closeActiveBlock()
 				writeEvent(w, "message_stop", map[string]any{"type": "message_stop"})
 				flush(flusher)
 				return nil
@@ -82,23 +98,49 @@ func (a MessagesAdapter) EncodeStream(ctx context.Context, w http.ResponseWriter
 				if ev.Delta.Text == "" {
 					continue
 				}
-				if !blockOpen {
-					writeEvent(w, "content_block_start", map[string]any{"type": "content_block_start", "index": 0, "content_block": map[string]any{"type": "text", "text": ""}})
-					blockOpen = true
+				if activeBlockType != "text" {
+					closeActiveBlock()
+					activeBlockIndex = nextBlockIndex
+					nextBlockIndex++
+					activeBlockType = "text"
+					writeEvent(w, "content_block_start", map[string]any{"type": "content_block_start", "index": activeBlockIndex, "content_block": map[string]any{"type": "text", "text": ""}})
 				}
-				writeEvent(w, "content_block_delta", map[string]any{"type": "content_block_delta", "index": 0, "delta": map[string]any{"type": "text_delta", "text": ev.Delta.Text}})
+				writeEvent(w, "content_block_delta", map[string]any{"type": "content_block_delta", "index": activeBlockIndex, "delta": map[string]any{"type": "text_delta", "text": ev.Delta.Text}})
 				flush(flusher)
+			case ir.EventToolCallStart, ir.EventToolCallDelta:
+				if ev.ToolCall == nil {
+					continue
+				}
+				if activeBlockType != "tool_use" || ev.Type == ir.EventToolCallStart {
+					closeActiveBlock()
+					activeBlockIndex = nextBlockIndex
+					nextBlockIndex++
+					activeBlockType = "tool_use"
+					sawToolCall = true
+					writeEvent(w, "content_block_start", map[string]any{"type": "content_block_start", "index": activeBlockIndex, "content_block": map[string]any{"type": "tool_use", "id": ev.ToolCall.ID, "name": ev.ToolCall.Name, "input": map[string]any{}}})
+				}
+				arguments := string(ev.ToolCall.Arguments)
+				if arguments != "" && !(ev.Type == ir.EventToolCallStart && arguments == "{}") {
+					writeEvent(w, "content_block_delta", map[string]any{"type": "content_block_delta", "index": activeBlockIndex, "delta": map[string]any{"type": "input_json_delta", "partial_json": arguments}})
+				}
+				flush(flusher)
+			case ir.EventToolCallDone:
+				if activeBlockType == "tool_use" {
+					closeActiveBlock()
+					flush(flusher)
+				}
 			case ir.EventUsageDelta:
 				if ev.Usage != nil {
 					writeEvent(w, "message_delta", map[string]any{"type": "message_delta", "delta": map[string]any{}, "usage": usage(*ev.Usage)})
 					flush(flusher)
 				}
 			case ir.EventMessageDone:
-				if blockOpen {
-					writeEvent(w, "content_block_stop", map[string]any{"type": "content_block_stop", "index": 0})
-					blockOpen = false
+				closeActiveBlock()
+				stop := "end_turn"
+				if sawToolCall {
+					stop = "tool_use"
 				}
-				writeEvent(w, "message_delta", map[string]any{"type": "message_delta", "delta": map[string]any{"stop_reason": "end_turn"}})
+				writeEvent(w, "message_delta", map[string]any{"type": "message_delta", "delta": map[string]any{"stop_reason": stop}})
 				writeEvent(w, "message_stop", map[string]any{"type": "message_stop"})
 				flush(flusher)
 				return nil
@@ -192,20 +234,37 @@ func flush(f http.Flusher) {
 }
 
 type request struct {
-	Model         string    `json:"model"`
-	MaxTokens     int64     `json:"max_tokens"`
-	System        []block   `json:"system"`
-	Messages      []message `json:"messages"`
-	Tools         []tool    `json:"tools"`
-	Temperature   *float64  `json:"temperature"`
-	TopP          *float64  `json:"top_p"`
-	StopSequences []string  `json:"stop_sequences"`
-	Stream        bool      `json:"stream"`
+	Model         string      `json:"model"`
+	MaxTokens     int64       `json:"max_tokens"`
+	System        blockList   `json:"system"`
+	Messages      []message   `json:"messages"`
+	Tools         []tool      `json:"tools"`
+	ToolChoice    *toolChoice `json:"tool_choice"`
+	Temperature   *float64    `json:"temperature"`
+	TopP          *float64    `json:"top_p"`
+	StopSequences []string    `json:"stop_sequences"`
+	Stream        bool        `json:"stream"`
 }
 type message struct {
-	Role    string  `json:"role"`
-	Content []block `json:"content"`
+	Role    string    `json:"role"`
+	Content blockList `json:"content"`
 }
+type blockList []block
+
+func (b *blockList) UnmarshalJSON(data []byte) error {
+	var text string
+	if err := json.Unmarshal(data, &text); err == nil {
+		*b = blockList{{Type: "text", Text: text}}
+		return nil
+	}
+	var blocks []block
+	if err := json.Unmarshal(data, &blocks); err != nil {
+		return err
+	}
+	*b = blocks
+	return nil
+}
+
 type block struct {
 	Type      string          `json:"type"`
 	Text      string          `json:"text,omitempty"`
@@ -226,6 +285,10 @@ type tool struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description,omitempty"`
 	InputSchema json.RawMessage `json:"input_schema,omitempty"`
+}
+type toolChoice struct {
+	Type string `json:"type"`
+	Name string `json:"name,omitempty"`
 }
 
 var _ = strings.Builder{}

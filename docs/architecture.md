@@ -66,8 +66,8 @@ HTTP Request
   -> Listener / Protocol Detection
   -> Client Adapter
   -> Canonical IR
-  -> Pipeline Hooks
   -> Model Resolver
+  -> Request Preprocessor Pipeline
   -> Channel Selector
   -> Upstream Auth Profile
   -> Provider Adapter
@@ -134,6 +134,17 @@ Resolution order:
 3. raw model match against provider model lists when `allow_raw_models` is enabled
 4. fallback to configured default model when allowed by the client protocol/profile
 5. standardized `model_not_found` error
+
+The registry also resolves model capabilities independently from routing. Image input
+uses a three-state value (`supported`, `unsupported`, `unknown`) with this precedence:
+
+1. model-level local override
+2. provider default
+3. unambiguous models.dev metadata
+4. unknown
+
+Adapter `Vision` capability means that the protocol adapter can encode image blocks; it
+does not claim that every model behind that adapter accepts images.
 
 ### 4. Channel Manager
 
@@ -212,6 +223,48 @@ OnError
 ```
 
 v0.1 can keep hooks internal. A public plugin SDK can come later.
+
+Resolved requests also pass through a small, ordered `RequestPreprocessor` pipeline
+before provider concurrency is acquired and before the upstream request is encoded.
+Preprocessors receive Canonical IR, the resolved target, provider configuration, and
+adapter transport capabilities. The first implementation is the disabled-by-default
+multimodal fallback skeleton. This keeps OCR, future document extraction, and similar
+transformations out of protocol adapters and out of the main runtime handler.
+
+When OCR fallback is enabled, the multimodal preprocessor performs the following before
+LLM provider concurrency is acquired:
+
+1. resolve the selected model's image capability;
+2. decode and validate embedded images under fixed limits;
+3. call the embedded OCR provider by default, or the external HTTP provider
+   when the user explicitly configures one, with a dedicated timeout and auth
+   profile;
+4. reuse successful in-memory results by image hash with per-key singleflight;
+5. replace image blocks in-place with escaped, explicitly untrusted OCR text;
+6. return a protocol-native error before the LLM call when OCR is unsafe or unusable.
+
+When a separately configured Vision fallback exists, unusable OCR switches the effective
+target without re-running the preprocessor. The fallback must be different from the
+original target, explicitly support image input, and use an adapter that can transport
+images. The original image-bearing Canonical IR is retained for that call.
+
+The original Canonical IR is not mutated. Remote image fetching is not part of the first
+OCR release.
+
+The built-in provider embeds a compact Simplified Chinese and English Tesseract
+model and executes it through WASM in a short-lived isolated invocation of the
+same vibe-proxy executable. The worker is serialized, receives only the image
+payload, does not inherit provider credentials, and exits after recognition so
+the WASM memory is returned to the operating system. It does not require a
+second container, Python, ONNX Runtime, a system OCR package, or runtime model
+downloads. The HTTP provider remains an explicit extension point for higher
+accuracy, additional languages, private OCR services, and accelerated
+deployments.
+
+Telemetry stores a structured transformation summary with routing and aggregate OCR
+metadata. It intentionally excludes images, image locations, OCR text, and secrets. Local
+SQLite migration adds a JSON summary column while Recent Requests exposes the same typed
+object to the control plane.
 
 ### 8. Telemetry Pipeline
 

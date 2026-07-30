@@ -39,6 +39,12 @@ providers:
     base_url: https://api.deepseek.com/v1
     api_key: env:DEEPSEEK_API_KEY
 
+  company-maas:
+    type: openai-compatible
+    base_url: https://maas.example.com/v1
+    api_key: env:COMPANY_MAAS_API_KEY
+    catalog_provider: deepseek
+
 models:
   default: vibe-coder
   allow_raw: true
@@ -48,6 +54,48 @@ models:
 ```
 
 This should be enough for most local users.
+
+## Model Capability Catalog
+
+Provider model IDs discovered through `/v1/models` do not normally include whether the
+model accepts images, supports tools, or performs reasoning. `vibe-proxy` enriches those
+IDs from a cached models.dev catalog and preserves `unknown` when a match is ambiguous.
+
+For first-party endpoints, the catalog provider is inferred from the provider ID, model
+prefix, or base URL. A custom MaaS endpoint can declare the upstream model family:
+
+```yaml
+providers:
+  internal-maas:
+    type: openai-compatible
+    base_url: https://maas.internal.example/v1
+    catalog_provider: anthropic
+    api_key: env:INTERNAL_MAAS_TOKEN
+```
+
+`catalog_provider` is metadata only. It does not change request routing, protocol
+selection, or authentication. Explicit local capability overrides take precedence over
+provider defaults and catalog metadata. The catalog is advisory and is never consulted
+over the network in the data-plane hot path.
+
+Provider-wide defaults and per-model corrections use an explicit three-state value:
+
+```yaml
+providers:
+  internal-maas:
+    default_capabilities:
+      image_input: unsupported
+    model_capabilities:
+      qwen-vl:
+        image_input: supported
+      renamed-private-model:
+        image_input: unknown
+```
+
+Valid values are `supported`, `unsupported`, and `unknown`. Missing metadata also means
+unknown, but an explicit local value records the user's intended override. Editing a
+provider through the basic control plane preserves advanced capability overrides already
+present in YAML.
 
 ## Provider Auth
 
@@ -134,6 +182,85 @@ routes:
         model: deepseek-chat
         fallback: true
 ```
+
+## OCR Image Fallback
+
+OCR fallback is opt-in. When enabled, a model resolved as `unsupported` for image input
+can receive extracted text instead of the original image:
+
+```yaml
+multimodal:
+  enabled: true
+  strategy: ocr_then_vision
+  ocr:
+    provider: builtin
+    timeout: 15s
+    min_confidence: 0.55
+    min_text_chars: 4
+    max_images: 4
+    max_image_bytes: 5242880
+    max_total_image_bytes: 12582912
+    max_text_chars_per_image: 8000
+    max_text_chars_total: 16000
+    remote_images: false
+    cache:
+      enabled: true
+      max_entries: 256
+      ttl: 24h
+  vision_fallback_model: ""
+```
+
+`builtin` is the default when `ocr.provider` is omitted and no endpoint is
+present. It embeds a compact Simplified Chinese and English Tesseract model and
+runs it through WASM in a short-lived isolated copy of the vibe-proxy
+executable. This returns the WASM memory to the operating system after a cache
+miss without starting another service, calling the network, downloading a
+model, or requiring a system Tesseract installation.
+
+An explicitly configured external service overrides the built-in provider:
+
+```yaml
+multimodal:
+  enabled: true
+  ocr:
+    provider: http
+    endpoint: http://127.0.0.1:32180/v1/ocr
+    auth:
+      type: none
+```
+
+The external HTTP OCR endpoint receives:
+
+```json
+{
+  "images": [
+    {"index": 0, "media_type": "image/png", "data_base64": "..."}
+  ]
+}
+```
+
+and returns:
+
+```json
+{
+  "results": [
+    {"index": 0, "text": "recognized text", "confidence": 0.93, "language": "en"}
+  ]
+}
+```
+
+The first release accepts embedded base64 and base64 data URLs. It deliberately does not
+download remote image URLs in the OCR path. OCR text replaces each image at its original
+position, is escaped and marked as untrusted user data, and is never included in ordinary
+logs. Provider authentication uses the same auth profile and secret-reference forms as
+LLM providers.
+
+If `vision_fallback_model` is configured, OCR errors, empty text, or confidence below the
+threshold switch to that target while preserving the original image request. The target
+must resolve to a different provider/model and must be explicitly marked
+`image_input: supported`; catalog inference alone is not accepted for this safety-critical
+fallback. The client key is still authorized against the originally requested public
+model.
 
 ## Agent Profiles
 

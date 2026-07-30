@@ -32,10 +32,12 @@ type Capabilities struct {
 	Streaming         bool `json:"streaming"`
 	Tools             bool `json:"tools"`
 	ParallelToolCalls bool `json:"parallel_tool_calls"`
-	Vision            bool `json:"vision"`
-	Files             bool `json:"files"`
-	JSONMode          bool `json:"json_mode"`
-	StructuredOutput  bool `json:"structured_output"`
-	PromptCache       bool `json:"prompt_cache"`
-	TrailingUsage     bool `json:"trailing_usage"`
+	// Vision describes whether the adapter can transport image blocks. Model-level
+	// image support is resolved separately and must not be inferred from this flag.
+	Vision           bool `json:"vision"`
+	Files            bool `json:"files"`
+	JSONMode         bool `json:"json_mode"`
+	StructuredOutput bool `json:"structured_output"`
+	PromptCache      bool `json:"prompt_cache"`
+	TrailingUsage    bool `json:"trailing_usage"`
 }
