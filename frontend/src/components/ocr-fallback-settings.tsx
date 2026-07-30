@@ -96,10 +96,20 @@ export function OCRFallbackSettings({ authVersion }: OCRFallbackSettingsProps) {
     setTesting(true)
     try {
       const result = await multimodalApi.testOCR(config)
-      toast.success(t(
+      const message = t(
         result.provider === "builtin" ? "settings.builtinOCRTestSucceeded" : "settings.ocrTestSucceeded",
         { latency: result.latency_ms, confidence: result.confidence != null ? Math.round(result.confidence * 100) : "-" },
-      ))
+      )
+      if (result.warning) {
+        toast.warning(t(
+          result.warning === "multimodal_disabled"
+            ? "settings.ocrTestDisabledWarning"
+            : "settings.ocrTestNotActiveWarning",
+          { result: message },
+        ))
+      } else {
+        toast.success(message)
+      }
     } catch (error) {
       toast.error(t("settings.ocrTestFailed", {
         error: error instanceof Error ? error.message : t("common.unknownError"),

@@ -176,6 +176,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/admin/providers/health", s.adminProviderHealth)
 	mux.HandleFunc("/admin/model-catalog/status", s.adminModelCatalogStatus)
 	mux.HandleFunc("/admin/model-catalog/refresh", s.adminModelCatalogRefresh)
+	mux.HandleFunc("/admin/model-catalog/import", s.adminModelCatalogImport)
 	mux.HandleFunc("/admin/model-catalog/lookup", s.adminModelCatalogLookup)
 	mux.HandleFunc("/admin/multimodal", s.adminMultimodal)
 	mux.HandleFunc("/admin/multimodal/ocr/test", s.adminOCRTest)

@@ -123,13 +123,6 @@ func (p *Processor) Decide(req *ir.Request, route preprocess.RouteContext) Decis
 		decision.Reason = "no_images"
 		return decision
 	}
-	if !p.Enabled {
-		decision.Mode = RouteLegacyPassthrough
-		decision.Reason = "feature_disabled"
-		decision.ModelImageSupport = modelcapability.SupportUnknown
-		decision.CapabilitySource = modelcapability.SourceUnknown
-		return decision
-	}
 
 	var catalog *modelcatalog.Snapshot
 	if p.Catalog != nil {
@@ -139,6 +132,13 @@ func (p *Processor) Decide(req *ir.Request, route preprocess.RouteContext) Decis
 	decision.ModelImageSupport = resolved.Capabilities.ImageInput
 	decision.CapabilitySource = resolved.Source
 	decision.CatalogMatch = resolved.CatalogMatch
+
+	if !p.Enabled {
+		decision.Mode = RouteLegacyPassthrough
+		decision.Reason = "feature_disabled"
+		return decision
+	}
+
 	switch resolved.Capabilities.ImageInput {
 	case modelcapability.SupportSupported:
 		if !route.AdapterCapabilities.Vision {

@@ -261,6 +261,7 @@ export interface ModelCatalogState {
   source_url: string
   etag?: string
   fetched_at?: string
+  origin?: "remote" | "upload" | "cache"
   stale: boolean
   providers: number
   models: number
@@ -317,6 +318,9 @@ export interface MultimodalAdminInput extends MultimodalAdminConfig {
 
 export interface OCRTestResponse {
   ok: boolean
+  enabled: boolean
+  active: boolean
+  warning?: "multimodal_disabled" | "multimodal_not_active"
   provider?: string
   latency_ms: number
   result_count?: number

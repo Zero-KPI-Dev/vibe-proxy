@@ -80,6 +80,9 @@ func TestDisabledProcessorPreservesExistingImageBehavior(t *testing.T) {
 	if got.Mode != RouteLegacyPassthrough || got.Reason != "feature_disabled" {
 		t.Fatalf("disabled feature must not change behavior: %+v", got)
 	}
+	if got.ModelImageSupport != modelcapability.SupportUnsupported || got.CapabilitySource != modelcapability.SourceProviderDefault {
+		t.Fatalf("disabled feature must preserve resolved model capability: %+v", got)
+	}
 }
 
 func TestScanImagesIncludesToolResults(t *testing.T) {

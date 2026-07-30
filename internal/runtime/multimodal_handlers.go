@@ -118,10 +118,17 @@ func (s *Server) adminOCRTest(w http.ResponseWriter, r *http.Request) {
 	}
 	response := map[string]any{
 		"ok":           true,
+		"enabled":      cfg.Enabled,
+		"active":       s.current().Config.Multimodal.Enabled,
 		"provider":     provider.Name(),
 		"latency_ms":   latency,
 		"result_count": len(results),
 		"has_text":     hasText,
+	}
+	if !cfg.Enabled {
+		response["warning"] = "multimodal_disabled"
+	} else if !s.current().Config.Multimodal.Enabled {
+		response["warning"] = "multimodal_not_active"
 	}
 	if confidence != nil {
 		response["confidence"] = *confidence

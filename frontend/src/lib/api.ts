@@ -35,9 +35,10 @@ export function setToken(t: string) {
 
 async function request<T>(path: string, opts: RequestInit = {}): Promise<T> {
   const headers: Record<string, string> = {
-    "Content-Type": "application/json",
     ...(opts.headers as Record<string, string>),
   }
+  const isFormData = typeof FormData !== "undefined" && opts.body instanceof FormData
+  if (!isFormData && !headers["Content-Type"]) headers["Content-Type"] = "application/json"
   const token = getToken()
   if (token) headers["Authorization"] = `Bearer ${token}`
 
@@ -108,6 +109,14 @@ export const modelCatalogApi = {
     request<ModelCatalogRefreshResponse>("/admin/model-catalog/refresh", {
       method: "POST",
     }),
+  importFile: (file: File) => {
+    const form = new FormData()
+    form.set("catalog", file)
+    return request<ModelCatalogRefreshResponse>("/admin/model-catalog/import", {
+      method: "POST",
+      body: form,
+    })
+  },
   lookup: (data: { provider_id: string; catalog_provider?: string; base_url: string; models: string[] }) =>
     request<ModelCatalogLookupResponse>("/admin/model-catalog/lookup", {
       method: "POST",

@@ -82,6 +82,7 @@ type State struct {
 	SourceURL string    `json:"source_url"`
 	ETag      string    `json:"etag,omitempty"`
 	FetchedAt time.Time `json:"fetched_at,omitempty"`
+	Origin    string    `json:"origin,omitempty"`
 	Stale     bool      `json:"stale"`
 	Providers int       `json:"providers"`
 	Models    int       `json:"models"`

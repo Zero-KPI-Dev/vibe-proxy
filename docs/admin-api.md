@@ -105,12 +105,26 @@ Provider credentials are used only for the probe and are never returned.
 ```text
 GET  /admin/model-catalog/status
 POST /admin/model-catalog/refresh
+POST /admin/model-catalog/import
 POST /admin/model-catalog/lookup
 ```
 
 The catalog is downloaded from models.dev into a local cache. Data-plane requests never
 depend on a live models.dev request. `refresh` honors HTTP validators and keeps the last
 usable cache when the remote source is temporarily unavailable.
+
+For restricted or fully offline networks, download `https://models.dev/api.json` on
+another machine and import it from Settings, or upload it directly:
+
+```bash
+curl -H "Authorization: Bearer $VIBE_PROXY_ADMIN_TOKEN" \
+  -F "catalog=@api.json;type=application/json" \
+  http://127.0.0.1:8080/admin/model-catalog/import
+```
+
+The file is limited to 10 MB and is parsed before it replaces the active catalog. An
+invalid upload leaves the previous usable catalog unchanged. A later online refresh still
+uses the normal models.dev URL.
 
 Lookup accepts a provider/model pair:
 
@@ -142,9 +156,13 @@ OCR credentials.
 `GET /admin/multimodal` reports `provider: builtin|http`. Built-in OCR is the
 default; an external endpoint and its authentication fields are only used when
 the provider is `http`. `POST /admin/multimodal/ocr/test` runs the selected
-provider against an embedded deterministic Chinese and English fixture and
-returns provider, engine (for built-in), latency, result count, and aggregate
-confidence without returning recognized text.
+provider against an embedded deterministic Chinese and English fixture. Its
+response separately reports whether the submitted form enabled fallback and
+whether the current runtime is active; a successful engine test can therefore
+return `warning: multimodal_disabled|multimodal_not_active`. This avoids treating
+an isolated OCR engine test as proof that image requests currently use OCR. The
+response also returns provider, engine (for built-in), latency, result count, and
+aggregate confidence without returning recognized text.
 
 Successful OCR responses also include:
 

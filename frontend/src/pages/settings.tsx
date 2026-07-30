@@ -1,11 +1,11 @@
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState, type ChangeEvent } from "react"
 import { useTranslation } from "react-i18next"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { toast } from "sonner"
-import { Database, Languages, Palette, RefreshCw, Shield, Save } from "lucide-react"
+import { Database, FileUp, Languages, Palette, RefreshCw, Shield, Save } from "lucide-react"
 import { desktopApi, setToken, getToken, modelCatalogApi } from "@/lib/api"
 import type { DesktopSnapshot, ModelCatalogState } from "@/lib/types"
 import { normalizeLanguage, setAppLanguage, type AppLanguage } from "@/i18n"
@@ -36,6 +36,8 @@ export function SettingsPage() {
   )
   const [catalog, setCatalog] = useState<ModelCatalogState | null>(null)
   const [catalogLoading, setCatalogLoading] = useState(false)
+  const [catalogImporting, setCatalogImporting] = useState(false)
+  const catalogFileRef = useRef<HTMLInputElement>(null)
   const [desktop, setDesktop] = useState<DesktopSnapshot | null>(null)
   const [authVersion, setAuthVersion] = useState(0)
 
@@ -82,6 +84,29 @@ export function SettingsPage() {
       await loadCatalogStatus()
     } finally {
       setCatalogLoading(false)
+    }
+  }
+
+  const handleCatalogImport = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    event.target.value = ""
+    if (!file) return
+    if (file.size > 10 * 1024 * 1024) {
+      toast.error(t("settings.catalogImportTooLarge"))
+      return
+    }
+    setCatalogImporting(true)
+    try {
+      const result = await modelCatalogApi.importFile(file)
+      setCatalog(result.catalog)
+      toast.success(t("settings.catalogImported", { count: result.catalog.models }))
+    } catch (error) {
+      toast.error(t("settings.catalogImportFailed", {
+        error: error instanceof Error ? error.message : t("common.unknownError"),
+      }))
+      await loadCatalogStatus()
+    } finally {
+      setCatalogImporting(false)
     }
   }
 
@@ -175,22 +200,52 @@ export function SettingsPage() {
             </div>
           </div>
           <div className="flex items-center justify-between gap-3">
-            <p className="text-xs text-muted-foreground">
-              {catalog?.error
-                ? t("settings.catalogError", { error: catalog.error })
-                : catalog?.stale
-                  ? t("settings.catalogStale")
-                  : t("settings.catalogReady")}
-            </p>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => void handleCatalogRefresh()}
-              disabled={catalogLoading}
-            >
-              <RefreshCw className={`mr-1 h-4 w-4 ${catalogLoading ? "animate-spin" : ""}`} />
-              {catalogLoading ? t("settings.catalogRefreshing") : t("settings.catalogRefresh")}
-            </Button>
+            <div className="space-y-1">
+              <p className="text-xs text-muted-foreground">
+                {catalog?.error
+                  ? t("settings.catalogError", { error: catalog.error })
+                  : catalog?.stale
+                    ? t("settings.catalogStale")
+                    : t("settings.catalogReady")}
+              </p>
+              {catalog?.origin && (
+                <p className="text-xs text-muted-foreground">
+                  {t("settings.catalogOrigin")}:{" "}
+                  {catalog.origin === "upload"
+                    ? t("settings.catalogOriginUpload")
+                    : catalog.origin === "remote"
+                      ? t("settings.catalogOriginRemote")
+                      : t("settings.catalogOriginCache")}
+                </p>
+              )}
+            </div>
+            <div className="flex shrink-0 flex-wrap justify-end gap-2">
+              <input
+                ref={catalogFileRef}
+                type="file"
+                accept=".json,application/json"
+                className="hidden"
+                onChange={(event) => void handleCatalogImport(event)}
+              />
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => catalogFileRef.current?.click()}
+                disabled={catalogImporting || catalogLoading}
+              >
+                <FileUp className="mr-1 h-4 w-4" />
+                {catalogImporting ? t("settings.catalogImporting") : t("settings.catalogImport")}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => void handleCatalogRefresh()}
+                disabled={catalogLoading || catalogImporting}
+              >
+                <RefreshCw className={`mr-1 h-4 w-4 ${catalogLoading ? "animate-spin" : ""}`} />
+                {catalogLoading ? t("settings.catalogRefreshing") : t("settings.catalogRefresh")}
+              </Button>
+            </div>
           </div>
         </CardContent>
       </Card>

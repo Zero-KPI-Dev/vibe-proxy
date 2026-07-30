@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-const maxCatalogBytes = 10 << 20
+const MaxCatalogBytes = 10 << 20
 
 type Options struct {
 	SourceURL string
@@ -33,6 +33,7 @@ type Service struct {
 type cacheEnvelope struct {
 	ETag      string          `json:"etag,omitempty"`
 	FetchedAt time.Time       `json:"fetched_at"`
+	Origin    string          `json:"origin,omitempty"`
 	Data      json.RawMessage `json:"data"`
 }
 
@@ -95,6 +96,7 @@ func (s *Service) Refresh(ctx context.Context) error {
 		}
 		state := current.state
 		state.FetchedAt = time.Now().UTC()
+		state.Origin = "remote"
 		state.Stale = false
 		state.Error = ""
 		next, err := parseSnapshot(current.raw, state)
@@ -108,20 +110,21 @@ func (s *Service) Refresh(ctx context.Context) error {
 		io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 		return s.markStale(fmt.Errorf("fetch models.dev catalog: HTTP %d", resp.StatusCode))
 	}
-	if resp.ContentLength > maxCatalogBytes {
+	if resp.ContentLength > MaxCatalogBytes {
 		return s.markStale(fmt.Errorf("fetch models.dev catalog: response too large"))
 	}
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxCatalogBytes+1))
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, MaxCatalogBytes+1))
 	if err != nil {
 		return s.markStale(fmt.Errorf("fetch models.dev catalog: %w", err))
 	}
-	if len(raw) > maxCatalogBytes {
+	if len(raw) > MaxCatalogBytes {
 		return s.markStale(fmt.Errorf("fetch models.dev catalog: response too large"))
 	}
 	state := State{
 		SourceURL: s.sourceURL,
 		ETag:      resp.Header.Get("ETag"),
 		FetchedAt: time.Now().UTC(),
+		Origin:    "remote",
 	}
 	next, err := parseSnapshot(raw, state)
 	if err != nil {
@@ -129,6 +132,36 @@ func (s *Service) Refresh(ctx context.Context) error {
 	}
 	s.value.Store(next)
 	return s.saveCache(next)
+}
+
+// Import replaces the in-memory and on-disk catalog with a validated models.dev
+// api.json payload. It supports fully offline environments without changing the
+// source URL used by future online refreshes.
+func (s *Service) Import(reader io.Reader) error {
+	s.refreshMu.Lock()
+	defer s.refreshMu.Unlock()
+
+	raw, err := io.ReadAll(io.LimitReader(reader, MaxCatalogBytes+1))
+	if err != nil {
+		return fmt.Errorf("read imported models.dev catalog: %w", err)
+	}
+	if len(raw) > MaxCatalogBytes {
+		return fmt.Errorf("import models.dev catalog: file too large")
+	}
+	state := State{
+		SourceURL: s.sourceURL,
+		FetchedAt: time.Now().UTC(),
+		Origin:    "upload",
+	}
+	next, err := parseSnapshot(raw, state)
+	if err != nil {
+		return err
+	}
+	if err := s.saveCache(next); err != nil {
+		return fmt.Errorf("save imported models.dev catalog: %w", err)
+	}
+	s.value.Store(next)
+	return nil
 }
 
 func (s *Service) markStale(err error) error {
@@ -153,14 +186,18 @@ func (s *Service) loadCache() error {
 		}
 		return s.markStale(fmt.Errorf("read model catalog cache: %w", err))
 	}
-	if len(raw) > maxCatalogBytes+1<<20 {
+	if len(raw) > MaxCatalogBytes+1<<20 {
 		return s.markStale(fmt.Errorf("read model catalog cache: file too large"))
 	}
 	var envelope cacheEnvelope
 	if err := json.Unmarshal(raw, &envelope); err != nil {
 		return s.markStale(fmt.Errorf("read model catalog cache: %w", err))
 	}
-	state := State{SourceURL: s.sourceURL, ETag: envelope.ETag, FetchedAt: envelope.FetchedAt, Stale: true}
+	origin := envelope.Origin
+	if origin == "" {
+		origin = "cache"
+	}
+	state := State{SourceURL: s.sourceURL, ETag: envelope.ETag, FetchedAt: envelope.FetchedAt, Origin: origin, Stale: true}
 	next, err := parseSnapshot(envelope.Data, state)
 	if err != nil {
 		return s.markStale(err)
@@ -174,7 +211,7 @@ func (s *Service) saveCache(snapshot *Snapshot) error {
 	if s.cachePath == "" || len(snapshot.raw) == 0 {
 		return nil
 	}
-	envelope := cacheEnvelope{ETag: snapshot.state.ETag, FetchedAt: snapshot.state.FetchedAt, Data: json.RawMessage(snapshot.raw)}
+	envelope := cacheEnvelope{ETag: snapshot.state.ETag, FetchedAt: snapshot.state.FetchedAt, Origin: snapshot.state.Origin, Data: json.RawMessage(snapshot.raw)}
 	var buf bytes.Buffer
 	encoder := json.NewEncoder(&buf)
 	if err := encoder.Encode(envelope); err != nil {
