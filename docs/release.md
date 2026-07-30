@@ -111,9 +111,11 @@ launch it. Desktop state is stored under:
 ~/Library/Application Support/vibe-proxy
 ```
 
-The menu-bar icon restores the window, opens the browser or logs, copies agent
-base URLs and exits cleanly. The first-close choice can be reset from Settings
-or the menu-bar item.
+The menu-bar icon restores the window, opens an automatically authenticated
+browser control plane or logs, copies agent base URLs and exits cleanly. Opening
+the bare `http://127.0.0.1:8080` address in a separate browser does not carry the
+desktop admin session; use **Open in Browser** from the menu-bar icon instead.
+The first-close choice can be reset from Settings or the menu-bar item.
 
 Unsigned RCs may be blocked by Gatekeeper. After verifying the checksum and
 source, Control-click the app and choose **Open**, or remove quarantine from the
@@ -188,7 +190,10 @@ export VIBE_PROXY_ADMIN_TOKEN='choose-a-local-admin-token'
 
 ## First-Run Security
 
-- `VIBE_PROXY_ADMIN_TOKEN` protects the local control plane and admin API.
+- The desktop app uses a process-local random admin token and one-time bootstrap
+  sessions; it does not persist or ask the user to copy the raw token.
+- CLI installs use `VIBE_PROXY_ADMIN_TOKEN` to protect the control plane and
+  admin API.
 - `configs/bootstrap.yaml` includes the development data-plane key
   `vibe-local-dev-key` so the first request can be tested.
 - Create a new data-plane key under **Client Keys**, update clients, and remove

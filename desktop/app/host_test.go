@@ -9,12 +9,12 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/a448582655/vibe-proxy/internal/auth"
 	"github.com/a448582655/vibe-proxy/internal/config"
 	"github.com/a448582655/vibe-proxy/internal/desktopbridge"
 	"github.com/a448582655/vibe-proxy/internal/gatewayapp"
@@ -112,7 +112,7 @@ func TestHostStartNavigationFailureKeepsGatewayForBrowserFallback(t *testing.T) 
 		t.Fatalf("Start() error = %v, want %v", err, navigateErr)
 	}
 
-	_, gateway := fixture.startCapture.values()
+	options, gateway := fixture.startCapture.values()
 	select {
 	case <-gateway.Done():
 		t.Fatal("owned gateway was stopped after WebView navigation failure")
@@ -132,9 +132,10 @@ func TestHostStartNavigationFailureKeepsGatewayForBrowserFallback(t *testing.T) 
 	}
 	fixture.system.mu.Lock()
 	defer fixture.system.mu.Unlock()
-	if got, want := fixture.system.browsed, []string{"http://" + gateway.Address()}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("browser targets = %v, want %v", got, want)
+	if got := fixture.system.browsed; len(got) != 1 {
+		t.Fatalf("browser targets = %v, want exactly one", got)
 	}
+	assertBrowserBootstrapTarget(t, fixture.system.browsed[0], gateway.Address(), options.Runtime.DesktopSessions)
 }
 
 func TestHostStartFailureUpdatesTrayWithStructuredError(t *testing.T) {
@@ -907,7 +908,7 @@ func TestHostControllerAndTrayOperationsUseAllowListedTargets(t *testing.T) {
 	if err := fixture.host.Start(context.Background()); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
-	_, gateway := fixture.startCapture.values()
+	options, gateway := fixture.startCapture.values()
 
 	fixture.host.OpenControlPlane()
 	if err := fixture.host.CopyOpenAIBaseURL(); err != nil {
@@ -932,9 +933,10 @@ func TestHostControllerAndTrayOperationsUseAllowListedTargets(t *testing.T) {
 	fixture.system.mu.Lock()
 	defer fixture.system.mu.Unlock()
 	base := "http://" + gateway.Address()
-	if got := fixture.system.browsed; len(got) != 1 || got[0] != base {
-		t.Fatalf("browser targets = %v, want [%q]", got, base)
+	if got := fixture.system.browsed; len(got) != 1 {
+		t.Fatalf("browser targets = %v, want exactly one", got)
 	}
+	assertBrowserBootstrapTarget(t, fixture.system.browsed[0], gateway.Address(), options.Runtime.DesktopSessions)
 	if got := fixture.system.copied; len(got) != 2 || got[0] != base+"/v1" || got[1] != base+"/anthropic" {
 		t.Fatalf("copied targets = %v", got)
 	}
@@ -1073,6 +1075,27 @@ func waitForGatewayDone(t *testing.T, gateway *gatewayapp.App) {
 	case <-gateway.Done():
 	case <-time.After(time.Second):
 		t.Fatal("gateway did not reach Done after its blocked handler returned")
+	}
+}
+
+func assertBrowserBootstrapTarget(t *testing.T, target, address string, sessions *auth.DesktopSessionStore) {
+	t.Helper()
+	if sessions == nil {
+		t.Fatal("DesktopSessions = nil")
+	}
+	prefix := "http://" + address + "/desktop/bootstrap/"
+	if !strings.HasPrefix(target, prefix) {
+		t.Fatalf("browser target = %q, want prefix %q", target, prefix)
+	}
+	nonce := strings.TrimPrefix(target, prefix)
+	if nonce == "" || strings.Contains(nonce, "/") {
+		t.Fatalf("browser bootstrap nonce = %q, want one non-empty path segment", nonce)
+	}
+	if _, ok := sessions.ConsumeBootstrap(nonce); !ok {
+		t.Fatal("browser bootstrap nonce was not registered in desktop session store")
+	}
+	if _, reused := sessions.ConsumeBootstrap(nonce); reused {
+		t.Fatal("browser bootstrap nonce was reusable")
 	}
 }
 

@@ -16,6 +16,11 @@ redirects to `/`. The nonce cannot be reused and neither it nor the generated
 admin token is written to disk. Existing browser and CLI Bearer authentication
 continues to work.
 
+The native window uses this bootstrap flow at startup. The desktop tray/menu-bar
+**Open in Browser** action creates a fresh one-time bootstrap URL for the
+external browser as well; opening the bare listen address directly does not
+carry a desktop admin session.
+
 The following routes are available only when the native desktop controller is
 attached:
 

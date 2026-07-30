@@ -285,11 +285,27 @@ func (h *Host) OpenControlPlane() {
 }
 
 func (h *Host) OpenControlPlaneInBrowser() error {
-	base, err := h.gatewayBaseURL()
+	target, err := h.desktopBootstrapURL()
 	if err != nil {
 		return err
 	}
-	return h.system.OpenBrowser(base)
+	return h.system.OpenBrowser(target)
+}
+
+func (h *Host) desktopBootstrapURL() (string, error) {
+	h.lifecycleMu.RLock()
+	defer h.lifecycleMu.RUnlock()
+	if h.gateway == nil {
+		return "", errors.New("gateway is not running")
+	}
+	if h.sessions == nil {
+		return "", errors.New("desktop authentication is not available")
+	}
+	nonce, err := h.sessions.NewBootstrapNonce()
+	if err != nil {
+		return "", fmt.Errorf("generate browser bootstrap nonce: %w", err)
+	}
+	return "http://" + h.gateway.Address() + "/desktop/bootstrap/" + nonce, nil
 }
 
 func (h *Host) OpenLogsFolder() error {
