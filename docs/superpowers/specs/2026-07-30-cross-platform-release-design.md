@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-30
 **Status:** Approved for implementation
-**Target release:** `v0.1.0`
+**Target release:** `v0.1.0-rc.1` pre-release, followed by `v0.1.0`
 
 ## 1. Context
 
@@ -50,7 +50,11 @@ These can be added after the portable release path is proven.
 - A release is promoted through a `develop -> main` pull request so GitHub CI is
   the final gate on the exact revision being released.
 - Tags use semantic versions in the form `vMAJOR.MINOR.PATCH`.
-- The initial release is `v0.1.0`.
+- The initial downloadable release is `v0.1.0-rc.1` and is marked as a GitHub
+  Pre-release.
+- Cross-platform validation may produce `v0.1.0-rc.N` follow-up releases.
+- `v0.1.0` is published only after Windows, macOS, and Linux acceptance checks
+  pass.
 - A tag is created only after the release workflow has landed on `main`.
 - Pushing a matching tag triggers `.github/workflows/release.yml`.
 - A failed workflow publishes no partial GitHub Release. The failed run may be
@@ -60,12 +64,12 @@ These can be added after the portable release path is proven.
 
 | Platform | Architecture | Portable artifact | Native package |
 | --- | --- | --- | --- |
-| Windows | AMD64 | `vibe-proxy_0.1.0_windows_amd64.zip` | — |
-| Windows | ARM64 | `vibe-proxy_0.1.0_windows_arm64.zip` | — |
-| macOS | AMD64 | `vibe-proxy_0.1.0_darwin_amd64.tar.gz` | matching `.dmg` |
-| macOS | ARM64 | `vibe-proxy_0.1.0_darwin_arm64.tar.gz` | matching `.dmg` |
-| Linux | AMD64 | `vibe-proxy_0.1.0_linux_amd64.tar.gz` | matching `.deb` |
-| Linux | ARM64 | `vibe-proxy_0.1.0_linux_arm64.tar.gz` | matching `.deb` |
+| Windows | AMD64 | `vibe-proxy_VERSION_windows_amd64.zip` | — |
+| Windows | ARM64 | `vibe-proxy_VERSION_windows_arm64.zip` | — |
+| macOS | AMD64 | `vibe-proxy_VERSION_darwin_amd64.tar.gz` | matching `.dmg` |
+| macOS | ARM64 | `vibe-proxy_VERSION_darwin_arm64.tar.gz` | matching `.dmg` |
+| Linux | AMD64 | `vibe-proxy_VERSION_linux_amd64.tar.gz` | matching `.deb` |
+| Linux | ARM64 | `vibe-proxy_VERSION_linux_arm64.tar.gz` | matching `.deb` |
 
 The GitHub Release also contains `SHA256SUMS`, covering every ZIP, tarball, DMG,
 and DEB file.
@@ -123,7 +127,7 @@ configuration file or opening SQLite.
 Example:
 
 ```text
-vibe-proxy v0.1.0 (commit 9a4caf7, built 2026-07-30T12:00:00Z)
+vibe-proxy v0.1.0-rc.1 (commit 9a4caf7, built 2026-07-30T12:00:00Z)
 ```
 
 ## 8. Workflow Architecture
@@ -138,7 +142,7 @@ The workflow uses GitHub-hosted runners and official GitHub actions:
    - Run `CGO_ENABLED=0 go test ./...`.
    - Run `CGO_ENABLED=0 go vet ./...`.
    - Verify modules.
-   - Validate the semantic tag format.
+   - Validate stable semantic tags and `-rc.N` release-candidate tags.
 
 2. **Build portable artifacts**
    - Build all six OS/architecture combinations with `CGO_ENABLED=0`.
@@ -157,6 +161,8 @@ The workflow uses GitHub-hosted runners and official GitHub actions:
    - Generate `SHA256SUMS`.
    - Use the GitHub CLI and the workflow `GITHUB_TOKEN` to create a GitHub
      Release with automatically generated notes.
+   - Mark tags containing a prerelease suffix, including `-rc.N`, as GitHub
+     Pre-releases.
    - Publish only after every validation and build job succeeds.
 
 The workflow declares `contents: write` only for the publish job. Build jobs use
@@ -192,7 +198,28 @@ an empty version.
 - Checksums protect against accidental corruption, but are not a substitute for
   future artifact signing.
 
-## 11. Testing and Acceptance Criteria
+## 11. Cross-Platform Release-Candidate Validation
+
+The `v0.1.0-rc.1` assets are the test inputs for the first real platform
+acceptance pass:
+
+- Windows 10/11 AMD64: extract ZIP, run `--version`, start the control plane,
+  configure a provider, restart, and verify SQLite persistence.
+- Windows on ARM64 where hardware is available: repeat the native ARM64 binary
+  smoke test.
+- macOS Intel and Apple Silicon: test tarball and DMG extraction, document the
+  unsigned Gatekeeper flow, and verify the embedded OCR worker.
+- Ubuntu/Debian AMD64 and ARM64: test tarball and DEB installation, startup,
+  control-plane access, and clean package removal.
+- Every tested platform: exercise OpenAI Chat, OpenAI Responses, Anthropic
+  Messages, image upload, builtin OCR, Vision fallback, non-ASCII paths, paths
+  containing spaces, and restart with an existing database.
+
+Failures are fixed on `develop` and published as `v0.1.0-rc.2`,
+`v0.1.0-rc.3`, and so on. Stable `v0.1.0` is cut only after this checklist
+passes.
+
+## 12. Testing and Acceptance Criteria
 
 Implementation is accepted when:
 
@@ -209,22 +236,26 @@ Implementation is accepted when:
 10. A local release dry run produces the complete expected artifact manifest and
     valid checksums.
 11. The `develop -> main` pull request passes repository CI.
-12. The `v0.1.0` workflow creates one non-draft GitHub Release with all expected
-    downloadable files.
+12. The `v0.1.0-rc.1` workflow creates one non-draft GitHub Pre-release with all
+    expected downloadable files.
+13. Stable `v0.1.0` is not published until the cross-platform release-candidate
+    checklist passes.
 
-## 12. Rollout
+## 13. Rollout
 
 1. Implement and test the release system on `codex/release-automation`.
 2. Commit the implementation in reviewable stages.
 3. Merge the feature branch back into `develop` and push it.
 4. Open a `develop -> main` pull request and wait for CI.
 5. Merge the pull request.
-6. Create and push annotated tag `v0.1.0` on the merged `main` commit.
+6. Create and push annotated tag `v0.1.0-rc.1` on the merged `main` commit.
 7. Observe the release workflow through completion.
 8. Download at least one archive, one DMG, and one DEB, verify checksums, and run
-   a final binary smoke test.
+   the full cross-platform release-candidate checklist.
+9. Publish additional release candidates for discovered defects.
+10. Create stable tag `v0.1.0` only after the checklist passes.
 
-## 13. Follow-up Work
+## 14. Follow-up Work
 
 Later releases may add:
 
