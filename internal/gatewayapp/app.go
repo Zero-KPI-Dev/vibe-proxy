@@ -27,16 +27,25 @@ type App struct {
 	server   *http.Server
 	database *store.SQLite
 
-	ready chan struct{}
-	done  chan struct{}
+	ready     chan struct{}
+	done      chan struct{}
+	serveDone chan struct{}
 
 	shutdownOnce sync.Once
 	finishOnce   sync.Once
 
-	mu          sync.RWMutex
-	status      Status
-	serveErr    error
-	shutdownErr error
+	mu           sync.RWMutex
+	status       Status
+	serveErr     error
+	shutdownErr  error
+	shuttingDown bool
+	finalizing   bool
+
+	handlerMu       sync.Mutex
+	activeHandlers  int
+	serveStopped    bool
+	handlersDrained chan struct{}
+	handlersOnce    sync.Once
 }
 
 // Start loads configuration, starts the HTTP gateway, and returns once its
@@ -65,7 +74,6 @@ func Start(_ context.Context, options Options) (*App, error) {
 	runtimeServer := runtime.NewWithOptions(options.ConfigPath, cfg, sink, prom, options.Runtime)
 	httpServer := &http.Server{
 		Addr:         cfg.Server.Listen,
-		Handler:      runtimeServer.Routes(),
 		ReadTimeout:  cfg.Server.ReadTimeout.Duration,
 		WriteTimeout: cfg.Server.WriteTimeout.Duration,
 		IdleTimeout:  cfg.Server.IdleTimeout.Duration,
@@ -88,16 +96,19 @@ func Start(_ context.Context, options Options) (*App, error) {
 	}
 
 	app := &App{
-		server:   httpServer,
-		database: db,
-		ready:    make(chan struct{}),
-		done:     make(chan struct{}),
+		server:          httpServer,
+		database:        db,
+		ready:           make(chan struct{}),
+		done:            make(chan struct{}),
+		serveDone:       make(chan struct{}),
+		handlersDrained: make(chan struct{}),
 		status: Status{
 			State:     StateStarting,
 			Address:   listener.Addr().String(),
 			StartedAt: time.Now(),
 		},
 	}
+	httpServer.Handler = app.trackHandlers(runtimeServer.Routes())
 	app.setState(StateRunning, nil)
 	close(app.ready)
 	go app.serve(listener)
@@ -144,7 +155,14 @@ func (a *App) Shutdown(ctx context.Context) error {
 	}
 
 	a.shutdownOnce.Do(func() {
-		a.setState(StateStopping, nil)
+		a.mu.Lock()
+		if a.finalizing {
+			a.mu.Unlock()
+			return
+		}
+		a.shuttingDown = true
+		a.status.State = StateStopping
+		a.mu.Unlock()
 		go a.shutdown(ctx)
 	})
 
@@ -164,22 +182,34 @@ func (a *App) serve(listener net.Listener) {
 
 	a.mu.Lock()
 	a.serveErr = err
+	shuttingDown := a.shuttingDown
+	if !shuttingDown {
+		a.finalizing = true
+	}
 	a.mu.Unlock()
-	a.finish(err)
+	a.markServeStopped()
+	close(a.serveDone)
+	if !shuttingDown {
+		a.finish()
+	}
 }
 
 func (a *App) shutdown(ctx context.Context) {
-	if err := a.server.Shutdown(ctx); err != nil {
-		a.mu.Lock()
-		a.shutdownErr = err
-		a.mu.Unlock()
+	shutdownErr := a.server.Shutdown(ctx)
+	if shutdownErr != nil {
 		_ = a.server.Close()
 	}
-	<-a.done
+	<-a.serveDone
+
+	a.mu.Lock()
+	a.shutdownErr = shutdownErr
+	a.mu.Unlock()
+	a.finish()
 }
 
-func (a *App) finish(serveErr error) {
+func (a *App) finish() {
 	a.finishOnce.Do(func() {
+		<-a.handlersDrained
 		closeErr := a.database.Close()
 		a.mu.Lock()
 		if a.shutdownErr == nil && closeErr != nil {
@@ -189,15 +219,56 @@ func (a *App) finish(serveErr error) {
 		case a.shutdownErr != nil:
 			a.status.State = StateFailed
 			a.status.LastError = a.shutdownErr.Error()
-		case serveErr != nil:
+		case a.serveErr != nil:
 			a.status.State = StateFailed
-			a.status.LastError = serveErr.Error()
+			a.status.LastError = a.serveErr.Error()
 		default:
 			a.status.State = StateStopped
 		}
 		a.mu.Unlock()
 		close(a.done)
 	})
+}
+
+func (a *App) trackHandlers(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !a.handlerStarted() {
+			http.Error(w, "gateway is shutting down", http.StatusServiceUnavailable)
+			return
+		}
+		defer a.handlerFinished()
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (a *App) handlerStarted() bool {
+	a.handlerMu.Lock()
+	defer a.handlerMu.Unlock()
+	if a.serveStopped {
+		return false
+	}
+	a.activeHandlers++
+	return true
+}
+
+func (a *App) handlerFinished() {
+	a.handlerMu.Lock()
+	a.activeHandlers--
+	shouldClose := a.serveStopped && a.activeHandlers == 0
+	a.handlerMu.Unlock()
+	if shouldClose {
+		a.handlersOnce.Do(func() { close(a.handlersDrained) })
+	}
+}
+
+func (a *App) markServeStopped() {
+	a.handlerMu.Lock()
+	a.serveStopped = true
+	shouldClose := a.activeHandlers == 0
+	a.handlerMu.Unlock()
+	if shouldClose {
+		a.handlersOnce.Do(func() { close(a.handlersDrained) })
+	}
 }
 
 func (a *App) setState(state State, err error) {
