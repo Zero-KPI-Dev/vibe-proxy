@@ -189,6 +189,51 @@ test_dmg() {
   printf 'DMG packaging tests: PASS\n'
 }
 
+test_asset_manifest() {
+  local manifest_dir="$tmp_dir/manifest"
+  mkdir -p "$manifest_dir"
+
+  if "$script_dir/verify-assets.sh" \
+    v0.1.0-rc.1 "$manifest_dir" >/dev/null 2>&1; then
+    fail "empty release asset directory was accepted"
+  fi
+
+  local name
+  for name in \
+    vibe-proxy_0.1.0-rc.1_windows_amd64.zip \
+    vibe-proxy_0.1.0-rc.1_windows_arm64.zip \
+    vibe-proxy_0.1.0-rc.1_darwin_amd64.tar.gz \
+    vibe-proxy_0.1.0-rc.1_darwin_arm64.tar.gz \
+    vibe-proxy_0.1.0-rc.1_darwin_amd64.dmg \
+    vibe-proxy_0.1.0-rc.1_darwin_arm64.dmg \
+    vibe-proxy_0.1.0-rc.1_linux_amd64.tar.gz \
+    vibe-proxy_0.1.0-rc.1_linux_arm64.tar.gz \
+    vibe-proxy_0.1.0-rc.1_linux_amd64.deb \
+    vibe-proxy_0.1.0-rc.1_linux_arm64.deb; do
+    : >"$manifest_dir/$name"
+  done
+
+  "$script_dir/verify-assets.sh" v0.1.0-rc.1 "$manifest_dir" >/dev/null ||
+    fail "complete release asset directory was rejected"
+
+  : >"$manifest_dir/unexpected.txt"
+  if "$script_dir/verify-assets.sh" \
+    v0.1.0-rc.1 "$manifest_dir" >/dev/null 2>&1; then
+    fail "unexpected release asset was accepted"
+  fi
+  mv "$manifest_dir/unexpected.txt" "$tmp_dir/unexpected.txt"
+
+  mv \
+    "$manifest_dir/vibe-proxy_0.1.0-rc.1_darwin_arm64.dmg" \
+    "$tmp_dir/missing.dmg"
+  if "$script_dir/verify-assets.sh" \
+    v0.1.0-rc.1 "$manifest_dir" >/dev/null 2>&1; then
+    fail "missing release asset was accepted"
+  fi
+
+  printf 'release asset manifest tests: PASS\n'
+}
+
 scope=${RELEASE_TEST_SCOPE:-all}
 case "$scope" in
   all)
@@ -203,6 +248,7 @@ case "$scope" in
     else
       printf 'DMG packaging tests: SKIP (hdiutil unavailable)\n'
     fi
+    test_asset_manifest
     ;;
   portable)
     test_portable
@@ -212,6 +258,9 @@ case "$scope" in
     ;;
   dmg)
     test_dmg
+    ;;
+  assets)
+    test_asset_manifest
     ;;
   *)
     fail "unknown RELEASE_TEST_SCOPE: $scope"
