@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -14,11 +15,54 @@ import (
 
 func (s *Server) adminAuthorize(w http.ResponseWriter, r *http.Request) bool {
 	snap := s.current()
-	if !auth.AuthorizeAdmin(r, snap.AdminToken) {
-		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+	if auth.AuthorizeAdmin(r, snap.AdminToken) {
+		return true
+	}
+	if s.desktopSessions == nil || !s.desktopSessions.Authorize(r) {
+		writeUnauthorized(w)
 		return false
 	}
-	return true
+	if isSafeMethod(r.Method) || sameOrigin(r) {
+		return true
+	}
+	writeForbidden(w, "desktop session requires same-origin request")
+	return false
+}
+
+func writeUnauthorized(w http.ResponseWriter) {
+	http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+}
+
+func writeForbidden(w http.ResponseWriter, message string) {
+	http.Error(w, message, http.StatusForbidden)
+}
+
+func isSafeMethod(method string) bool {
+	switch method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions, http.MethodTrace:
+		return true
+	default:
+		return false
+	}
+}
+
+func sameOrigin(r *http.Request) bool {
+	origins := r.Header.Values("Origin")
+	if len(origins) != 1 || origins[0] == "" || r.Host == "" {
+		return false
+	}
+	rawOrigin := origins[0]
+	origin, err := url.Parse(rawOrigin)
+	if err != nil || !origin.IsAbs() || origin.Opaque != "" || origin.User != nil {
+		return false
+	}
+	if !strings.EqualFold(origin.Scheme, "http") && !strings.EqualFold(origin.Scheme, "https") {
+		return false
+	}
+	if origin.Host == "" || origin.Path != "" || origin.RawQuery != "" || origin.Fragment != "" {
+		return false
+	}
+	return strings.EqualFold(origin.Host, r.Host)
 }
 
 func (s *Server) writeJSON(w http.ResponseWriter, v any) {
