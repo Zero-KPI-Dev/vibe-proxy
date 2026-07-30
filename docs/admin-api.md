@@ -2,6 +2,34 @@
 
 Admin APIs are protected by a separate bearer token configured through `VIBE_PROXY_ADMIN_TOKEN` or the configured `security.admin_bearer_token_env`.
 
+## Desktop Authentication and Controls
+
+The desktop process creates a short-lived, single-use bootstrap nonce and
+navigates its WebView to:
+
+```text
+GET /desktop/bootstrap/{nonce}
+```
+
+The response sets a process-local, same-origin `vibe_desktop_session` cookie and
+redirects to `/`. The nonce cannot be reused and neither it nor the generated
+admin token is written to disk. Existing browser and CLI Bearer authentication
+continues to work.
+
+The following routes are available only when the native desktop controller is
+attached:
+
+```text
+GET  /admin/desktop
+PUT  /admin/desktop/preferences
+POST /admin/desktop/open-data-dir
+POST /admin/desktop/import-config
+```
+
+They expose the platform, close behavior, listen address and safe native
+actions. In CLI mode the snapshot reports desktop controls as unavailable and
+mutating routes return a conflict response.
+
 ## Validate Config
 
 ```text

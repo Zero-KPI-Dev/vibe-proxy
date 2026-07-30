@@ -1,9 +1,8 @@
 # Release Installation and Acceptance
 
-GitHub Releases provide the same `vibe-proxy` server for Windows, macOS, and
-Linux. The control plane is an embedded web application on every platform; it
-opens in a browser at `http://127.0.0.1:8080/` rather than in a separate native
-desktop window.
+GitHub Releases provide both the `vibe-proxy` CLI server and a native **Vibe
+Proxy Desktop** shell for Windows and macOS. Linux uses the CLI plus the
+browser-based control plane at `http://127.0.0.1:8080/`.
 
 The first public build is the `v0.1.0-rc.1` release candidate. Use it for
 cross-platform acceptance before treating it as a stable deployment.
@@ -15,10 +14,12 @@ and download the artifact matching the operating system and CPU:
 
 | Platform | CPU shown by the OS | Artifact suffix |
 | --- | --- | --- |
-| Windows | x64 | `windows_amd64.zip` |
-| Windows | ARM64 | `windows_arm64.zip` |
-| macOS | Intel | `darwin_amd64.tar.gz` or `darwin_amd64.dmg` |
-| macOS | Apple Silicon | `darwin_arm64.tar.gz` or `darwin_arm64.dmg` |
+| Windows desktop | x64 | `vibe-proxy-desktop_0.1.0-rc.1_windows_amd64-setup.exe` or `vibe-proxy-desktop_0.1.0-rc.1_windows_amd64-portable.zip` |
+| Windows desktop | ARM64 | `vibe-proxy-desktop_0.1.0-rc.1_windows_arm64-setup.exe` or `vibe-proxy-desktop_0.1.0-rc.1_windows_arm64-portable.zip` |
+| macOS desktop | Intel | `vibe-proxy-desktop_0.1.0-rc.1_darwin_amd64.dmg` |
+| macOS desktop | Apple Silicon | `vibe-proxy-desktop_0.1.0-rc.1_darwin_arm64.dmg` |
+| Windows CLI | x64 / ARM64 | `windows_amd64.zip` / `windows_arm64.zip` |
+| macOS CLI | Intel / Apple Silicon | `darwin_amd64.tar.gz` / `darwin_arm64.tar.gz` |
 | Linux | x86_64 | `linux_amd64.tar.gz` or `linux_amd64.deb` |
 | Linux | aarch64/arm64 | `linux_arm64.tar.gz` or `linux_arm64.deb` |
 
@@ -57,9 +58,25 @@ Select-String -Path .\SHA256SUMS -Pattern 'windows_amd64.zip'
 
 ## Windows
 
-1. Extract the ZIP to a writable directory.
-2. Open PowerShell in the extracted versioned directory.
-3. Start the server:
+Run the desktop setup EXE or extract the desktop portable ZIP and launch
+`vibe-proxy-desktop.exe`. On the first window close, choose whether future
+closes should exit or minimise to the tray. Reset the choice from **Settings →
+Desktop Application** or the tray menu. Provider configuration, SQLite data,
+preferences and logs live under:
+
+```text
+%LOCALAPPDATA%\vibe-proxy
+```
+
+The Settings page can import `config.yaml` and open the data directory. If the
+native WebView cannot open, the proxy and tray remain running; use **Open in Browser**
+or **Open Logs Folder** from the tray.
+
+Unsigned RC installers may trigger Microsoft SmartScreen. Verify the checksum
+and repository source, then use **More info → Run anyway** only when you accept
+the unsigned test build.
+
+For the CLI ZIP, open PowerShell in the extracted directory and run:
 
 ```powershell
 $env:VIBE_PROXY_ADMIN_TOKEN = 'choose-a-local-admin-token'
@@ -87,8 +104,26 @@ The Anthropic endpoint also accepts the client key in `x-api-key`.
 
 ## macOS
 
-The tarball and DMG contain the same server. The DMG is a convenient read-only
-container, not a signed `.app`.
+Open the desktop DMG, drag **Vibe Proxy.app** to the Applications link, and
+launch it. Desktop state is stored under:
+
+```text
+~/Library/Application Support/vibe-proxy
+```
+
+The menu-bar icon restores the window, opens the browser or logs, copies agent
+base URLs and exits cleanly. The first-close choice can be reset from Settings
+or the menu-bar item.
+
+Unsigned RCs may be blocked by Gatekeeper. After verifying the checksum and
+source, Control-click the app and choose **Open**, or remove quarantine from the
+copied app:
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/Vibe Proxy.app"
+```
+
+The CLI tarball and CLI DMG remain available for terminal use.
 
 For the tarball:
 
@@ -185,6 +220,7 @@ Linux systems:
 10. Report the OS version, CPU architecture, artifact name, and relevant logs
     for any failure.
 
-Publish a stable `v0.1.0` only after this checklist passes on all three operating
-systems. Fixes found during acceptance should produce another pre-release such
-as `v0.1.0-rc.2`.
+Stable desktop publication requires code signing and macOS notarization, unless
+a maintainer explicitly records an exception. Unchecked physical tests block a
+stable desktop release but do not block an explicitly unsigned pre-release
+candidate. See [`desktop-rc-checklist.md`](desktop-rc-checklist.md).

@@ -16,6 +16,40 @@ If Go is not installed locally, use Docker:
 docker run --rm -v "$PWD":/src -w /src golang:1.26.5 sh -lc '/usr/local/go/bin/go test ./...'
 ```
 
+The desktop shell is a separate Go module so Wails never leaks into the server
+binary:
+
+```bash
+cd desktop
+go mod verify
+CGO_ENABLED=0 go test ./app/... ./wailsapp
+```
+
+## Native Desktop Development
+
+Desktop builds pin **Go 1.26.5**, **Node.js 22**, and
+**Wails v3.0.0-alpha2.117**. Windows also needs Microsoft WebView2 and NSIS;
+macOS needs Xcode Command Line Tools. Use the exact pinned CLI:
+
+```bash
+cd desktop
+go run github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-alpha2.117 \
+  build GOOS=darwin GOARCH="$(go env GOARCH)" ARCH="$(go env GOARCH)" \
+  VERSION=v0.0.0-dev
+```
+
+Release packages are built with:
+
+```bash
+scripts/release/build-desktop.sh v0.1.0-rc.1 darwin arm64 "$PWD/dist"
+scripts/release/package-desktop-dmg.sh \
+  v0.1.0-rc.1 arm64 "$PWD/desktop/bin/Vibe Proxy.app" "$PWD/dist"
+```
+
+Docker is useful for platform-neutral tests, but it cannot replace final
+WebView2, AppKit, tray, installer, signing, or notarization checks on the native
+operating system.
+
 ## Run Locally
 
 ```bash
