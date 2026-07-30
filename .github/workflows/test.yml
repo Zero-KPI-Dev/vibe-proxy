@@ -42,3 +42,105 @@ jobs:
           cache: true
       - name: Go test
         run: go test ./...
+
+  release-packaging-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.5'
+          cache: true
+      - name: Test release packaging contracts
+        run: bash scripts/release/test-packaging.sh
+      - name: Cross-build portable and Debian packages
+        shell: bash
+        run: |
+          version=v0.0.0-ci
+          binary_dir=$(mktemp -d)
+          asset_dir=$(mktemp -d)
+
+          for target in \
+            windows/amd64 windows/arm64 \
+            darwin/amd64 darwin/arm64 \
+            linux/amd64 linux/arm64; do
+            goos=${target%/*}
+            goarch=${target#*/}
+            extension=
+            if [[ "$goos" == windows ]]; then
+              extension=.exe
+            fi
+
+            binary="$binary_dir/vibe-proxy-${goos}-${goarch}${extension}"
+            scripts/release/build-binary.sh \
+              "$version" "$goos" "$goarch" "$binary" >/dev/null
+            scripts/release/package-portable.sh \
+              "$version" "$goos" "$goarch" "$binary" "$asset_dir" >/dev/null
+
+            if [[ "$goos" == linux ]]; then
+              scripts/release/package-deb.sh \
+                "$version" "$goarch" "$binary" "$asset_dir" >/dev/null
+            fi
+          done
+
+          mapfile -t assets < <(find "$asset_dir" -maxdepth 1 -type f | sort)
+          if [[ ${#assets[@]} -ne 8 ]]; then
+            printf 'expected 8 Linux-runner assets, found %d\n' \
+              "${#assets[@]}" >&2
+            printf '%s\n' "${assets[@]}" >&2
+            exit 1
+          fi
+
+  release-packaging-macos:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.5'
+          cache: true
+      - name: Test DMG packaging contract
+        run: RELEASE_TEST_SCOPE=dmg bash scripts/release/test-packaging.sh
+      - name: Build and inspect both macOS DMGs
+        shell: bash
+        run: |
+          version=v0.0.0-ci
+          binary_dir=$(mktemp -d)
+          asset_dir=$(mktemp -d)
+
+          for arch in amd64 arm64; do
+            binary="$binary_dir/vibe-proxy-darwin-$arch"
+            scripts/release/build-binary.sh \
+              "$version" darwin "$arch" "$binary" >/dev/null
+
+            actual_arch=$(lipo -archs "$binary")
+            expected_arch=$arch
+            if [[ "$arch" == amd64 ]]; then
+              expected_arch=x86_64
+            fi
+            if [[ "$actual_arch" != "$expected_arch" ]]; then
+              printf 'expected %s binary, got %s\n' \
+                "$expected_arch" "$actual_arch" >&2
+              exit 1
+            fi
+
+            artifact=$(
+              scripts/release/package-dmg.sh \
+                "$version" "$arch" "$binary" "$asset_dir"
+            )
+            hdiutil imageinfo "$artifact" >/dev/null
+          done
+
+          dmg_count=$(find "$asset_dir" -maxdepth 1 -type f -name '*.dmg' | wc -l)
+          if [[ "$dmg_count" -ne 2 ]]; then
+            printf 'expected 2 DMGs, found %s\n' "$dmg_count" >&2
+            exit 1
+          fi

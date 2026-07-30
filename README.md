@@ -98,6 +98,21 @@ models:
     vibe-fast: deepseek/deepseek-chat
 ```
 
+## Download a Release
+
+Cross-platform releases contain a single server binary with the local web
+control plane embedded. Windows, macOS, and Linux users all open the same panel
+at `http://127.0.0.1:8080/`; Linux does not require Docker or a separate desktop
+application.
+
+Download Windows ZIP, macOS tarball/DMG, or Linux tarball/DEB artifacts from
+[GitHub Releases](https://github.com/a448582655/vibe-proxy/releases). The first
+public build is a pre-release for physical cross-platform acceptance.
+
+See [`docs/release.md`](docs/release.md) for architecture selection, checksum
+verification, platform-specific startup commands, and the release-candidate
+test checklist.
+
 ## Run Current Skeleton
 
 Install Go 1.25+, then:
