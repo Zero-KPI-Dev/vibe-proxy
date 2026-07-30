@@ -282,6 +282,19 @@ export interface ModelCatalogLookupResponse {
   catalog_error?: string
 }
 
+// ---- Desktop application ----
+export type CloseBehavior = "ask" | "tray" | "quit"
+
+export interface DesktopSnapshot {
+  available: boolean
+  platform?: "windows" | "darwin"
+  close_behavior?: CloseBehavior
+  listen_address?: string
+  data_dir?: string
+  log_dir?: string
+  owns_gateway?: boolean
+}
+
 // ---- Multimodal fallback ----
 export interface MultimodalAdminConfig {
   enabled: boolean

@@ -21,6 +21,8 @@ import type {
   MultimodalAdminConfig,
   MultimodalAdminInput,
   OCRTestResponse,
+  CloseBehavior,
+  DesktopSnapshot,
 } from "./types"
 
 export function getToken(): string {
@@ -39,7 +41,7 @@ async function request<T>(path: string, opts: RequestInit = {}): Promise<T> {
   const token = getToken()
   if (token) headers["Authorization"] = `Bearer ${token}`
 
-  const resp = await fetch(path, { ...opts, headers })
+  const resp = await fetch(path, { ...opts, credentials: "same-origin", headers })
   const text = await resp.text()
   let body: unknown
   try {
@@ -111,6 +113,23 @@ export const modelCatalogApi = {
       method: "POST",
       body: JSON.stringify(data),
     }),
+}
+
+// ---- Desktop application ----
+export const desktopApi = {
+  snapshot: () => request<DesktopSnapshot>("/admin/desktop"),
+  setCloseBehavior: (close_behavior: CloseBehavior) =>
+    request<{ close_behavior: CloseBehavior }>("/admin/desktop/preferences", {
+      method: "PUT",
+      body: JSON.stringify({ close_behavior }),
+    }),
+  openDataDir: () =>
+    request<{ opened: boolean }>("/admin/desktop/open-data-dir", { method: "POST" }),
+  importConfig: () =>
+    request<{ imported: boolean; path?: string; loaded_at?: string }>(
+      "/admin/desktop/import-config",
+      { method: "POST" },
+    ),
 }
 
 export const multimodalApi = {

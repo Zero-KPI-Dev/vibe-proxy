@@ -6,9 +6,10 @@ import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { toast } from "sonner"
 import { Database, Languages, Palette, RefreshCw, Shield, Save } from "lucide-react"
-import { setToken, getToken, modelCatalogApi } from "@/lib/api"
-import type { ModelCatalogState } from "@/lib/types"
+import { desktopApi, setToken, getToken, modelCatalogApi } from "@/lib/api"
+import type { DesktopSnapshot, ModelCatalogState } from "@/lib/types"
 import { normalizeLanguage, setAppLanguage, type AppLanguage } from "@/i18n"
+import { DesktopSettings } from "@/components/desktop-settings"
 import { OCRFallbackSettings } from "@/components/ocr-fallback-settings"
 import {
   Select,
@@ -35,10 +36,10 @@ export function SettingsPage() {
   )
   const [catalog, setCatalog] = useState<ModelCatalogState | null>(null)
   const [catalogLoading, setCatalogLoading] = useState(false)
+  const [desktop, setDesktop] = useState<DesktopSnapshot | null>(null)
   const [authVersion, setAuthVersion] = useState(0)
 
   const loadCatalogStatus = async () => {
-    if (!getToken()) return
     try {
       const result = await modelCatalogApi.status()
       setCatalog(result.catalog)
@@ -47,8 +48,18 @@ export function SettingsPage() {
     }
   }
 
+  const loadDesktopSnapshot = async () => {
+    try {
+      setDesktop(await desktopApi.snapshot())
+    } catch {
+      // Desktop detection is optional; an unavailable admin endpoint uses browser mode.
+      setDesktop(null)
+    }
+  }
+
   useEffect(() => {
     void loadCatalogStatus()
+    void loadDesktopSnapshot()
   }, [])
 
   const handleSaveToken = () => {
@@ -74,6 +85,10 @@ export function SettingsPage() {
     }
   }
 
+  const handleDesktopImport = async () => {
+    await Promise.all([loadCatalogStatus(), loadDesktopSnapshot()])
+  }
+
   const handleThemeChange = (next: Theme) => {
     setTheme(next)
     applyTheme(next)
@@ -94,7 +109,7 @@ export function SettingsPage() {
         </p>
       </div>
 
-      <Card>
+      {!desktop?.available && <Card>
         <CardHeader>
           <div className="flex items-center gap-2">
             <Shield className="h-5 w-5 text-primary" />
@@ -126,7 +141,13 @@ export function SettingsPage() {
             </p>
           </div>
         </CardContent>
-      </Card>
+      </Card>}
+
+      {desktop?.available && <DesktopSettings
+        desktop={desktop}
+        onDesktopChange={setDesktop}
+        onImported={handleDesktopImport}
+      />}
 
       <OCRFallbackSettings authVersion={authVersion} />
 
