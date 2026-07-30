@@ -90,9 +90,25 @@ jobs:
       - name: Build package
         shell: bash
         run: scripts/release/build-desktop.sh v0.0.0-ci windows "${{ matrix.goarch }}" "$RUNNER_TEMP/packages"
-      - name: Smoke test
+      - name: Verify desktop binary
         shell: pwsh
-        run: desktop/bin/vibe-proxy-desktop.exe --version
+        run: |
+          $binary = "desktop/bin/vibe-proxy-desktop.exe"
+          $bytes = [IO.File]::ReadAllBytes($binary)
+          $offset = [BitConverter]::ToInt32($bytes, 0x3c)
+          $machine = [BitConverter]::ToUInt16($bytes, $offset + 4)
+          $expected = if ("${{ matrix.goarch }}" -eq "amd64") { 0x8664 } else { 0xAA64 }
+          if ($machine -ne $expected) {
+            throw "Unexpected PE machine: $machine"
+          }
+          # GitHub's Windows runner is x64, so an ARM64 cross-build can only be
+          # inspected here. Execute the binary only when the host supports it.
+          if ("${{ matrix.goarch }}" -eq "amd64") {
+            & $binary --version
+            if ($LASTEXITCODE -ne 0) {
+              throw "Desktop smoke test exited with $LASTEXITCODE"
+            }
+          }
       - uses: actions/upload-artifact@v7
         with:
           name: desktop-ci-windows-${{ matrix.goarch }}
