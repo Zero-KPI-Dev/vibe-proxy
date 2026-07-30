@@ -69,6 +69,22 @@ $env:VIBE_PROXY_ADMIN_TOKEN = 'choose-a-local-admin-token'
 Open `http://127.0.0.1:8080/`. Keep the PowerShell window open while using the
 proxy. Stop it with `Ctrl+C`.
 
+## Runtime Endpoints
+
+After configuring a provider and client key in the control plane, local agents
+can use these stable data-plane endpoints:
+
+```text
+OpenAI Chat Completions  http://127.0.0.1:8080/v1/chat/completions
+OpenAI Responses         http://127.0.0.1:8080/v1/responses
+Anthropic Messages       http://127.0.0.1:8080/anthropic/v1/messages
+Anthropic short alias    http://127.0.0.1:8080/v1/messages
+Model discovery          http://127.0.0.1:8080/v1/models
+```
+
+Authenticate data-plane requests with `Authorization: Bearer <client-key>`.
+The Anthropic endpoint also accepts the client key in `x-api-key`.
+
 ## macOS
 
 The tarball and DMG contain the same server. The DMG is a convenient read-only
@@ -122,8 +138,9 @@ sudo apt install ./vibe-proxy_0.1.0-rc.1_linux_amd64.deb
 ```
 
 The package deliberately does not create a user, a system service, startup
-tasks, or files under `/etc`. Copy an example config to a writable directory
-and run it explicitly:
+tasks, auto-start entries, or files under `/etc`. No release artifact installs
+an operating-system service in this phase. Copy an example config to a writable
+directory and run it explicitly:
 
 ```bash
 mkdir -p ~/.config/vibe-proxy

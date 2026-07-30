@@ -107,7 +107,8 @@ application.
 
 Download Windows ZIP, macOS tarball/DMG, or Linux tarball/DEB artifacts from
 [GitHub Releases](https://github.com/a448582655/vibe-proxy/releases). The first
-public build is a pre-release for physical cross-platform acceptance.
+public build, `v0.1.0-rc.1`, is a testing pre-release for physical
+cross-platform acceptance rather than a stable release.
 
 See [`docs/release.md`](docs/release.md) for architecture selection, checksum
 verification, platform-specific startup commands, and the release-candidate

@@ -115,6 +115,13 @@ jobs:
           version=v0.0.0-ci
           binary_dir=$(mktemp -d)
           asset_dir=$(mktemp -d)
+          mounted_dmg=
+          cleanup() {
+            if [[ -n "$mounted_dmg" ]]; then
+              hdiutil detach "$mounted_dmg" -quiet >/dev/null 2>&1 || true
+            fi
+          }
+          trap cleanup EXIT
 
           for arch in amd64 arm64; do
             binary="$binary_dir/vibe-proxy-darwin-$arch"
@@ -137,6 +144,19 @@ jobs:
                 "$version" "$arch" "$binary" "$asset_dir"
             )
             hdiutil imageinfo "$artifact" >/dev/null
+
+            mounted_dmg="$RUNNER_TEMP/vibe-proxy-dmg-$arch"
+            mkdir -p "$mounted_dmg"
+            hdiutil attach \
+              -nobrowse \
+              -readonly \
+              -mountpoint "$mounted_dmg" \
+              "$artifact" >/dev/null
+            test -x "$mounted_dmg/vibe-proxy"
+            test -f "$mounted_dmg/configs/bootstrap.yaml"
+            test -f "$mounted_dmg/configs/simple.yaml"
+            hdiutil detach "$mounted_dmg" -quiet
+            mounted_dmg=
           done
 
           dmg_count=$(find "$asset_dir" -maxdepth 1 -type f -name '*.dmg' | wc -l)
