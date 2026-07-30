@@ -116,7 +116,7 @@ func (h *Host) Shutdown(ctx context.Context) error {
 }
 
 func (h *Host) executeShutdown() {
-	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	ctx, cancel := h.newShutdownContext()
 	defer cancel()
 	var shutdownErr error
 
@@ -131,34 +131,42 @@ func (h *Host) executeShutdown() {
 		}
 	}
 
-	h.lifecycleMu.RLock()
-	gateway := h.gateway
-	sessions := h.sessions
-	h.lifecycleMu.RUnlock()
+	if shutdownErr == nil {
+		h.lifecycleMu.RLock()
+		gateway := h.gateway
+		sessions := h.sessions
+		h.lifecycleMu.RUnlock()
 
-	if gateway != nil && shutdownErr == nil {
-		shutdownErr = gateway.Shutdown(ctx)
+		if gateway != nil {
+			shutdownErr = gateway.Shutdown(ctx)
+		}
+		if sessions != nil {
+			sessions.RevokeAll()
+		}
+		if shutdownErr == nil {
+			h.lifecycleMu.Lock()
+			if h.gateway == gateway {
+				h.gateway = nil
+				h.sessions = nil
+				h.ownsGateway = false
+			}
+			h.lifecycleMu.Unlock()
+			h.tray.Destroy()
+		}
 	}
-	if sessions != nil {
-		sessions.RevokeAll()
-	}
+
 	h.lifecycleMu.Lock()
-	if h.shutdownErr == nil {
-		h.shutdownErr = shutdownErr
-	}
-	h.gateway = nil
-	h.sessions = nil
-	h.ownsGateway = false
+	h.shutdownErr = shutdownErr
 	h.lifecycleMu.Unlock()
-	h.tray.Destroy()
 	close(h.shutdownDone)
 }
 
 func (h *Host) quitAfterShutdown() {
 	h.quitOnce.Do(func() {
 		go func() {
-			_ = h.Shutdown(context.Background())
-			h.application.Quit()
+			if err := h.Shutdown(context.Background()); err == nil {
+				h.application.Quit()
+			}
 		}()
 	})
 }

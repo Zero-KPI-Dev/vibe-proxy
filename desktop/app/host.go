@@ -32,13 +32,14 @@ type HostOptions struct {
 }
 
 type Host struct {
-	paths        Paths
-	window       Window
-	dialogs      Dialogs
-	tray         Tray
-	system       System
-	application  Application
-	startGateway func(context.Context, gatewayapp.Options) (*gatewayapp.App, error)
+	paths              Paths
+	window             Window
+	dialogs            Dialogs
+	tray               Tray
+	system             System
+	application        Application
+	startGateway       func(context.Context, gatewayapp.Options) (*gatewayapp.App, error)
+	newShutdownContext func() (context.Context, context.CancelFunc)
 
 	closeMu     sync.Mutex
 	preferences Preferences
@@ -86,6 +87,9 @@ func NewHost(options HostOptions) (*Host, error) {
 		system:       options.System,
 		application:  options.Application,
 		startGateway: options.StartGateway,
+		newShutdownContext: func() (context.Context, context.CancelFunc) {
+			return context.WithTimeout(context.Background(), shutdownTimeout)
+		},
 		preferences:  normalizeLoadedPreferences(options.Preferences),
 		shutdownDone: make(chan struct{}),
 	}
@@ -98,16 +102,11 @@ func (h *Host) Start(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	startupFinished := false
-	finishStartup := func() {
-		if !startupFinished {
-			h.finishStartup(startupDone)
-			startupFinished = true
-		}
-	}
-	defer finishStartup()
+	defer h.finishStartup(startupDone)
 
-	h.tray.SetStatus("Starting")
+	if !h.setStatusUnlessShuttingDown("Starting") {
+		return errHostShuttingDown
+	}
 	if err := ensureFirstRunConfig(h.paths); err != nil {
 		h.setStartupErrorStatus(err)
 		return err
@@ -144,46 +143,40 @@ func (h *Host) Start(ctx context.Context) error {
 	}
 	h.lifecycleMu.Unlock()
 	if shutdownRequested {
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
-		cleanupErr := gateway.Shutdown(cleanupCtx)
-		cancel()
-		sessions.RevokeAll()
-		h.lifecycleMu.Lock()
-		if h.shutdownErr == nil {
-			h.shutdownErr = cleanupErr
-		}
-		h.lifecycleMu.Unlock()
-		finishStartup()
-		if cleanupErr != nil {
-			return errors.Join(errHostShuttingDown, cleanupErr)
-		}
-		return errHostShuttingDown
+		return h.cleanupStartupGateway(errHostShuttingDown, gateway, sessions)
 	}
-	finishStartup()
 
 	select {
 	case <-gateway.Ready():
 	case <-ctx.Done():
 		h.setStartupErrorStatus(ctx.Err())
-		_ = h.Shutdown(context.Background())
-		return ctx.Err()
+		return h.cleanupStartupGateway(ctx.Err(), gateway, sessions)
+	}
+	if h.isShutdownRequested() {
+		return h.cleanupStartupGateway(errHostShuttingDown, gateway, sessions)
 	}
 
 	nonce, err := sessions.NewBootstrapNonce()
 	if err != nil {
 		err = fmt.Errorf("generate desktop bootstrap nonce: %w", err)
 		h.setStartupErrorStatus(err)
-		_ = h.Shutdown(context.Background())
-		return err
+		return h.cleanupStartupGateway(err, gateway, sessions)
+	}
+	if h.isShutdownRequested() {
+		return h.cleanupStartupGateway(errHostShuttingDown, gateway, sessions)
 	}
 	target := "http://" + gateway.Address() + "/desktop/bootstrap/" + nonce
 	if err := h.window.Navigate(target); err != nil {
-		h.setStartupErrorStatus(err)
-		_ = h.Shutdown(context.Background())
-		return err
+		if !h.isShutdownRequested() {
+			h.setStartupErrorStatus(err)
+			return h.cleanupStartupGateway(err, gateway, sessions)
+		}
+		return h.cleanupStartupGateway(errors.Join(errHostShuttingDown, err), gateway, sessions)
 	}
 	nonce = ""
-	h.tray.SetStatus("Running on " + gateway.Address())
+	if !h.setStatusUnlessShuttingDown("Running on " + gateway.Address()) {
+		return h.cleanupStartupGateway(errHostShuttingDown, gateway, sessions)
+	}
 	return nil
 }
 
@@ -205,6 +198,31 @@ func (h *Host) finishStartup(startupDone chan struct{}) {
 		h.startupDone = nil
 		close(startupDone)
 	}
+}
+
+func (h *Host) isShutdownRequested() bool {
+	h.lifecycleMu.RLock()
+	defer h.lifecycleMu.RUnlock()
+	return h.shutdownRequested
+}
+
+func (h *Host) cleanupStartupGateway(startErr error, gateway *gatewayapp.App, sessions *auth.DesktopSessionStore) error {
+	cleanupCtx, cancel := h.newShutdownContext()
+	cleanupErr := gateway.Shutdown(cleanupCtx)
+	cancel()
+	sessions.RevokeAll()
+
+	h.lifecycleMu.Lock()
+	if h.gateway == gateway {
+		h.gateway = nil
+		h.sessions = nil
+		h.ownsGateway = false
+	}
+	h.lifecycleMu.Unlock()
+	if cleanupErr != nil {
+		return errors.Join(startErr, cleanupErr)
+	}
+	return startErr
 }
 
 func (h *Host) OpenControlPlane() {
@@ -238,7 +256,17 @@ func (h *Host) gatewayBaseURL() (string, error) {
 }
 
 func (h *Host) setStartupErrorStatus(err error) {
-	h.tray.SetStatus("Error: " + err.Error())
+	h.setStatusUnlessShuttingDown("Error: " + err.Error())
+}
+
+func (h *Host) setStatusUnlessShuttingDown(status string) bool {
+	h.lifecycleMu.Lock()
+	defer h.lifecycleMu.Unlock()
+	if h.shutdownRequested {
+		return false
+	}
+	h.tray.SetStatus(status)
+	return true
 }
 
 func ensureFirstRunConfig(paths Paths) error {
