@@ -3,11 +3,13 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"time"
 
+	"github.com/a448582655/vibe-proxy/internal/buildinfo"
 	"github.com/a448582655/vibe-proxy/internal/config"
 	"github.com/a448582655/vibe-proxy/internal/metrics"
 	"github.com/a448582655/vibe-proxy/internal/ocr"
@@ -24,7 +26,12 @@ func main() {
 		return
 	}
 	cfgPath := flag.String("config", "configs/config.yaml", "configuration file path")
+	version := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
+	if *version {
+		fmt.Fprintln(os.Stdout, buildinfo.String())
+		return
+	}
 	cfg, err := config.LoadRuntime(*cfgPath)
 	if err != nil {
 		log.Fatalf("load config: %v", err)
