@@ -1,0 +1,26 @@
+version: '3'
+
+vars:
+  APP_NAME: vibe-proxy-desktop
+  BIN_DIR: bin
+  GOOS: '{{.GOOS | default OS}}'
+  VERSION: '{{.VERSION | default "dev"}}'
+  VERSION_NUMERIC: '{{.VERSION_NUMERIC | default "0.0.0"}}'
+  COMMIT: '{{.COMMIT | default "unknown"}}'
+  BUILD_DATE: '{{.BUILD_DATE | default "unknown"}}'
+
+includes:
+  common: ./build/Taskfile.yml
+  windows: ./build/windows/Taskfile.yml
+  darwin: ./build/darwin/Taskfile.yml
+
+tasks:
+  build:
+    cmds:
+      - task: '{{.GOOS}}:build'
+  package:
+    cmds:
+      - task: '{{.GOOS}}:package'
+  run:
+    cmds:
+      - task: '{{.GOOS}}:run'

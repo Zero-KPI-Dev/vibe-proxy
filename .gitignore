@@ -25,3 +25,4 @@ frontend/tsconfig.tsbuildinfo
 
 # desktop build output
 desktop/bin/
+desktop/.task/

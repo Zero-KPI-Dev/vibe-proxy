@@ -1,0 +1,10 @@
+version: '3'
+info:
+  companyName: vibe-proxy
+  productName: Vibe Proxy
+  productIdentifier: io.vibeproxy.desktop
+  description: Local-first unified LLM gateway
+  copyright: Copyright 2026 vibe-proxy contributors
+  comments: Native desktop shell for vibe-proxy
+  version: 0.1.0
+fileAssociations: []

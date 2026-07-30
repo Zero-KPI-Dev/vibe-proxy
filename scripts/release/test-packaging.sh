@@ -225,6 +225,12 @@ test_asset_manifest() {
 
   local name
   for name in \
+    vibe-proxy-desktop_0.1.0-rc.1_windows_amd64-setup.exe \
+    vibe-proxy-desktop_0.1.0-rc.1_windows_arm64-setup.exe \
+    vibe-proxy-desktop_0.1.0-rc.1_windows_amd64-portable.zip \
+    vibe-proxy-desktop_0.1.0-rc.1_windows_arm64-portable.zip \
+    vibe-proxy-desktop_0.1.0-rc.1_darwin_amd64.dmg \
+    vibe-proxy-desktop_0.1.0-rc.1_darwin_arm64.dmg \
     vibe-proxy_0.1.0-rc.1_windows_amd64.zip \
     vibe-proxy_0.1.0-rc.1_windows_arm64.zip \
     vibe-proxy_0.1.0-rc.1_darwin_amd64.tar.gz \
@@ -249,7 +255,7 @@ test_asset_manifest() {
   mv "$manifest_dir/unexpected.txt" "$tmp_dir/unexpected.txt"
 
   mv \
-    "$manifest_dir/vibe-proxy_0.1.0-rc.1_darwin_arm64.dmg" \
+    "$manifest_dir/vibe-proxy-desktop_0.1.0-rc.1_darwin_arm64.dmg" \
     "$tmp_dir/missing.dmg"
   if "$script_dir/verify-assets.sh" \
     v0.1.0-rc.1 "$manifest_dir" >/dev/null 2>&1; then

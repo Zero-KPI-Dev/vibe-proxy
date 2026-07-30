@@ -33,6 +33,12 @@ tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/vibe-proxy-assets.XXXXXX")
 trap 'rm -rf "$tmp_dir"' EXIT
 
 cat >"$tmp_dir/expected" <<EOF
+vibe-proxy-desktop_${version_without_v}_darwin_amd64.dmg
+vibe-proxy-desktop_${version_without_v}_darwin_arm64.dmg
+vibe-proxy-desktop_${version_without_v}_windows_amd64-portable.zip
+vibe-proxy-desktop_${version_without_v}_windows_amd64-setup.exe
+vibe-proxy-desktop_${version_without_v}_windows_arm64-portable.zip
+vibe-proxy-desktop_${version_without_v}_windows_arm64-setup.exe
 vibe-proxy_${version_without_v}_darwin_amd64.dmg
 vibe-proxy_${version_without_v}_darwin_amd64.tar.gz
 vibe-proxy_${version_without_v}_darwin_arm64.dmg

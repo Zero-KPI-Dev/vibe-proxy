@@ -1,0 +1,12 @@
+version: '3'
+
+tasks:
+  generate:icons:
+    sources: [appicon.png]
+    generates: [darwin/icons.icns, windows/icon.ico]
+    cmds:
+      - go run github.com/wailsapp/wails/v3/cmd/wails3 generate icons -input build/appicon.png -macfilename build/darwin/icons.icns -windowsfilename build/windows/icon.ico
+
+  go:mod:verify:
+    cmds:
+      - go mod verify
