@@ -282,6 +282,18 @@ func (h *Host) OpenControlPlane() {
 	h.window.Focus()
 }
 
+func (h *Host) OpenControlPlaneInBrowser() error {
+	base, err := h.gatewayBaseURL()
+	if err != nil {
+		return err
+	}
+	return h.system.OpenBrowser(base)
+}
+
+func (h *Host) OpenLogsFolder() error {
+	return h.system.OpenDirectory(h.paths.LogDir)
+}
+
 func (h *Host) CopyOpenAIBaseURL() error {
 	base, err := h.gatewayBaseURL()
 	if err != nil {

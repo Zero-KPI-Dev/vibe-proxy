@@ -1,4 +1,4 @@
-//go:build tools
+//go:build tools && (windows || darwin)
 
 package tools
 

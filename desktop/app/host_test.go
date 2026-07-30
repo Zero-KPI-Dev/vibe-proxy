@@ -904,6 +904,12 @@ func TestHostControllerAndTrayOperationsUseAllowListedTargets(t *testing.T) {
 	if err := fixture.host.CopyAnthropicBaseURL(); err != nil {
 		t.Fatalf("CopyAnthropicBaseURL() error = %v", err)
 	}
+	if err := fixture.host.OpenLogsFolder(); err != nil {
+		t.Fatalf("OpenLogsFolder() error = %v", err)
+	}
+	if err := fixture.host.OpenControlPlaneInBrowser(); err != nil {
+		t.Fatalf("OpenControlPlaneInBrowser() error = %v", err)
+	}
 	if err := fixture.host.controller.OpenDataDir(); err != nil {
 		t.Fatalf("OpenDataDir() error = %v", err)
 	}
@@ -914,14 +920,14 @@ func TestHostControllerAndTrayOperationsUseAllowListedTargets(t *testing.T) {
 	fixture.system.mu.Lock()
 	defer fixture.system.mu.Unlock()
 	base := "http://" + gateway.Address()
-	if got := fixture.system.browsed; len(got) != 0 {
-		t.Fatalf("browser targets = %v, want none", got)
+	if got := fixture.system.browsed; len(got) != 1 || got[0] != base {
+		t.Fatalf("browser targets = %v, want [%q]", got, base)
 	}
 	if got := fixture.system.copied; len(got) != 2 || got[0] != base+"/v1" || got[1] != base+"/anthropic" {
 		t.Fatalf("copied targets = %v", got)
 	}
-	if got := fixture.system.directories; len(got) != 1 || got[0] != fixture.paths.DataDir {
-		t.Fatalf("opened directories = %v, want [%q]", got, fixture.paths.DataDir)
+	if got := fixture.system.directories; len(got) != 2 || got[0] != fixture.paths.LogDir || got[1] != fixture.paths.DataDir {
+		t.Fatalf("opened directories = %v, want [%q %q]", got, fixture.paths.LogDir, fixture.paths.DataDir)
 	}
 }
 
