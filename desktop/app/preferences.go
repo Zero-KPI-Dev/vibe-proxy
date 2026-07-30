@@ -80,7 +80,7 @@ func loadPreferences(path string, now func() time.Time) (Preferences, error) {
 // SavePreferences validates values and atomically replaces the preferences
 // file. The parent and completed file are restricted to the owning user.
 func SavePreferences(path string, preferences Preferences) error {
-	return savePreferences(path, preferences, replacePreferenceFile)
+	return savePreferences(path, preferences, replaceFile)
 }
 
 func savePreferences(path string, preferences Preferences, replace func(string, string) error) error {

@@ -17,23 +17,23 @@ var (
 	replaceFileNoOptions uintptr
 )
 
-// replacePreferenceFile uses Rename for the initial write and ReplaceFileW for
+// replaceFile uses Rename for the initial write and ReplaceFileW for
 // an existing target. ReplaceFileW performs the replacement as one Windows
 // operation while preserving the replaced file's identity and attributes.
-func replacePreferenceFile(temporaryPath, path string) error {
+func replaceFile(temporaryPath, path string) error {
 	if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
 		return os.Rename(temporaryPath, path)
 	} else if err != nil {
-		return fmt.Errorf("stat existing preferences: %w", err)
+		return fmt.Errorf("stat existing target: %w", err)
 	}
 
 	target, err := windows.UTF16PtrFromString(path)
 	if err != nil {
-		return fmt.Errorf("encode preferences path: %w", err)
+		return fmt.Errorf("encode target path: %w", err)
 	}
 	temporary, err := windows.UTF16PtrFromString(temporaryPath)
 	if err != nil {
-		return fmt.Errorf("encode temporary preferences path: %w", err)
+		return fmt.Errorf("encode temporary path: %w", err)
 	}
 
 	result, _, callErr := replaceFileW.Call(
