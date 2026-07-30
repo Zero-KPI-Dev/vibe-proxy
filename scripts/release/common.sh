@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 
-release_script_dir=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-release_repo_root=$(CDPATH= cd -- "$release_script_dir/../.." && pwd)
+release_script_dir=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+# Exported to scripts that source this shared library.
+# shellcheck disable=SC2034
+release_repo_root=$(CDPATH='' cd -- "$release_script_dir/../.." && pwd)
 
 release_validate_version() {
   [[ "${1:-}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]
