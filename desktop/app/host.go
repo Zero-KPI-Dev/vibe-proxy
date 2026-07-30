@@ -54,6 +54,7 @@ type Host struct {
 	startupDone chan struct{}
 
 	shutdownRequested bool
+	startupCleanupErr error
 
 	shutdownOnce sync.Once
 	shutdownDone chan struct{}
@@ -213,16 +214,44 @@ func (h *Host) cleanupStartupGateway(startErr error, gateway *gatewayapp.App, se
 	sessions.RevokeAll()
 
 	h.lifecycleMu.Lock()
-	if h.gateway == gateway {
-		h.gateway = nil
-		h.sessions = nil
-		h.ownsGateway = false
+	if cleanupErr == nil {
+		h.clearGatewayLocked(gateway)
+	} else {
+		if h.gateway == nil {
+			h.gateway = gateway
+			h.sessions = sessions
+			h.ownsGateway = true
+		}
+		if h.shutdownRequested {
+			h.startupCleanupErr = cleanupErr
+		}
 	}
 	h.lifecycleMu.Unlock()
 	if cleanupErr != nil {
 		return errors.Join(startErr, cleanupErr)
 	}
 	return startErr
+}
+
+func (h *Host) clearGatewayLocked(gateway *gatewayapp.App) {
+	if h.gateway == gateway {
+		h.gateway = nil
+		h.sessions = nil
+		h.ownsGateway = false
+	}
+}
+
+func (h *Host) reconcileGatewayDone() {
+	h.lifecycleMu.Lock()
+	defer h.lifecycleMu.Unlock()
+	if h.gateway == nil {
+		return
+	}
+	select {
+	case <-h.gateway.Done():
+		h.clearGatewayLocked(h.gateway)
+	default:
+	}
 }
 
 func (h *Host) OpenControlPlane() {

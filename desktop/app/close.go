@@ -109,6 +109,9 @@ func (h *Host) Shutdown(ctx context.Context) error {
 
 	select {
 	case <-h.shutdownDone:
+		h.reconcileGatewayDone()
+		h.lifecycleMu.RLock()
+		defer h.lifecycleMu.RUnlock()
 		return h.shutdownErr
 	case <-ctx.Done():
 		return ctx.Err()
@@ -131,28 +134,31 @@ func (h *Host) executeShutdown() {
 		}
 	}
 
-	if shutdownErr == nil {
-		h.lifecycleMu.RLock()
-		gateway := h.gateway
-		sessions := h.sessions
-		h.lifecycleMu.RUnlock()
+	h.lifecycleMu.RLock()
+	gateway := h.gateway
+	sessions := h.sessions
+	startupCleanupErr := h.startupCleanupErr
+	h.lifecycleMu.RUnlock()
 
+	if shutdownErr == nil {
+		shutdownErr = startupCleanupErr
+	}
+	if shutdownErr == nil {
 		if gateway != nil {
 			shutdownErr = gateway.Shutdown(ctx)
 		}
-		if sessions != nil {
-			sessions.RevokeAll()
-		}
-		if shutdownErr == nil {
-			h.lifecycleMu.Lock()
-			if h.gateway == gateway {
-				h.gateway = nil
-				h.sessions = nil
-				h.ownsGateway = false
-			}
-			h.lifecycleMu.Unlock()
-			h.tray.Destroy()
-		}
+	}
+	if sessions != nil {
+		sessions.RevokeAll()
+	}
+	if shutdownErr == nil {
+		h.lifecycleMu.Lock()
+		h.clearGatewayLocked(gateway)
+		h.lifecycleMu.Unlock()
+		h.tray.Destroy()
+	} else {
+		h.reconcileGatewayDone()
+		h.tray.SetStatus("Error: " + shutdownErr.Error())
 	}
 
 	h.lifecycleMu.Lock()

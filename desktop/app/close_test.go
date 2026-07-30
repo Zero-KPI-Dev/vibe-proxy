@@ -380,6 +380,8 @@ type fakeSystem struct {
 	browsed     []string
 	directories []string
 	err         error
+	openEntered chan struct{}
+	openRelease chan struct{}
 }
 
 func (f *fakeSystem) CopyText(value string) error {
@@ -396,9 +398,16 @@ func (f *fakeSystem) OpenBrowser(target string) error {
 }
 func (f *fakeSystem) OpenDirectory(path string) error {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.directories = append(f.directories, path)
-	return f.err
+	err, entered, release := f.err, f.openEntered, f.openRelease
+	f.mu.Unlock()
+	if entered != nil {
+		close(entered)
+	}
+	if release != nil {
+		<-release
+	}
+	return err
 }
 
 type fakeApplication struct {

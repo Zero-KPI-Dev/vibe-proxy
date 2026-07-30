@@ -20,6 +20,8 @@ type desktopController struct {
 var _ desktopbridge.Controller = (*desktopController)(nil)
 
 func (c *desktopController) Snapshot() desktopbridge.Snapshot {
+	c.host.reconcileGatewayDone()
+
 	c.host.closeMu.Lock()
 	closeBehavior := c.host.preferences.CloseBehavior
 	c.host.closeMu.Unlock()

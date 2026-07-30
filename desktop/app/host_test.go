@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"io"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -421,6 +423,209 @@ func TestHostQuitDoesNotExitOnBlockedStartupTimeout(t *testing.T) {
 	}
 }
 
+func TestHostLateStartupCleanupFailurePreventsQuitAndRetainsOwnership(t *testing.T) {
+	fixture := newHostStartFixture(t)
+	gatewayStarted := make(chan struct{})
+	releaseStart := make(chan struct{})
+	var releaseStartOnce sync.Once
+	releaseStartup := func() { releaseStartOnce.Do(func() { close(releaseStart) }) }
+	defer releaseStartup()
+	fixture.host.startGateway = func(ctx context.Context, options gatewayapp.Options) (*gatewayapp.App, error) {
+		gateway, err := fixture.startCapture.start(ctx, options)
+		close(gatewayStarted)
+		<-releaseStart
+		return gateway, err
+	}
+
+	startResult := make(chan error, 1)
+	go func() {
+		startResult <- fixture.host.Start(context.Background())
+	}()
+	select {
+	case <-gatewayStarted:
+	case <-time.After(time.Second):
+		t.Fatal("real gateway was not started")
+	}
+	options, gateway := fixture.startCapture.values()
+	releaseRequest := startBlockingOpenDataRequest(t, fixture, gateway, options.Runtime.AdminTokenOverride)
+	defer releaseRequest()
+
+	executeCtx, cancelExecute := context.WithCancel(context.Background())
+	defer cancelExecute()
+	cleanupDeadline := newManualDeadlineContext()
+	cleanupDeadline.expire()
+	executeContextCreated := make(chan struct{})
+	cleanupContextCreated := make(chan struct{})
+	var contextMu sync.Mutex
+	contextCalls := 0
+	fixture.host.newShutdownContext = func() (context.Context, context.CancelFunc) {
+		contextMu.Lock()
+		defer contextMu.Unlock()
+		contextCalls++
+		switch contextCalls {
+		case 1:
+			close(executeContextCreated)
+			return executeCtx, cancelExecute
+		case 2:
+			close(cleanupContextCreated)
+			return cleanupDeadline, func() {}
+		default:
+			return context.WithTimeout(context.Background(), time.Second)
+		}
+	}
+
+	fixture.host.RequestQuit(context.Background())
+	select {
+	case <-executeContextCreated:
+	case <-time.After(time.Second):
+		t.Fatal("shutdown did not begin")
+	}
+	releaseStartup()
+	select {
+	case <-cleanupContextCreated:
+	case <-time.After(time.Second):
+		t.Fatal("late startup cleanup did not begin")
+	}
+
+	var startErr error
+	select {
+	case startErr = <-startResult:
+	case <-time.After(time.Second):
+		t.Fatal("Start() did not return after failed cleanup")
+	}
+	if !errors.Is(startErr, context.DeadlineExceeded) {
+		t.Fatalf("Start() error = %v, want cleanup deadline exceeded", startErr)
+	}
+	select {
+	case <-fixture.host.shutdownDone:
+	case <-time.After(time.Second):
+		t.Fatal("shutdown did not publish the startup cleanup failure")
+	}
+	firstErr := fixture.host.shutdownErr
+	if !errors.Is(firstErr, context.DeadlineExceeded) {
+		t.Fatalf("Shutdown error = %v, want cleanup deadline exceeded", firstErr)
+	}
+	if got := fixture.tray.statusValues(); len(got) != 2 || got[0] != "Starting" || got[1] != "Error: "+firstErr.Error() {
+		t.Fatalf("tray statuses after late cleanup failure = %v, want Starting then observable shutdown error", got)
+	}
+	select {
+	case <-fixture.application.quit:
+		t.Fatal("Application.Quit ran after late startup cleanup failed")
+	default:
+	}
+	select {
+	case <-gateway.Done():
+		t.Fatal("gateway reached Done before the blocked handler was released")
+	default:
+	}
+	if snapshot := fixture.host.controller.Snapshot(); !snapshot.OwnsGateway || snapshot.ListenAddress != gateway.Address() {
+		t.Fatalf("desktop snapshot after cleanup failure = %+v, want retained gateway ownership", snapshot)
+	}
+	if err := fixture.host.Shutdown(context.Background()); err != firstErr {
+		t.Fatalf("repeated Shutdown() error = %v, want stable %v", err, firstErr)
+	}
+
+	releaseRequest()
+	waitForGatewayDone(t, gateway)
+	if err := fixture.host.Shutdown(context.Background()); err != firstErr {
+		t.Fatalf("Shutdown() error after gateway Done = %v, want stable %v", err, firstErr)
+	}
+	if snapshot := fixture.host.controller.Snapshot(); snapshot.OwnsGateway || snapshot.ListenAddress != "" {
+		t.Fatalf("desktop snapshot after gateway Done = %+v, want released ownership", snapshot)
+	}
+	select {
+	case <-fixture.application.quit:
+		t.Error("Application.Quit ran after a failed cleanup later reached Done")
+	default:
+	}
+}
+
+func TestHostGatewayShutdownFailureHasStableObservableTerminalState(t *testing.T) {
+	fixture := newHostStartFixture(t)
+	if err := fixture.host.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	options, gateway := fixture.startCapture.values()
+	releaseRequest := startBlockingOpenDataRequest(t, fixture, gateway, options.Runtime.AdminTokenOverride)
+	defer releaseRequest()
+
+	shutdownDeadline := newManualDeadlineContext()
+	shutdownContextCreated := make(chan struct{})
+	var contextOnce sync.Once
+	fixture.host.newShutdownContext = func() (context.Context, context.CancelFunc) {
+		contextOnce.Do(func() { close(shutdownContextCreated) })
+		return shutdownDeadline, func() {}
+	}
+
+	fixture.host.RequestQuit(context.Background())
+	select {
+	case <-shutdownContextCreated:
+	case <-time.After(time.Second):
+		t.Fatal("shutdown context was not created")
+	}
+	shutdownDeadline.expire()
+	select {
+	case <-fixture.host.shutdownDone:
+	case <-time.After(time.Second):
+		t.Fatal("shutdown did not finish after its deadline")
+	}
+
+	firstErr := fixture.host.shutdownErr
+	if !errors.Is(firstErr, context.DeadlineExceeded) {
+		t.Fatalf("Shutdown error = %v, want deadline exceeded", firstErr)
+	}
+	wantRunning := "Running on " + gateway.Address()
+	if got := fixture.tray.statusValues(); len(got) != 3 || got[0] != "Starting" || got[1] != wantRunning || got[2] != "Error: "+firstErr.Error() {
+		t.Fatalf("tray statuses after shutdown failure = %v, want Starting, %q, then observable shutdown error", got, wantRunning)
+	}
+	select {
+	case <-fixture.application.quit:
+		t.Fatal("Application.Quit ran after gateway shutdown failed")
+	default:
+	}
+	select {
+	case <-gateway.Done():
+		t.Fatal("gateway reached Done before the blocked handler was released")
+	default:
+	}
+	if snapshot := fixture.host.controller.Snapshot(); !snapshot.OwnsGateway || snapshot.ListenAddress != gateway.Address() {
+		t.Fatalf("desktop snapshot while failed gateway is not Done = %+v, want retained ownership", snapshot)
+	}
+
+	const callers = 16
+	results := make(chan error, callers)
+	for range callers {
+		go func() {
+			results <- fixture.host.Shutdown(context.Background())
+		}()
+	}
+	for range callers {
+		if err := <-results; err != firstErr {
+			t.Fatalf("concurrent Shutdown() error = %v, want stable %v", err, firstErr)
+		}
+	}
+
+	releaseRequest()
+	waitForGatewayDone(t, gateway)
+	if err := fixture.host.Shutdown(context.Background()); err != firstErr {
+		t.Fatalf("Shutdown() error after gateway Done = %v, want stable %v", err, firstErr)
+	}
+	if snapshot := fixture.host.controller.Snapshot(); snapshot.OwnsGateway || snapshot.ListenAddress != "" {
+		t.Fatalf("desktop snapshot after failed gateway reached Done = %+v, want released ownership", snapshot)
+	}
+	if got := fixture.tray.destroyCount(); got != 0 {
+		t.Fatalf("Tray.Destroy calls after failed shutdown = %d, want 0", got)
+	}
+	select {
+	case <-fixture.application.quit:
+		t.Error("Application.Quit ran after failed gateway shutdown")
+	default:
+	}
+	if got := fixture.host.shutdownErr; got != firstErr {
+		t.Errorf("shutdown error changed after Done closed: before=%v after=%v", firstErr, got)
+	}
+}
+
 func TestHostControllerAndTrayOperationsUseAllowListedTargets(t *testing.T) {
 	fixture := newHostStartFixture(t)
 	if err := fixture.host.Start(context.Background()); err != nil {
@@ -488,6 +693,62 @@ func (c *manualDeadlineContext) Value(any) any {
 
 func (c *manualDeadlineContext) expire() {
 	c.once.Do(func() { close(c.done) })
+}
+
+func startBlockingOpenDataRequest(t *testing.T, fixture *hostStartFixture, gateway *gatewayapp.App, adminToken string) func() {
+	t.Helper()
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	fixture.system.mu.Lock()
+	fixture.system.openEntered = entered
+	fixture.system.openRelease = release
+	fixture.system.mu.Unlock()
+
+	requestDone := make(chan struct{})
+	go func() {
+		defer close(requestDone)
+		request, err := http.NewRequest(
+			http.MethodPost,
+			"http://"+gateway.Address()+"/admin/desktop/open-data-dir",
+			nil,
+		)
+		if err != nil {
+			return
+		}
+		request.Header.Set("Authorization", "Bearer "+adminToken)
+		response, err := http.DefaultClient.Do(request)
+		if err != nil {
+			return
+		}
+		_, _ = io.Copy(io.Discard, response.Body)
+		_ = response.Body.Close()
+	}()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("gateway request did not enter the blocking desktop operation")
+	}
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			close(release)
+			select {
+			case <-requestDone:
+			case <-time.After(time.Second):
+				t.Error("blocking gateway request did not return")
+			}
+		})
+	}
+}
+
+func waitForGatewayDone(t *testing.T, gateway *gatewayapp.App) {
+	t.Helper()
+	select {
+	case <-gateway.Done():
+	case <-time.After(time.Second):
+		t.Fatal("gateway did not reach Done after its blocked handler returned")
+	}
 }
 
 type hostStartFixture struct {
