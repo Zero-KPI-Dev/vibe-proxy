@@ -80,6 +80,10 @@ func loadPreferences(path string, now func() time.Time) (Preferences, error) {
 // SavePreferences validates values and atomically replaces the preferences
 // file. The parent and completed file are restricted to the owning user.
 func SavePreferences(path string, preferences Preferences) error {
+	return savePreferences(path, preferences, replacePreferenceFile)
+}
+
+func savePreferences(path string, preferences Preferences, replace func(string, string) error) error {
 	preferences = normalizeSavedPreferences(preferences)
 	contents, err := json.Marshal(preferences)
 	if err != nil {
@@ -113,7 +117,7 @@ func SavePreferences(path string, preferences Preferences) error {
 	if err := temporary.Close(); err != nil {
 		return fmt.Errorf("close temporary preferences: %w", err)
 	}
-	if err := os.Rename(temporaryPath, path); err != nil {
+	if err := replace(temporaryPath, path); err != nil {
 		return fmt.Errorf("replace preferences: %w", err)
 	}
 	return nil

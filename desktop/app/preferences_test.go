@@ -124,3 +124,58 @@ func TestLoadPreferencesMissingFileReturnsDefaults(t *testing.T) {
 		t.Fatalf("preferences = %+v, want defaults", preferences)
 	}
 }
+
+func TestSavePreferencesReplacesExistingFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "desktop.json")
+	if err := os.WriteFile(path, []byte(`{"closeBehavior":"quit","window":{"width":1280,"height":800}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	want := Preferences{CloseBehavior: desktopbridge.CloseTray, Window: WindowPreferences{Width: 1100, Height: 700}}
+	if err := SavePreferences(path, want); err != nil {
+		t.Fatalf("SavePreferences() error = %v", err)
+	}
+	got, err := LoadPreferences(path)
+	if err != nil {
+		t.Fatalf("LoadPreferences() error = %v", err)
+	}
+	if got != want {
+		t.Fatalf("saved preferences = %+v, want %+v", got, want)
+	}
+	assertNoPreferenceTemporaryFiles(t, path)
+}
+
+func TestSavePreferencesCleansUpWhenReplacementFails(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "desktop.json")
+	original := []byte(`{"closeBehavior":"quit","window":{"width":1280,"height":800}}`)
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	replaceErr := errors.New("replacement failed")
+
+	err := savePreferences(path, DefaultPreferences(), func(_, _ string) error {
+		return replaceErr
+	})
+	if !errors.Is(err, replaceErr) {
+		t.Fatalf("savePreferences() error = %v, want %v", err, replaceErr)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(original preferences) error = %v", err)
+	}
+	if string(got) != string(original) {
+		t.Fatalf("original preferences = %q, want %q", got, original)
+	}
+	assertNoPreferenceTemporaryFiles(t, path)
+}
+
+func assertNoPreferenceTemporaryFiles(t *testing.T, path string) {
+	t.Helper()
+	leftovers, err := filepath.Glob(path + ".tmp-*")
+	if err != nil {
+		t.Fatalf("Glob(temporary preferences) error = %v", err)
+	}
+	if len(leftovers) != 0 {
+		t.Fatalf("temporary files = %v, want none", leftovers)
+	}
+}
