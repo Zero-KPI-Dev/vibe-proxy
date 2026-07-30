@@ -164,6 +164,10 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/admin/playground/v1/responses", s.adminPlayground("/v1/responses"))
 	mux.HandleFunc("/admin/playground/anthropic/v1/messages", s.adminPlayground("/anthropic/v1/messages"))
 	mux.HandleFunc("/admin/config/reload", s.reload)
+	mux.HandleFunc("/admin/desktop", s.desktopSnapshot)
+	mux.HandleFunc("/admin/desktop/preferences", s.desktopPreferences)
+	mux.HandleFunc("/admin/desktop/open-data-dir", s.desktopOpenDataDir)
+	mux.HandleFunc("/admin/desktop/import-config", s.desktopImportConfig)
 	mux.HandleFunc("/admin/config/snapshot", s.adminSnapshot)
 	mux.HandleFunc("/admin/config/validate", s.adminValidateConfig)
 	mux.HandleFunc("/admin/config/raw", s.adminRawConfig)
@@ -477,17 +481,25 @@ func (s *Server) reload(w http.ResponseWriter, r *http.Request) {
 	if !s.adminAuthorize(w, r) {
 		return
 	}
+	if !s.reloadRuntimeConfig(w) {
+		return
+	}
+	s.writeJSON(w, map[string]any{"reloaded": true, "loaded_at": s.current().LoadedAt})
+}
+
+// reloadRuntimeConfig loads, validates, and atomically replaces the runtime snapshot.
+func (s *Server) reloadRuntimeConfig(w http.ResponseWriter) bool {
 	cfg, err := config.LoadRuntime(s.cfgPath)
 	if err != nil {
 		s.writeJSONError(w, http.StatusBadRequest, err.Error())
-		return
+		return false
 	}
 	if issues := config.ValidateRuntime(cfg); config.HasErrors(issues) {
 		s.writeJSONStatus(w, http.StatusBadRequest, map[string]any{"error": "invalid configuration", "issues": issues})
-		return
+		return false
 	}
 	s.snapshot.Store(s.buildSnapshot(cfg))
-	s.writeJSON(w, map[string]any{"reloaded": true, "loaded_at": s.current().LoadedAt})
+	return true
 }
 func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 	if !s.adminAuthorize(w, r) {
