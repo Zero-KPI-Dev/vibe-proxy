@@ -18,6 +18,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+var errHostShuttingDown = errors.New("desktop host is shutting down")
+
 type HostOptions struct {
 	Paths        Paths
 	Preferences  Preferences
@@ -48,6 +50,9 @@ type Host struct {
 	sessions    *auth.DesktopSessionStore
 	ownsGateway bool
 	controller  *desktopController
+	startupDone chan struct{}
+
+	shutdownRequested bool
 
 	shutdownOnce sync.Once
 	shutdownDone chan struct{}
@@ -89,6 +94,19 @@ func NewHost(options HostOptions) (*Host, error) {
 }
 
 func (h *Host) Start(ctx context.Context) error {
+	startupDone, err := h.beginStartup()
+	if err != nil {
+		return err
+	}
+	startupFinished := false
+	finishStartup := func() {
+		if !startupFinished {
+			h.finishStartup(startupDone)
+			startupFinished = true
+		}
+	}
+	defer finishStartup()
+
 	h.tray.SetStatus("Starting")
 	if err := ensureFirstRunConfig(h.paths); err != nil {
 		h.setStartupErrorStatus(err)
@@ -118,10 +136,30 @@ func (h *Host) Start(ctx context.Context) error {
 	}
 
 	h.lifecycleMu.Lock()
-	h.gateway = gateway
-	h.sessions = sessions
-	h.ownsGateway = true
+	shutdownRequested := h.shutdownRequested
+	if !shutdownRequested {
+		h.gateway = gateway
+		h.sessions = sessions
+		h.ownsGateway = true
+	}
 	h.lifecycleMu.Unlock()
+	if shutdownRequested {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		cleanupErr := gateway.Shutdown(cleanupCtx)
+		cancel()
+		sessions.RevokeAll()
+		h.lifecycleMu.Lock()
+		if h.shutdownErr == nil {
+			h.shutdownErr = cleanupErr
+		}
+		h.lifecycleMu.Unlock()
+		finishStartup()
+		if cleanupErr != nil {
+			return errors.Join(errHostShuttingDown, cleanupErr)
+		}
+		return errHostShuttingDown
+	}
+	finishStartup()
 
 	select {
 	case <-gateway.Ready():
@@ -147,6 +185,26 @@ func (h *Host) Start(ctx context.Context) error {
 	nonce = ""
 	h.tray.SetStatus("Running on " + gateway.Address())
 	return nil
+}
+
+func (h *Host) beginStartup() (chan struct{}, error) {
+	h.lifecycleMu.Lock()
+	defer h.lifecycleMu.Unlock()
+	if h.shutdownRequested {
+		return nil, errHostShuttingDown
+	}
+	startupDone := make(chan struct{})
+	h.startupDone = startupDone
+	return startupDone, nil
+}
+
+func (h *Host) finishStartup(startupDone chan struct{}) {
+	h.lifecycleMu.Lock()
+	defer h.lifecycleMu.Unlock()
+	if h.startupDone == startupDone {
+		h.startupDone = nil
+		close(startupDone)
+	}
 }
 
 func (h *Host) OpenControlPlane() {

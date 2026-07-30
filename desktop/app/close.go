@@ -101,6 +101,9 @@ func (h *Host) saveCloseBehaviorLocked(behavior desktopbridge.CloseBehavior) err
 
 func (h *Host) Shutdown(ctx context.Context) error {
 	h.shutdownOnce.Do(func() {
+		h.lifecycleMu.Lock()
+		h.shutdownRequested = true
+		h.lifecycleMu.Unlock()
 		go h.executeShutdown()
 	})
 
@@ -115,19 +118,34 @@ func (h *Host) Shutdown(ctx context.Context) error {
 func (h *Host) executeShutdown() {
 	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
+	var shutdownErr error
+
+	h.lifecycleMu.RLock()
+	startupDone := h.startupDone
+	h.lifecycleMu.RUnlock()
+	if startupDone != nil {
+		select {
+		case <-startupDone:
+		case <-ctx.Done():
+			shutdownErr = ctx.Err()
+		}
+	}
 
 	h.lifecycleMu.RLock()
 	gateway := h.gateway
 	sessions := h.sessions
 	h.lifecycleMu.RUnlock()
 
-	if gateway != nil {
-		h.shutdownErr = gateway.Shutdown(ctx)
+	if gateway != nil && shutdownErr == nil {
+		shutdownErr = gateway.Shutdown(ctx)
 	}
 	if sessions != nil {
 		sessions.RevokeAll()
 	}
 	h.lifecycleMu.Lock()
+	if h.shutdownErr == nil {
+		h.shutdownErr = shutdownErr
+	}
 	h.gateway = nil
 	h.sessions = nil
 	h.ownsGateway = false

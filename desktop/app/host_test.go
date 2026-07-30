@@ -139,6 +139,92 @@ func TestHostStartFailureUpdatesTrayWithStructuredError(t *testing.T) {
 	}
 }
 
+func TestHostShutdownCoordinatesBlockedStartup(t *testing.T) {
+	fixture := newHostStartFixture(t)
+	startEntered := make(chan struct{})
+	releaseStart := make(chan struct{})
+	fixture.host.startGateway = func(ctx context.Context, options gatewayapp.Options) (*gatewayapp.App, error) {
+		close(startEntered)
+		<-releaseStart
+		return fixture.startCapture.start(ctx, options)
+	}
+
+	var orderMu sync.Mutex
+	gatewayExistedAtQuit := false
+	gatewayStoppedAtQuit := false
+	fixture.application.onQuit = func() {
+		_, gateway := fixture.startCapture.values()
+		orderMu.Lock()
+		defer orderMu.Unlock()
+		gatewayExistedAtQuit = gateway != nil
+		if gateway != nil {
+			select {
+			case <-gateway.Done():
+				gatewayStoppedAtQuit = true
+			default:
+			}
+		}
+	}
+
+	startResult := make(chan error, 1)
+	go func() {
+		startResult <- fixture.host.Start(context.Background())
+	}()
+	select {
+	case <-startEntered:
+	case <-time.After(time.Second):
+		t.Fatal("StartGateway was not entered")
+	}
+
+	fixture.host.RequestQuit(context.Background())
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := fixture.host.Shutdown(cancelled); err != nil && !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled Shutdown() error = %v", err)
+	}
+	close(releaseStart)
+	if err := fixture.host.Shutdown(context.Background()); err != nil {
+		t.Fatalf("Shutdown() error = %v", err)
+	}
+	fixture.application.waitForQuit(t)
+
+	var startErr error
+	select {
+	case startErr = <-startResult:
+	case <-time.After(time.Second):
+		t.Fatal("Start() did not return after StartGateway was released")
+	}
+	_, gateway := fixture.startCapture.values()
+	if gateway == nil {
+		t.Fatal("StartGateway returned nil gateway")
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = gateway.Shutdown(ctx)
+	})
+
+	if startErr == nil {
+		t.Error("Start() error = nil after shutdown completed during startup")
+	}
+	select {
+	case <-gateway.Done():
+	default:
+		t.Error("gateway remained running after shutdown raced with startup")
+	}
+	if got := fixture.window.navigationTargets(); len(got) != 0 {
+		t.Errorf("Navigate calls = %v, want none", got)
+	}
+	if snapshot := fixture.host.controller.Snapshot(); snapshot.OwnsGateway || snapshot.ListenAddress != "" {
+		t.Errorf("desktop snapshot after shutdown = %+v, want no ownership", snapshot)
+	}
+	orderMu.Lock()
+	defer orderMu.Unlock()
+	if !gatewayExistedAtQuit || !gatewayStoppedAtQuit {
+		t.Errorf("Application.Quit ordering: gateway existed=%v stopped=%v, want true/true", gatewayExistedAtQuit, gatewayStoppedAtQuit)
+	}
+}
+
 func TestHostControllerAndTrayOperationsUseAllowListedTargets(t *testing.T) {
 	fixture := newHostStartFixture(t)
 	if err := fixture.host.Start(context.Background()); err != nil {
