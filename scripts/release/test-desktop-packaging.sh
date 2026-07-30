@@ -83,6 +83,8 @@ require_text .github/workflows/desktop-build.yml 'macos-15-intel'
 require_text .github/workflows/desktop-build.yml 'choco install nsis'
 require_text .github/workflows/desktop-build.yml 'if ("${{ matrix.goarch }}" -eq "amd64")'
 require_text .github/workflows/release.yml 'if ("${{ matrix.goarch }}" -eq "amd64")'
+require_text .github/workflows/desktop-build.yml 'Start-Process -FilePath $binary'
+require_text .github/workflows/release.yml 'Start-Process -FilePath $binary'
 require_text .github/workflows/release.yml '--prerelease --latest=false'
 
 bash -n "$repo_root/scripts/release/build-desktop.sh"

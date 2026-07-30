@@ -286,9 +286,9 @@ jobs:
           # GitHub's Windows runner is x64, so an ARM64 cross-build can only be
           # inspected here. Execute the binary only when the host supports it.
           if ("${{ matrix.goarch }}" -eq "amd64") {
-            & $binary --version
-            if ($LASTEXITCODE -ne 0) {
-              throw "Desktop smoke test exited with $LASTEXITCODE"
+            $process = Start-Process -FilePath $binary -ArgumentList "--version" -Wait -PassThru
+            if ($process.ExitCode -ne 0) {
+              throw "Desktop smoke test exited with $($process.ExitCode)"
             }
           }
       - name: Package portable desktop app
