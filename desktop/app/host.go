@@ -65,8 +65,10 @@ type Host struct {
 }
 
 type shutdownAttempt struct {
-	done chan struct{}
-	err  error
+	done                     chan struct{}
+	err                      error
+	startupCleanupGeneration uint64
+	startupCleanupErr        error
 }
 
 func NewHost(options HostOptions) (*Host, error) {
@@ -230,8 +232,13 @@ func (h *Host) cleanupStartupGateway(startErr error, gateway *gatewayapp.App, se
 			h.ownsGateway = true
 		}
 		if h.shutdownRequested {
-			h.startupCleanupErr = cleanupErr
-			reportLateCleanupFailure = !h.shutdownInProgress
+			if h.shutdownInProgress && h.shutdownAttempt != nil {
+				h.shutdownAttempt.startupCleanupGeneration++
+				h.shutdownAttempt.startupCleanupErr = cleanupErr
+			} else {
+				h.startupCleanupErr = cleanupErr
+				reportLateCleanupFailure = true
+			}
 		}
 	}
 	h.lifecycleMu.Unlock()

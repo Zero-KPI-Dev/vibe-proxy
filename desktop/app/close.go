@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/a448582655/vibe-proxy/internal/desktopbridge"
@@ -142,10 +143,22 @@ func (h *Host) executeShutdown(attempt *shutdownAttempt) {
 	gateway := h.gateway
 	sessions := h.sessions
 	startupCleanupErr := h.startupCleanupErr
+	startupCleanupGeneration := attempt.startupCleanupGeneration
+	if attempt.startupCleanupErr != nil {
+		if startupCleanupErr == nil {
+			startupCleanupErr = attempt.startupCleanupErr
+		} else {
+			startupCleanupErr = errors.Join(startupCleanupErr, attempt.startupCleanupErr)
+		}
+	}
 	h.lifecycleMu.RUnlock()
 
-	if shutdownErr == nil {
-		shutdownErr = startupCleanupErr
+	if startupCleanupErr != nil {
+		if shutdownErr == nil {
+			shutdownErr = startupCleanupErr
+		} else {
+			shutdownErr = errors.Join(shutdownErr, startupCleanupErr)
+		}
 	}
 	if shutdownErr == nil {
 		if gateway != nil {
@@ -166,6 +179,14 @@ func (h *Host) executeShutdown(attempt *shutdownAttempt) {
 	}
 
 	h.lifecycleMu.Lock()
+	if attempt.startupCleanupGeneration != startupCleanupGeneration {
+		if shutdownErr == nil {
+			shutdownErr = attempt.startupCleanupErr
+		} else {
+			shutdownErr = errors.Join(shutdownErr, attempt.startupCleanupErr)
+		}
+		h.tray.SetStatus("Error: " + shutdownErr.Error())
+	}
 	attempt.err = shutdownErr
 	if h.shutdownAttempt == attempt {
 		h.shutdownErr = shutdownErr
