@@ -70,10 +70,6 @@ func (h *Host) HandleWindowClose(ctx context.Context) {
 
 func (h *Host) RequestQuit(context.Context) {
 	h.closeMu.Lock()
-	if h.quitting {
-		h.closeMu.Unlock()
-		return
-	}
 	h.quitting = true
 	h.closeMu.Unlock()
 	h.quitAfterShutdown()
@@ -100,25 +96,33 @@ func (h *Host) saveCloseBehaviorLocked(behavior desktopbridge.CloseBehavior) err
 }
 
 func (h *Host) Shutdown(ctx context.Context) error {
-	h.shutdownOnce.Do(func() {
-		h.lifecycleMu.Lock()
-		h.shutdownRequested = true
+	h.lifecycleMu.Lock()
+	h.reconcileGatewayDoneLocked()
+	if h.shutdownComplete {
 		h.lifecycleMu.Unlock()
-		go h.executeShutdown()
-	})
+		return nil
+	}
+	if !h.shutdownInProgress {
+		attempt := &shutdownAttempt{done: make(chan struct{})}
+		h.shutdownRequested = true
+		h.shutdownInProgress = true
+		h.shutdownAttempt = attempt
+		h.shutdownDone = attempt.done
+		h.shutdownErr = nil
+		go h.executeShutdown(attempt)
+	}
+	attempt := h.shutdownAttempt
+	h.lifecycleMu.Unlock()
 
 	select {
-	case <-h.shutdownDone:
-		h.reconcileGatewayDone()
-		h.lifecycleMu.RLock()
-		defer h.lifecycleMu.RUnlock()
-		return h.shutdownErr
+	case <-attempt.done:
+		return attempt.err
 	case <-ctx.Done():
 		return ctx.Err()
 	}
 }
 
-func (h *Host) executeShutdown() {
+func (h *Host) executeShutdown(attempt *shutdownAttempt) {
 	ctx, cancel := h.newShutdownContext()
 	defer cancel()
 	var shutdownErr error
@@ -162,17 +166,24 @@ func (h *Host) executeShutdown() {
 	}
 
 	h.lifecycleMu.Lock()
-	h.shutdownErr = shutdownErr
+	attempt.err = shutdownErr
+	if h.shutdownAttempt == attempt {
+		h.shutdownErr = shutdownErr
+		h.shutdownInProgress = false
+		if shutdownErr == nil {
+			h.shutdownComplete = true
+		}
+	}
+	close(attempt.done)
 	h.lifecycleMu.Unlock()
-	close(h.shutdownDone)
 }
 
 func (h *Host) quitAfterShutdown() {
-	h.quitOnce.Do(func() {
-		go func() {
-			if err := h.Shutdown(context.Background()); err == nil {
+	go func() {
+		if err := h.Shutdown(context.Background()); err == nil {
+			h.quitOnce.Do(func() {
 				h.application.Quit()
-			}
-		}()
-	})
+			})
+		}
+	}()
 }

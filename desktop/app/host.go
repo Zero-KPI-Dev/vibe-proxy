@@ -56,10 +56,17 @@ type Host struct {
 	shutdownRequested bool
 	startupCleanupErr error
 
-	shutdownOnce sync.Once
-	shutdownDone chan struct{}
-	shutdownErr  error
-	quitOnce     sync.Once
+	shutdownInProgress bool
+	shutdownComplete   bool
+	shutdownAttempt    *shutdownAttempt
+	shutdownDone       chan struct{}
+	shutdownErr        error
+	quitOnce           sync.Once
+}
+
+type shutdownAttempt struct {
+	done chan struct{}
+	err  error
 }
 
 func NewHost(options HostOptions) (*Host, error) {
@@ -91,8 +98,7 @@ func NewHost(options HostOptions) (*Host, error) {
 		newShutdownContext: func() (context.Context, context.CancelFunc) {
 			return context.WithTimeout(context.Background(), shutdownTimeout)
 		},
-		preferences:  normalizeLoadedPreferences(options.Preferences),
-		shutdownDone: make(chan struct{}),
+		preferences: normalizeLoadedPreferences(options.Preferences),
 	}
 	host.controller = &desktopController{host: host}
 	return host, nil
@@ -213,6 +219,7 @@ func (h *Host) cleanupStartupGateway(startErr error, gateway *gatewayapp.App, se
 	cancel()
 	sessions.RevokeAll()
 
+	reportLateCleanupFailure := false
 	h.lifecycleMu.Lock()
 	if cleanupErr == nil {
 		h.clearGatewayLocked(gateway)
@@ -224,9 +231,13 @@ func (h *Host) cleanupStartupGateway(startErr error, gateway *gatewayapp.App, se
 		}
 		if h.shutdownRequested {
 			h.startupCleanupErr = cleanupErr
+			reportLateCleanupFailure = !h.shutdownInProgress
 		}
 	}
 	h.lifecycleMu.Unlock()
+	if reportLateCleanupFailure {
+		h.tray.SetStatus("Error: " + cleanupErr.Error())
+	}
 	if cleanupErr != nil {
 		return errors.Join(startErr, cleanupErr)
 	}
@@ -238,12 +249,17 @@ func (h *Host) clearGatewayLocked(gateway *gatewayapp.App) {
 		h.gateway = nil
 		h.sessions = nil
 		h.ownsGateway = false
+		h.startupCleanupErr = nil
 	}
 }
 
 func (h *Host) reconcileGatewayDone() {
 	h.lifecycleMu.Lock()
 	defer h.lifecycleMu.Unlock()
+	h.reconcileGatewayDoneLocked()
+}
+
+func (h *Host) reconcileGatewayDoneLocked() {
 	if h.gateway == nil {
 		return
 	}

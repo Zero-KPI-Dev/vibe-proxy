@@ -527,11 +527,14 @@ func TestHostLateStartupCleanupFailurePreventsQuitAndRetainsOwnership(t *testing
 
 	releaseRequest()
 	waitForGatewayDone(t, gateway)
-	if err := fixture.host.Shutdown(context.Background()); err != firstErr {
-		t.Fatalf("Shutdown() error after gateway Done = %v, want stable %v", err, firstErr)
+	if err := fixture.host.Shutdown(context.Background()); err != nil {
+		t.Fatalf("Shutdown() error after gateway Done = %v, want nil", err)
 	}
 	if snapshot := fixture.host.controller.Snapshot(); snapshot.OwnsGateway || snapshot.ListenAddress != "" {
 		t.Fatalf("desktop snapshot after gateway Done = %+v, want released ownership", snapshot)
+	}
+	if got := fixture.tray.destroyCount(); got != 1 {
+		t.Fatalf("Tray.Destroy calls after confirmed cleanup = %d, want 1", got)
 	}
 	select {
 	case <-fixture.application.quit:
@@ -607,23 +610,158 @@ func TestHostGatewayShutdownFailureHasStableObservableTerminalState(t *testing.T
 
 	releaseRequest()
 	waitForGatewayDone(t, gateway)
-	if err := fixture.host.Shutdown(context.Background()); err != firstErr {
-		t.Fatalf("Shutdown() error after gateway Done = %v, want stable %v", err, firstErr)
+	if err := fixture.host.Shutdown(context.Background()); err != nil {
+		t.Fatalf("Shutdown() error after gateway Done = %v, want nil", err)
 	}
 	if snapshot := fixture.host.controller.Snapshot(); snapshot.OwnsGateway || snapshot.ListenAddress != "" {
 		t.Fatalf("desktop snapshot after failed gateway reached Done = %+v, want released ownership", snapshot)
 	}
-	if got := fixture.tray.destroyCount(); got != 0 {
-		t.Fatalf("Tray.Destroy calls after failed shutdown = %d, want 0", got)
+	if got := fixture.tray.destroyCount(); got != 1 {
+		t.Fatalf("Tray.Destroy calls after confirmed shutdown = %d, want 1", got)
 	}
 	select {
 	case <-fixture.application.quit:
 		t.Error("Application.Quit ran after failed gateway shutdown")
 	default:
 	}
-	if got := fixture.host.shutdownErr; got != firstErr {
-		t.Errorf("shutdown error changed after Done closed: before=%v after=%v", firstErr, got)
+}
+
+func TestHostRequestQuitRetriesAfterGatewayShutdownFailure(t *testing.T) {
+	fixture := newHostStartFixture(t)
+	if err := fixture.host.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
 	}
+	options, gateway := fixture.startCapture.values()
+	releaseRequest := startBlockingOpenDataRequest(t, fixture, gateway, options.Runtime.AdminTokenOverride)
+	defer releaseRequest()
+
+	shutdownDeadline := newManualDeadlineContext()
+	shutdownContextCreated := make(chan struct{})
+	var shutdownContextOnce sync.Once
+	fixture.host.newShutdownContext = func() (context.Context, context.CancelFunc) {
+		shutdownContextOnce.Do(func() { close(shutdownContextCreated) })
+		return shutdownDeadline, func() {}
+	}
+	fixture.host.RequestQuit(context.Background())
+	select {
+	case <-shutdownContextCreated:
+	case <-time.After(time.Second):
+		t.Fatal("shutdown did not start")
+	}
+	shutdownDeadline.expire()
+	select {
+	case <-fixture.host.shutdownDone:
+	case <-time.After(time.Second):
+		t.Fatal("failed shutdown did not finish")
+	}
+	select {
+	case <-fixture.application.quit:
+		t.Fatal("Application.Quit ran after failed shutdown")
+	default:
+	}
+
+	releaseRequest()
+	waitForGatewayDone(t, gateway)
+	fixture.host.RequestQuit(context.Background())
+	fixture.application.waitForQuit(t)
+	if got := fixture.tray.destroyCount(); got != 1 {
+		t.Fatalf("Tray.Destroy calls after retry = %d, want 1", got)
+	}
+}
+
+func TestHostLateStartupCleanupFailureIsPublishedAfterBarrierTimeout(t *testing.T) {
+	fixture := newHostStartFixture(t)
+	startEntered := make(chan struct{})
+	releaseStart := make(chan struct{})
+	var releaseStartOnce sync.Once
+	releaseStartup := func() { releaseStartOnce.Do(func() { close(releaseStart) }) }
+	defer releaseStartup()
+	fixture.host.startGateway = func(ctx context.Context, options gatewayapp.Options) (*gatewayapp.App, error) {
+		gateway, err := fixture.startCapture.start(ctx, options)
+		close(startEntered)
+		<-releaseStart
+		return gateway, err
+	}
+
+	startResult := make(chan error, 1)
+	go func() {
+		startResult <- fixture.host.Start(context.Background())
+	}()
+	select {
+	case <-startEntered:
+	case <-time.After(time.Second):
+		t.Fatal("gateway did not start")
+	}
+	options, gateway := fixture.startCapture.values()
+	releaseRequest := startBlockingOpenDataRequest(t, fixture, gateway, options.Runtime.AdminTokenOverride)
+	defer releaseRequest()
+
+	barrierErr := errors.New("startup barrier timeout")
+	cleanupErr := errors.New("late startup cleanup failure")
+	barrierContext := newManualErrorContext(barrierErr)
+	cleanupContext := newManualErrorContext(cleanupErr)
+	barrierContextCreated := make(chan struct{})
+	cleanupContextCreated := make(chan struct{})
+	var contextMu sync.Mutex
+	contextCalls := 0
+	fixture.host.newShutdownContext = func() (context.Context, context.CancelFunc) {
+		contextMu.Lock()
+		defer contextMu.Unlock()
+		contextCalls++
+		switch contextCalls {
+		case 1:
+			close(barrierContextCreated)
+			return barrierContext, func() {}
+		case 2:
+			close(cleanupContextCreated)
+			return cleanupContext, func() {}
+		default:
+			return context.WithTimeout(context.Background(), time.Second)
+		}
+	}
+
+	fixture.host.RequestQuit(context.Background())
+	select {
+	case <-barrierContextCreated:
+	case <-time.After(time.Second):
+		t.Fatal("shutdown did not start")
+	}
+	barrierContext.expire()
+	select {
+	case <-fixture.host.shutdownDone:
+	case <-time.After(time.Second):
+		t.Fatal("shutdown did not publish its barrier timeout")
+	}
+	if !errors.Is(fixture.host.shutdownErr, barrierErr) {
+		t.Fatalf("published shutdown error = %v, want %v", fixture.host.shutdownErr, barrierErr)
+	}
+
+	releaseStartup()
+	select {
+	case <-cleanupContextCreated:
+	case <-time.After(time.Second):
+		t.Fatal("late startup cleanup did not begin")
+	}
+	cleanupContext.expire()
+	select {
+	case err := <-startResult:
+		if !errors.Is(err, cleanupErr) {
+			t.Fatalf("Start() error = %v, want late cleanup error", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Start() did not return after late cleanup failure")
+	}
+	if got := fixture.tray.statusValues(); len(got) != 3 || got[2] != "Error: "+cleanupErr.Error() {
+		t.Fatalf("tray statuses after late cleanup failure = %v, want final error %q", got, "Error: "+cleanupErr.Error())
+	}
+	if !errors.Is(fixture.host.shutdownErr, barrierErr) {
+		t.Fatalf("published shutdown error changed after late cleanup: %v", fixture.host.shutdownErr)
+	}
+
+	releaseRequest()
+	waitForGatewayDone(t, gateway)
+	fixture.host.RequestQuit(context.Background())
+	fixture.application.waitForQuit(t)
 }
 
 func TestHostControllerAndTrayOperationsUseAllowListedTargets(t *testing.T) {
@@ -665,6 +803,29 @@ type manualDeadlineContext struct {
 	done chan struct{}
 	once sync.Once
 }
+
+type manualErrorContext struct {
+	done chan struct{}
+	err  error
+	once sync.Once
+}
+
+func newManualErrorContext(err error) *manualErrorContext {
+	return &manualErrorContext{done: make(chan struct{}), err: err}
+}
+
+func (c *manualErrorContext) Deadline() (time.Time, bool) { return time.Time{}, false }
+func (c *manualErrorContext) Done() <-chan struct{}       { return c.done }
+func (c *manualErrorContext) Err() error {
+	select {
+	case <-c.done:
+		return c.err
+	default:
+		return nil
+	}
+}
+func (c *manualErrorContext) Value(any) any { return nil }
+func (c *manualErrorContext) expire()       { c.once.Do(func() { close(c.done) }) }
 
 func newManualDeadlineContext() *manualDeadlineContext {
 	return &manualDeadlineContext{done: make(chan struct{})}
