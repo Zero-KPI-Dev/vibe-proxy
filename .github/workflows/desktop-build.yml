@@ -1,0 +1,117 @@
+name: desktop-build
+
+on:
+  pull_request:
+    paths:
+      - 'desktop/**'
+      - 'internal/gatewayapp/**'
+      - 'internal/runtime/**'
+      - 'internal/desktopbridge/**'
+      - 'frontend/**'
+      - 'scripts/release/**'
+      - '.github/workflows/desktop-build.yml'
+  push:
+    branches: [main, develop]
+    paths:
+      - 'desktop/**'
+      - 'internal/gatewayapp/**'
+      - 'internal/runtime/**'
+      - 'internal/desktopbridge/**'
+      - 'frontend/**'
+      - 'scripts/release/**'
+      - '.github/workflows/desktop-build.yml'
+
+permissions:
+  contents: read
+
+env:
+  GO_VERSION: '1.26.5'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: |
+            go.sum
+            desktop/go.sum
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Frontend regression
+        working-directory: frontend
+        run: |
+          npm ci
+          npm test
+          npm run build
+      - name: Verify embedded frontend
+        run: git diff --exit-code -- internal/runtime/web/dist
+      - name: Root Go regression
+        run: CGO_ENABLED=0 go test ./...
+      - name: Desktop domain regression
+        working-directory: desktop
+        run: |
+          go mod verify
+          CGO_ENABLED=0 go test ./app/... ./wailsapp
+      - name: Release contracts
+        run: |
+          bash scripts/release/test-desktop-packaging.sh
+          RELEASE_TEST_SCOPE=assets bash scripts/release/test-packaging.sh
+
+  windows:
+    needs: test
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        goarch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v6
+        with: {fetch-depth: 0}
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: desktop/go.sum
+      - name: Build package
+        shell: bash
+        run: scripts/release/build-desktop.sh v0.0.0-ci windows "${{ matrix.goarch }}" "$RUNNER_TEMP/packages"
+      - name: Smoke test
+        shell: pwsh
+        run: desktop/bin/vibe-proxy-desktop.exe --version
+      - uses: actions/upload-artifact@v7
+        with:
+          name: desktop-ci-windows-${{ matrix.goarch }}
+          path: ${{ runner.temp }}/packages/*
+
+  macos:
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {goarch: arm64, runner: macos-14}
+          - {goarch: amd64, runner: macos-13}
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v6
+        with: {fetch-depth: 0}
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: desktop/go.sum
+      - name: Build app and DMG
+        shell: bash
+        run: |
+          scripts/release/build-desktop.sh v0.0.0-ci darwin "${{ matrix.goarch }}" "$RUNNER_TEMP/packages"
+          desktop/bin/Vibe\ Proxy.app/Contents/MacOS/vibe-proxy-desktop --version
+          scripts/release/package-desktop-dmg.sh v0.0.0-ci "${{ matrix.goarch }}" \
+            "desktop/bin/Vibe Proxy.app" "$RUNNER_TEMP/packages"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: desktop-ci-macos-${{ matrix.goarch }}
+          path: ${{ runner.temp }}/packages/*
