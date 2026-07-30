@@ -31,8 +31,11 @@ func TestTrackRecordsTokenAndUsage(t *testing.T) {
 	if final.OutputTokenCount != 1 || final.Usage.TotalTokens != 5 {
 		t.Fatalf("unexpected stats: %+v", final)
 	}
-	if final.TTFT() <= 0 {
-		t.Fatalf("expected ttft > 0, got %s", final.TTFT())
+	if final.StartedAt.IsZero() || final.FirstTokenAt.IsZero() || final.CompletedAt.IsZero() {
+		t.Fatalf("expected lifecycle timestamps to be recorded: %+v", final)
+	}
+	if final.FirstTokenAt.Before(final.StartedAt) || final.CompletedAt.Before(final.FirstTokenAt) {
+		t.Fatalf("unexpected lifecycle timestamp order: %+v", final)
 	}
 	if reports != 1 {
 		t.Fatalf("stats callback invoked %d times", reports)

@@ -55,7 +55,7 @@ func TestSQLiteDSNFormatsWindowsUNCPath(t *testing.T) {
 }
 
 func TestSQLiteSupportsSpecialCharactersInPath(t *testing.T) {
-	databasePath := filepath.Join(t.TempDir(), "events ? #.db")
+	databasePath := filepath.Join(t.TempDir(), "events # &.db")
 	event := telemetry.Event{
 		RequestID:    "special-path",
 		StartedAt:    time.Date(2026, time.July, 29, 12, 0, 0, 0, time.UTC),
