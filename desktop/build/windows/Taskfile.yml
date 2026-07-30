@@ -34,7 +34,12 @@ tasks:
       - task: build
     cmds:
       - go run github.com/wailsapp/wails/v3/cmd/wails3 generate webview2bootstrapper -dir build/windows/nsis
-      - makensis -DINFO_PRODUCTVERSION="{{.VERSION | trimPrefix "v"}}" -DINFO_PRODUCTVERSION_NUMERIC="{{.VERSION_NUMERIC}}" -DARG_WAILS_{{if eq .ARCH "amd64"}}AMD64{{else}}ARM64{{end}}_BINARY="{{.ROOT_DIR}}/{{.BIN_DIR}}/{{.APP_NAME}}.exe" build/windows/nsis/project.nsi
+      - |
+        {{if eq OS "windows"}}
+        makensis -DINFO_PRODUCTVERSION="{{.VERSION | trimPrefix "v"}}" -DINFO_PRODUCTVERSION_NUMERIC="{{.VERSION_NUMERIC}}" -DARG_WAILS_{{if eq .ARCH "amd64"}}AMD64{{else}}ARM64{{end}}_BINARY="{{.ROOT_DIR}}\{{.BIN_DIR}}\{{.APP_NAME}}.exe" build/windows/nsis/project.nsi
+        {{else}}
+        makensis -DINFO_PRODUCTVERSION="{{.VERSION | trimPrefix "v"}}" -DINFO_PRODUCTVERSION_NUMERIC="{{.VERSION_NUMERIC}}" -DARG_WAILS_{{if eq .ARCH "amd64"}}AMD64{{else}}ARM64{{end}}_BINARY="{{.ROOT_DIR}}/{{.BIN_DIR}}/{{.APP_NAME}}.exe" build/windows/nsis/project.nsi
+        {{end}}
 
   run:
     cmds:
