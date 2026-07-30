@@ -185,7 +185,29 @@ test_dmg() {
   assert_file "$mounted_dmg/INSTALL.txt" "DMG installation guide"
   assert_file "$mounted_dmg/configs/bootstrap.yaml" "DMG bootstrap config"
   assert_file "$mounted_dmg/configs/simple.yaml" "DMG simple config"
+  grep -Fq "release-candidate disk image" "$mounted_dmg/INSTALL.txt" ||
+    fail "release-candidate DMG is not labeled as a release candidate"
 
+  hdiutil detach "$mounted_dmg" -quiet
+  mounted_dmg=
+
+  local stable_artifact
+  stable_artifact=$(
+    "$script_dir/package-dmg.sh" \
+      v0.1.0 arm64 "$fake_binary" "$output_dir"
+  )
+  mounted_dmg="$tmp_dir/dmg-stable-mount"
+  mkdir -p "$mounted_dmg"
+  hdiutil attach \
+    -nobrowse \
+    -readonly \
+    -mountpoint "$mounted_dmg" \
+    "$stable_artifact" >/dev/null
+  if grep -Fq "release-candidate" "$mounted_dmg/INSTALL.txt"; then
+    fail "stable DMG is incorrectly labeled as a release candidate"
+  fi
+  grep -Fq "unsigned and not notarized" "$mounted_dmg/INSTALL.txt" ||
+    fail "stable DMG is missing unsigned-build guidance"
   hdiutil detach "$mounted_dmg" -quiet
   mounted_dmg=
 

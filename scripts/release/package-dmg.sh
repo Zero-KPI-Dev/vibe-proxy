@@ -52,10 +52,14 @@ cp "$release_repo_root/README.md" "$source_dir/README.md"
 cp "$release_repo_root/LICENSE" "$source_dir/LICENSE"
 cp "$release_repo_root/configs/bootstrap.yaml" "$source_dir/configs/bootstrap.yaml"
 cp "$release_repo_root/configs/simple.yaml" "$source_dir/configs/simple.yaml"
+image_status="This disk image is unsigned and not notarized."
+if [[ "$version_without_v" == *-* ]]; then
+  image_status="This release-candidate disk image is unsigned and not notarized."
+fi
 cat >"$source_dir/INSTALL.txt" <<EOF
 vibe-proxy $version
 
-This release-candidate disk image is unsigned and not notarized.
+$image_status
 
 Copy all files from this image to a writable local directory, open Terminal in
 that directory, and run:
