@@ -27,6 +27,9 @@ func TestPathsWindowsUsesLocalAppData(t *testing.T) {
 	if paths.DatabasePath != `C:\Users\A\AppData\Local\vibe-proxy\vibe-proxy.db` {
 		t.Fatalf("DatabasePath = %q", paths.DatabasePath)
 	}
+	if paths.AuthPath != `C:\Users\A\AppData\Local\vibe-proxy\auth.json` {
+		t.Fatalf("AuthPath = %q", paths.AuthPath)
+	}
 	if paths.PreferencesPath != `C:\Users\A\AppData\Local\vibe-proxy\desktop.json` {
 		t.Fatalf("PreferencesPath = %q", paths.PreferencesPath)
 	}
@@ -53,7 +56,7 @@ func TestPathsDarwinUsesApplicationSupport(t *testing.T) {
 	if want := filepath.Join("/Users/a", "Library", "Application Support", "vibe-proxy"); paths.DataDir != want {
 		t.Fatalf("DataDir = %q, want %q", paths.DataDir, want)
 	}
-	if paths.ConfigPath != filepath.Join(paths.DataDir, "config.yaml") || paths.DatabasePath != filepath.Join(paths.DataDir, "vibe-proxy.db") || paths.PreferencesPath != filepath.Join(paths.DataDir, "desktop.json") || paths.LogDir != filepath.Join(paths.DataDir, "logs") || paths.LogPath != filepath.Join(paths.DataDir, "logs", "vibe-proxy.log") {
+	if paths.ConfigPath != filepath.Join(paths.DataDir, "config.yaml") || paths.DatabasePath != filepath.Join(paths.DataDir, "vibe-proxy.db") || paths.AuthPath != filepath.Join(paths.DataDir, "auth.json") || paths.PreferencesPath != filepath.Join(paths.DataDir, "desktop.json") || paths.LogDir != filepath.Join(paths.DataDir, "logs") || paths.LogPath != filepath.Join(paths.DataDir, "logs", "vibe-proxy.log") {
 		t.Fatalf("unexpected darwin paths: %+v", paths)
 	}
 }

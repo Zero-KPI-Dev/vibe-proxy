@@ -14,6 +14,8 @@ const DesktopSessionCookie = "vibe_desktop_session"
 
 type tokenDigest [sha256.Size]byte
 
+const desktopSessionTTL = 12 * time.Hour
+
 // DesktopSessionStore keeps one-time bootstrap nonces and authorized desktop
 // sessions in process memory. Only digests of nonce and session values are
 // retained.
@@ -22,7 +24,7 @@ type DesktopSessionStore struct {
 	now      func() time.Time
 	nonceTTL time.Duration
 	nonces   map[tokenDigest]time.Time
-	sessions map[tokenDigest]struct{}
+	sessions map[tokenDigest]time.Time
 }
 
 func NewDesktopSessionStore(now func() time.Time, nonceTTL time.Duration) *DesktopSessionStore {
@@ -33,7 +35,7 @@ func NewDesktopSessionStore(now func() time.Time, nonceTTL time.Duration) *Deskt
 		now:      now,
 		nonceTTL: nonceTTL,
 		nonces:   make(map[tokenDigest]time.Time),
-		sessions: make(map[tokenDigest]struct{}),
+		sessions: make(map[tokenDigest]time.Time),
 	}
 }
 
@@ -64,12 +66,17 @@ func (s *DesktopSessionStore) ConsumeBootstrap(nonce string) (session string, ok
 	}
 	delete(s.nonces, storedDigest)
 
-	session, err := randomDesktopToken()
+	session, err := s.newSessionLocked()
 	if err != nil {
 		return "", false
 	}
-	s.sessions[digestDesktopToken(session)] = struct{}{}
 	return session, true
+}
+
+func (s *DesktopSessionStore) NewSession() (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.newSessionLocked()
 }
 
 func (s *DesktopSessionStore) Authorize(r *http.Request) bool {
@@ -81,7 +88,23 @@ func (s *DesktopSessionStore) Authorize(r *http.Request) bool {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.deleteExpiredSessions(s.now())
 	return containsSessionDigest(s.sessions, digest)
+}
+
+func (s *DesktopSessionStore) Revoke(session string) {
+	if session == "" {
+		return
+	}
+	digest := digestDesktopToken(session)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for stored := range s.sessions {
+		if subtle.ConstantTimeCompare(stored[:], digest[:]) == 1 {
+			delete(s.sessions, stored)
+			return
+		}
+	}
 }
 
 func (s *DesktopSessionStore) RevokeAll() {
@@ -99,6 +122,25 @@ func (s *DesktopSessionStore) deleteExpiredNonces(now time.Time) {
 	}
 }
 
+func (s *DesktopSessionStore) newSessionLocked() (string, error) {
+	session, err := randomDesktopToken()
+	if err != nil {
+		return "", err
+	}
+	now := s.now()
+	s.deleteExpiredSessions(now)
+	s.sessions[digestDesktopToken(session)] = now.Add(desktopSessionTTL)
+	return session, nil
+}
+
+func (s *DesktopSessionStore) deleteExpiredSessions(now time.Time) {
+	for digest, expiresAt := range s.sessions {
+		if !expiresAt.After(now) {
+			delete(s.sessions, digest)
+		}
+	}
+}
+
 func findNonceDigest(nonces map[tokenDigest]time.Time, candidate tokenDigest) (tokenDigest, bool) {
 	for digest := range nonces {
 		if subtle.ConstantTimeCompare(digest[:], candidate[:]) == 1 {
@@ -108,7 +150,7 @@ func findNonceDigest(nonces map[tokenDigest]time.Time, candidate tokenDigest) (t
 	return tokenDigest{}, false
 }
 
-func containsSessionDigest(sessions map[tokenDigest]struct{}, candidate tokenDigest) bool {
+func containsSessionDigest(sessions map[tokenDigest]time.Time, candidate tokenDigest) bool {
 	found := 0
 	for digest := range sessions {
 		found |= subtle.ConstantTimeCompare(digest[:], candidate[:])

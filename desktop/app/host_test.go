@@ -60,6 +60,15 @@ func TestHostStartCreatesPrivateConfigAndBootstrapsRealGateway(t *testing.T) {
 	if options.Runtime.DesktopSessions == nil {
 		t.Fatal("DesktopSessions = nil")
 	}
+	if options.Runtime.PasswordAuth == nil {
+		t.Fatal("PasswordAuth = nil")
+	}
+	if options.Runtime.PasswordAuth.Initialized() {
+		t.Fatal("fresh desktop management password store was already initialized")
+	}
+	if _, err := os.Stat(fixture.paths.AuthPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("auth file exists before first-run setup: %v", err)
+	}
 	if options.Runtime.DesktopController == nil {
 		t.Fatal("DesktopController = nil")
 	}
@@ -130,12 +139,23 @@ func TestHostStartNavigationFailureKeepsGatewayForBrowserFallback(t *testing.T) 
 	if err := fixture.host.OpenControlPlaneInBrowser(); err != nil {
 		t.Fatalf("OpenControlPlaneInBrowser() error = %v", err)
 	}
+	if err := options.Runtime.PasswordAuth.SetInitial("desktop browser password"); err != nil {
+		t.Fatalf("SetInitial() error = %v", err)
+	}
+	if err := fixture.host.OpenControlPlaneInBrowser(); err != nil {
+		t.Fatalf("OpenControlPlaneInBrowser() after password setup error = %v", err)
+	}
 	fixture.system.mu.Lock()
 	defer fixture.system.mu.Unlock()
-	if got := fixture.system.browsed; len(got) != 1 {
-		t.Fatalf("browser targets = %v, want exactly one", got)
+	base := "http://" + gateway.Address()
+	if got := fixture.system.browsed; len(got) != 2 {
+		t.Fatalf("browser targets = %v, want first-run bootstrap and password login targets", got)
+	} else {
+		assertBrowserBootstrapTarget(t, got[0], gateway.Address(), options.Runtime.DesktopSessions)
+		if got[1] != base+"/" {
+			t.Fatalf("post-setup browser target = %q, want %q", got[1], base+"/")
+		}
 	}
-	assertBrowserBootstrapTarget(t, fixture.system.browsed[0], gateway.Address(), options.Runtime.DesktopSessions)
 }
 
 func TestHostStartFailureUpdatesTrayWithStructuredError(t *testing.T) {
@@ -1117,6 +1137,7 @@ func newHostStartFixture(t *testing.T) *hostStartFixture {
 		DataDir:         dataDir,
 		ConfigPath:      filepath.Join(dataDir, "config.yaml"),
 		DatabasePath:    filepath.Join(dataDir, "vibe-proxy.db"),
+		AuthPath:        filepath.Join(dataDir, "auth.json"),
 		PreferencesPath: filepath.Join(dataDir, "desktop.json"),
 		LogDir:          filepath.Join(dataDir, "logs"),
 		LogPath:         filepath.Join(dataDir, "logs", "vibe-proxy.log"),
@@ -1188,6 +1209,7 @@ func cloneGatewayOptions(options gatewayapp.Options) gatewayapp.Options {
 		Runtime: runtime.Options{
 			AdminTokenOverride: options.Runtime.AdminTokenOverride,
 			DesktopSessions:    options.Runtime.DesktopSessions,
+			PasswordAuth:       options.Runtime.PasswordAuth,
 			DesktopController:  options.Runtime.DesktopController,
 		},
 		Listen: options.Listen,

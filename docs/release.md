@@ -59,9 +59,12 @@ Select-String -Path .\SHA256SUMS -Pattern 'windows_amd64.zip'
 ## Windows
 
 Run the desktop setup EXE or extract the desktop portable ZIP and launch
-`vibe-proxy-desktop.exe`. On the first window close, choose whether future
-closes should exit or minimise to the tray. Reset the choice from **Settings →
-Desktop Application** or the tray menu. Provider configuration, SQLite data,
+`vibe-proxy-desktop.exe`. The first launch asks you to create a management
+password for browser access to the local control plane; the native window signs
+in automatically. This is not a provider API key or the client key used by
+agents. On the first window close, choose whether future closes should exit or
+minimise to the tray. Reset the choice from **Settings → Desktop Application**
+or the tray menu. Provider configuration, SQLite data, password hash,
 preferences and logs live under:
 
 ```text
@@ -69,8 +72,10 @@ preferences and logs live under:
 ```
 
 The Settings page can import `config.yaml` and open the data directory. If the
-native WebView cannot open, the proxy and tray remain running; use **Open in Browser**
-or **Open Logs Folder** from the tray.
+native WebView cannot open, the proxy and tray remain running; use **Open in
+Browser** or **Open Logs Folder** from the tray. Before first-run setup, that
+tray action grants a one-time setup session; later browser windows show the
+management-password login page.
 
 Unsigned RC installers may trigger Microsoft SmartScreen. Verify the checksum
 and repository source, then use **More info → Run anyway** only when you accept
@@ -105,17 +110,20 @@ The Anthropic endpoint also accepts the client key in `x-api-key`.
 ## macOS
 
 Open the desktop DMG, drag **Vibe Proxy.app** to the Applications link, and
-launch it. Desktop state is stored under:
+launch it. The first launch asks you to create a management password for
+browser access; the native window itself signs in automatically. Desktop state
+is stored under:
 
 ```text
 ~/Library/Application Support/vibe-proxy
 ```
 
-The menu-bar icon restores the window, opens an automatically authenticated
-browser control plane or logs, copies agent base URLs and exits cleanly. Opening
-the bare `http://127.0.0.1:8080` address in a separate browser does not carry the
-desktop admin session; use **Open in Browser** from the menu-bar icon instead.
-The first-close choice can be reset from Settings or the menu-bar item.
+The menu-bar icon restores the window, opens the browser control plane or logs,
+copies agent base URLs and exits cleanly. Regular browser windows authenticate
+with the management password and keep it out of URLs and localStorage. Before
+first-run setup only, **Open in Browser** can issue a one-time recovery session
+if the native WebView is unavailable. The first-close choice can be reset from
+Settings or the menu-bar item.
 
 Unsigned RCs may be blocked by Gatekeeper. After verifying the checksum and
 source, Control-click the app and choose **Open**, or remove quarantine from the
@@ -190,8 +198,17 @@ export VIBE_PROXY_ADMIN_TOKEN='choose-a-local-admin-token'
 
 ## First-Run Security
 
-- The desktop app uses a process-local random admin token and one-time bootstrap
-  sessions; it does not persist or ask the user to copy the raw token.
+- The desktop app asks for a management password on first launch and persists
+  only its Argon2id hash in `auth.json`.
+- The native window uses a process-local random internal admin token and
+  one-time bootstrap sessions; it does not persist or ask the user to copy that
+  token.
+- Regular browsers sign in with the management password and receive an
+  HttpOnly, same-origin session cookie. The password is not stored in the
+  browser.
+- To reset a forgotten desktop management password, fully exit Vibe Proxy,
+  delete `auth.json` from the application data directory, and relaunch. This
+  does not delete providers, client keys, configuration, or request history.
 - CLI installs use `VIBE_PROXY_ADMIN_TOKEN` to protect the control plane and
   admin API.
 - `configs/bootstrap.yaml` includes the development data-plane key
@@ -212,17 +229,21 @@ Linux systems:
 
 1. Verify the downloaded checksum.
 2. Run `vibe-proxy --version` and confirm the release tag and commit are shown.
-3. Start with `configs/bootstrap.yaml` and open the control plane.
-4. Add and test a provider without editing YAML.
-5. Fetch and select provider models.
-6. Create a new client key and call `/v1/models`.
-7. Exercise OpenAI Chat, OpenAI Responses, and Anthropic Messages for a
+3. Start the desktop app, create the first-run management password, and confirm
+   the native window enters the control plane.
+4. Open `http://127.0.0.1:8080/` in a regular browser, sign in with the
+   management password, and confirm that an incorrect password is rejected.
+5. Add and test a provider without editing YAML.
+6. Fetch and select provider models.
+7. Create a new client key and call `/v1/models`.
+8. Exercise OpenAI Chat, OpenAI Responses, and Anthropic Messages for a
    provider that supports them.
-8. Restart from the same writable directory and confirm configuration and
+9. Restart from the same writable directory and confirm the management
+   password, configuration and
    SQLite-backed request history persist.
-9. On a suitable provider, test image input and inspect the OCR/Vision routing
+10. On a suitable provider, test image input and inspect the OCR/Vision routing
    trace.
-10. Report the OS version, CPU architecture, artifact name, and relevant logs
+11. Report the OS version, CPU architecture, artifact name, and relevant logs
     for any failure.
 
 Stable desktop publication requires code signing and macOS notarization, unless

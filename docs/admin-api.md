@@ -1,25 +1,53 @@
 # Admin API
 
-Admin APIs are protected by a separate bearer token configured through `VIBE_PROXY_ADMIN_TOKEN` or the configured `security.admin_bearer_token_env`.
+In CLI/server deployments, Admin APIs are protected by a separate bearer token
+configured through `VIBE_PROXY_ADMIN_TOKEN` or the configured
+`security.admin_bearer_token_env`. The native desktop application instead uses
+a management password and same-origin browser sessions; it does not ask the
+user to discover or copy its internal admin token.
 
 ## Desktop Authentication and Controls
 
-The desktop process creates a short-lived, single-use bootstrap nonce and
-navigates its WebView to:
+On the first desktop launch, the native window asks the user to create a
+management password. Only an Argon2id password hash is stored in `auth.json`
+under the application data directory. Provider credentials and data-plane
+client keys remain separate and are managed from their existing control-plane
+pages.
+
+The desktop process also creates a short-lived, single-use bootstrap nonce and
+navigates its native WebView to:
 
 ```text
 GET /desktop/bootstrap/{nonce}
 ```
 
-The response sets a process-local, same-origin `vibe_desktop_session` cookie and
-redirects to `/`. The nonce cannot be reused and neither it nor the generated
-admin token is written to disk. Existing browser and CLI Bearer authentication
-continues to work.
+The response sets a process-local, same-origin, HttpOnly
+`vibe_desktop_session` cookie and redirects to `/`. The nonce cannot be reused
+and neither it nor the generated internal admin token is written to disk. This
+lets the native window authenticate automatically on each launch without
+placing a credential in a URL, browser storage, config file, or log.
 
-The native window uses this bootstrap flow at startup. The desktop tray/menu-bar
-**Open in Browser** action creates a fresh one-time bootstrap URL for the
-external browser as well; opening the bare listen address directly does not
-carry a desktop admin session.
+After first-run setup, a regular browser—including **Open in Browser** from the
+tray/menu bar—shows the management-password login screen and receives its own
+HttpOnly session after a successful login. If the native WebView fails before
+the first-run password has been created, **Open in Browser** may use one
+single-use bootstrap session so setup is still recoverable. Opening the bare
+listen address can never claim an uninitialized control plane.
+
+The password/session endpoints are:
+
+```text
+GET  /auth/status
+POST /auth/setup
+POST /auth/login
+POST /auth/logout
+```
+
+`/auth/setup` requires both a native bootstrap session and a same-origin
+request. `/auth/login` is enabled only after setup. State-changing Admin API
+requests authenticated by a desktop cookie also require a matching `Origin`
+header. CLI Bearer-token authentication remains valid and does not use these
+password routes.
 
 The following routes are available only when the native desktop controller is
 attached:

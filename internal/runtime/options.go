@@ -9,5 +9,6 @@ import (
 type Options struct {
 	AdminTokenOverride string
 	DesktopSessions    *auth.DesktopSessionStore
+	PasswordAuth       *auth.PasswordAuth
 	DesktopController  desktopbridge.Controller
 }

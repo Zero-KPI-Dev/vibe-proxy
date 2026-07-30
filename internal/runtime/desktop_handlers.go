@@ -27,6 +27,11 @@ func (s *Server) desktopBootstrap(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	setDesktopSessionCookie(w, session)
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+func setDesktopSessionCookie(w http.ResponseWriter, session string) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     auth.DesktopSessionCookie,
 		Value:    session,
@@ -34,7 +39,6 @@ func (s *Server) desktopBootstrap(w http.ResponseWriter, r *http.Request) {
 		HttpOnly: true,
 		SameSite: http.SameSiteStrictMode,
 	})
-	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
 func (s *Server) spaRoutes() http.Handler {

@@ -14,6 +14,7 @@ type Paths struct {
 	DataDir         string
 	ConfigPath      string
 	DatabasePath    string
+	AuthPath        string
 	PreferencesPath string
 	LogDir          string
 	LogPath         string
@@ -58,6 +59,7 @@ func pathsForDataDir(dataDir string, windows bool) Paths {
 			DataDir:         dataDir,
 			ConfigPath:      dataDir + `\config.yaml`,
 			DatabasePath:    dataDir + `\vibe-proxy.db`,
+			AuthPath:        dataDir + `\auth.json`,
 			PreferencesPath: dataDir + `\desktop.json`,
 			LogDir:          logDir,
 			LogPath:         logDir + `\vibe-proxy.log`,
@@ -69,6 +71,7 @@ func pathsForDataDir(dataDir string, windows bool) Paths {
 		DataDir:         dataDir,
 		ConfigPath:      filepath.Join(dataDir, "config.yaml"),
 		DatabasePath:    filepath.Join(dataDir, "vibe-proxy.db"),
+		AuthPath:        filepath.Join(dataDir, "auth.json"),
 		PreferencesPath: filepath.Join(dataDir, "desktop.json"),
 		LogDir:          logDir,
 		LogPath:         filepath.Join(logDir, "vibe-proxy.log"),

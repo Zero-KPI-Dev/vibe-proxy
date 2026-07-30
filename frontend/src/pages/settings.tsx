@@ -38,7 +38,7 @@ export function SettingsPage() {
   const [catalogLoading, setCatalogLoading] = useState(false)
   const [catalogImporting, setCatalogImporting] = useState(false)
   const catalogFileRef = useRef<HTMLInputElement>(null)
-  const [desktop, setDesktop] = useState<DesktopSnapshot | null>(null)
+  const [desktop, setDesktop] = useState<DesktopSnapshot | null | undefined>(undefined)
   const [authVersion, setAuthVersion] = useState(0)
 
   const loadCatalogStatus = async () => {
@@ -134,7 +134,7 @@ export function SettingsPage() {
         </p>
       </div>
 
-      {!desktop?.available && <Card>
+      {desktop !== undefined && !desktop?.available && <Card>
         <CardHeader>
           <div className="flex items-center gap-2">
             <Shield className="h-5 w-5 text-primary" />

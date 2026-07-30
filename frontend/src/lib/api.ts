@@ -24,6 +24,7 @@ import type {
   CloseBehavior,
   DesktopSnapshot,
 } from "./types"
+import { AUTH_REQUIRED_EVENT } from "./auth-api"
 
 export function getToken(): string {
   return localStorage.getItem("vibe_admin_token") ?? ""
@@ -43,6 +44,9 @@ async function request<T>(path: string, opts: RequestInit = {}): Promise<T> {
   if (token) headers["Authorization"] = `Bearer ${token}`
 
   const resp = await fetch(path, { ...opts, credentials: "same-origin", headers })
+  if (resp.status === 401) {
+    window.dispatchEvent(new Event(AUTH_REQUIRED_EVENT))
+  }
   const text = await resp.text()
   let body: unknown
   try {

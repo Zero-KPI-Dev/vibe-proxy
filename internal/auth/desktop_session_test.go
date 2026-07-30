@@ -37,6 +37,16 @@ func TestDesktopSessionBootstrapNonceIsURLSafeSingleUseAndExpiring(t *testing.T)
 	if !store.Authorize(req) {
 		t.Fatal("issued desktop session cookie was not authorized")
 	}
+	store.Revoke(session)
+	if store.Authorize(req) {
+		t.Fatal("individually revoked desktop session cookie was still authorized")
+	}
+	session, err = store.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	req = httptest.NewRequest(http.MethodGet, "http://desktop.local/admin/config/snapshot", nil)
+	req.AddCookie(&http.Cookie{Name: DesktopSessionCookie, Value: session})
 	store.RevokeAll()
 	if store.Authorize(req) {
 		t.Fatal("revoked desktop session cookie was still authorized")
@@ -49,5 +59,16 @@ func TestDesktopSessionBootstrapNonceIsURLSafeSingleUseAndExpiring(t *testing.T)
 	now = now.Add(time.Minute + time.Nanosecond)
 	if _, accepted := store.ConsumeBootstrap(expiringNonce); accepted {
 		t.Fatal("expired bootstrap nonce was accepted")
+	}
+
+	session, err = store.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	req = httptest.NewRequest(http.MethodGet, "http://desktop.local/admin/config/snapshot", nil)
+	req.AddCookie(&http.Cookie{Name: DesktopSessionCookie, Value: session})
+	now = now.Add(desktopSessionTTL + time.Nanosecond)
+	if store.Authorize(req) {
+		t.Fatal("expired desktop session cookie was authorized")
 	}
 }

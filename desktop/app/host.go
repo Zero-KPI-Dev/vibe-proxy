@@ -46,12 +46,13 @@ type Host struct {
 	dialogOpen  bool
 	quitting    bool
 
-	lifecycleMu sync.RWMutex
-	gateway     *gatewayapp.App
-	sessions    *auth.DesktopSessionStore
-	ownsGateway bool
-	controller  *desktopController
-	startupDone chan struct{}
+	lifecycleMu  sync.RWMutex
+	gateway      *gatewayapp.App
+	sessions     *auth.DesktopSessionStore
+	passwordAuth *auth.PasswordAuth
+	ownsGateway  bool
+	controller   *desktopController
+	startupDone  chan struct{}
 
 	shutdownRequested bool
 	startupCleanupErr error
@@ -127,11 +128,17 @@ func (h *Host) Start(ctx context.Context) error {
 		return fmt.Errorf("generate desktop admin token: %w", err)
 	}
 	sessions := auth.NewDesktopSessionStore(time.Now, time.Minute)
+	passwordAuth, err := auth.NewPasswordAuth(h.paths.AuthPath)
+	if err != nil {
+		h.setStartupErrorStatus(err)
+		return fmt.Errorf("load desktop management password: %w", err)
+	}
 	options := gatewayapp.Options{
 		ConfigPath: h.paths.ConfigPath,
 		Runtime: runtimeoptions.Options{
 			AdminTokenOverride: adminToken,
 			DesktopSessions:    sessions,
+			PasswordAuth:       passwordAuth,
 			DesktopController:  h.controller,
 		},
 	}
@@ -148,31 +155,32 @@ func (h *Host) Start(ctx context.Context) error {
 	if !shutdownRequested {
 		h.gateway = gateway
 		h.sessions = sessions
+		h.passwordAuth = passwordAuth
 		h.ownsGateway = true
 	}
 	h.lifecycleMu.Unlock()
 	if shutdownRequested {
-		return h.cleanupStartupGateway(errHostShuttingDown, gateway, sessions)
+		return h.cleanupStartupGateway(errHostShuttingDown, gateway, sessions, passwordAuth)
 	}
 
 	select {
 	case <-gateway.Ready():
 	case <-ctx.Done():
 		h.setStartupErrorStatus(ctx.Err())
-		return h.cleanupStartupGateway(ctx.Err(), gateway, sessions)
+		return h.cleanupStartupGateway(ctx.Err(), gateway, sessions, passwordAuth)
 	}
 	if h.isShutdownRequested() {
-		return h.cleanupStartupGateway(errHostShuttingDown, gateway, sessions)
+		return h.cleanupStartupGateway(errHostShuttingDown, gateway, sessions, passwordAuth)
 	}
 
 	nonce, err := sessions.NewBootstrapNonce()
 	if err != nil {
 		err = fmt.Errorf("generate desktop bootstrap nonce: %w", err)
 		h.setStartupErrorStatus(err)
-		return h.cleanupStartupGateway(err, gateway, sessions)
+		return h.cleanupStartupGateway(err, gateway, sessions, passwordAuth)
 	}
 	if h.isShutdownRequested() {
-		return h.cleanupStartupGateway(errHostShuttingDown, gateway, sessions)
+		return h.cleanupStartupGateway(errHostShuttingDown, gateway, sessions, passwordAuth)
 	}
 	target := "http://" + gateway.Address() + "/desktop/bootstrap/" + nonce
 	if err := h.window.Navigate(target); err != nil {
@@ -182,11 +190,11 @@ func (h *Host) Start(ctx context.Context) error {
 			h.tray.SetStatus("Running; desktop window unavailable")
 			return webViewErr
 		}
-		return h.cleanupStartupGateway(errors.Join(errHostShuttingDown, err), gateway, sessions)
+		return h.cleanupStartupGateway(errors.Join(errHostShuttingDown, err), gateway, sessions, passwordAuth)
 	}
 	nonce = ""
 	if !h.setStatusUnlessShuttingDown("Running on " + gateway.Address()) {
-		return h.cleanupStartupGateway(errHostShuttingDown, gateway, sessions)
+		return h.cleanupStartupGateway(errHostShuttingDown, gateway, sessions, passwordAuth)
 	}
 	return nil
 }
@@ -217,7 +225,12 @@ func (h *Host) isShutdownRequested() bool {
 	return h.shutdownRequested
 }
 
-func (h *Host) cleanupStartupGateway(startErr error, gateway *gatewayapp.App, sessions *auth.DesktopSessionStore) error {
+func (h *Host) cleanupStartupGateway(
+	startErr error,
+	gateway *gatewayapp.App,
+	sessions *auth.DesktopSessionStore,
+	passwordAuth *auth.PasswordAuth,
+) error {
 	cleanupCtx, cancel := h.newShutdownContext()
 	cleanupErr := gateway.Shutdown(cleanupCtx)
 	cancel()
@@ -231,6 +244,7 @@ func (h *Host) cleanupStartupGateway(startErr error, gateway *gatewayapp.App, se
 		if h.gateway == nil {
 			h.gateway = gateway
 			h.sessions = sessions
+			h.passwordAuth = passwordAuth
 			h.ownsGateway = true
 		}
 		if h.shutdownRequested {
@@ -257,6 +271,7 @@ func (h *Host) clearGatewayLocked(gateway *gatewayapp.App) {
 	if h.gateway == gateway {
 		h.gateway = nil
 		h.sessions = nil
+		h.passwordAuth = nil
 		h.ownsGateway = false
 		h.startupCleanupErr = nil
 	}
@@ -285,18 +300,25 @@ func (h *Host) OpenControlPlane() {
 }
 
 func (h *Host) OpenControlPlaneInBrowser() error {
-	target, err := h.desktopBootstrapURL()
+	target, err := h.browserControlPlaneURL()
 	if err != nil {
 		return err
 	}
 	return h.system.OpenBrowser(target)
 }
 
-func (h *Host) desktopBootstrapURL() (string, error) {
+func (h *Host) browserControlPlaneURL() (string, error) {
 	h.lifecycleMu.RLock()
 	defer h.lifecycleMu.RUnlock()
 	if h.gateway == nil {
 		return "", errors.New("gateway is not running")
+	}
+	baseURL := "http://" + h.gateway.Address()
+	if h.passwordAuth == nil {
+		return "", errors.New("desktop management password is not available")
+	}
+	if h.passwordAuth.Initialized() {
+		return baseURL + "/", nil
 	}
 	if h.sessions == nil {
 		return "", errors.New("desktop authentication is not available")
@@ -305,7 +327,7 @@ func (h *Host) desktopBootstrapURL() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("generate browser bootstrap nonce: %w", err)
 	}
-	return "http://" + h.gateway.Address() + "/desktop/bootstrap/" + nonce, nil
+	return baseURL + "/desktop/bootstrap/" + nonce, nil
 }
 
 func (h *Host) OpenLogsFolder() error {

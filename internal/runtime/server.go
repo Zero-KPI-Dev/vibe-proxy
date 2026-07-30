@@ -59,6 +59,7 @@ type Server struct {
 	semaphore          sync.Map
 	adminTokenOverride string
 	desktopSessions    *auth.DesktopSessionStore
+	passwordAuth       *auth.PasswordAuth
 	desktopController  desktopbridge.Controller
 }
 
@@ -83,7 +84,7 @@ func NewWithOptions(cfgPath string, cfg *config.RuntimeConfig, sink telemetry.Ev
 	if provider, ok := sink.(telemetry.ObservabilityReaderProvider); ok {
 		observability = provider.ObservabilityReader()
 	}
-	s := &Server{cfgPath: cfgPath, startedAt: time.Now(), authenticator: auth.NewAuthenticator(), httpClient: &http.Client{Timeout: 0}, ocrHTTPClient: &http.Client{}, builtinOCR: ocr.NewBuiltinProvider(), metrics: prom, sink: sink, recent: recent, observability: observability, catalog: modelcatalog.NewService(modelcatalog.Options{CachePath: modelCatalogCachePath(cfgPath, cfg)}), clientAdapters: []protocol.ClientAdapter{clientopenai.ChatAdapter{}, clientopenai.ResponsesAdapter{}, clientanthropic.MessagesAdapter{}}, providerAdapters: map[string]protocol.ProviderAdapter{"anthropic": provideranthropic.Provider{}, "openai-compatible": provideropenai.Provider{}}, adminTokenOverride: options.AdminTokenOverride, desktopSessions: options.DesktopSessions, desktopController: options.DesktopController}
+	s := &Server{cfgPath: cfgPath, startedAt: time.Now(), authenticator: auth.NewAuthenticator(), httpClient: &http.Client{Timeout: 0}, ocrHTTPClient: &http.Client{}, builtinOCR: ocr.NewBuiltinProvider(), metrics: prom, sink: sink, recent: recent, observability: observability, catalog: modelcatalog.NewService(modelcatalog.Options{CachePath: modelCatalogCachePath(cfgPath, cfg)}), clientAdapters: []protocol.ClientAdapter{clientopenai.ChatAdapter{}, clientopenai.ResponsesAdapter{}, clientanthropic.MessagesAdapter{}}, providerAdapters: map[string]protocol.ProviderAdapter{"anthropic": provideranthropic.Provider{}, "openai-compatible": provideropenai.Provider{}}, adminTokenOverride: options.AdminTokenOverride, desktopSessions: options.DesktopSessions, passwordAuth: options.PasswordAuth, desktopController: options.DesktopController}
 	s.snapshot.Store(s.buildSnapshot(cfg))
 	return s
 }
@@ -158,6 +159,10 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/v1/messages", s.handle)
 	mux.Handle("/metrics", s.metrics.Handler())
 	mux.HandleFunc("/healthz", s.healthz)
+	mux.HandleFunc("/auth/status", s.authStatus)
+	mux.HandleFunc("/auth/setup", s.authSetup)
+	mux.HandleFunc("/auth/login", s.authLogin)
+	mux.HandleFunc("/auth/logout", s.authLogout)
 
 	// Admin API endpoints
 	mux.HandleFunc("/admin/playground/v1/chat/completions", s.adminPlayground("/v1/chat/completions"))
