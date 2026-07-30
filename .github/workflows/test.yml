@@ -6,7 +6,29 @@ on:
   pull_request:
     branches: [main, develop]
 
+permissions:
+  contents: read
+
 jobs:
+  frontend-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+      - name: Verify embedded frontend is current
+        run: git diff --exit-code -- internal/runtime/web/dist
+
   go-test:
     runs-on: ubuntu-latest
     strategy:
@@ -87,13 +109,21 @@ jobs:
             fi
           done
 
-          mapfile -t assets < <(find "$asset_dir" -maxdepth 1 -type f | sort)
-          if [[ ${#assets[@]} -ne 8 ]]; then
-            printf 'expected 8 Linux-runner assets, found %d\n' \
-              "${#assets[@]}" >&2
-            printf '%s\n' "${assets[@]}" >&2
-            exit 1
-          fi
+          printf '%s\n' \
+            vibe-proxy_0.0.0-ci_darwin_amd64.tar.gz \
+            vibe-proxy_0.0.0-ci_darwin_arm64.tar.gz \
+            vibe-proxy_0.0.0-ci_linux_amd64.deb \
+            vibe-proxy_0.0.0-ci_linux_amd64.tar.gz \
+            vibe-proxy_0.0.0-ci_linux_arm64.deb \
+            vibe-proxy_0.0.0-ci_linux_arm64.tar.gz \
+            vibe-proxy_0.0.0-ci_windows_amd64.zip \
+            vibe-proxy_0.0.0-ci_windows_arm64.zip \
+            >"$RUNNER_TEMP/release-assets.expected"
+          find "$asset_dir" -maxdepth 1 -type f -exec basename {} \; |
+            LC_ALL=C sort >"$RUNNER_TEMP/release-assets.actual"
+          diff -u \
+            "$RUNNER_TEMP/release-assets.expected" \
+            "$RUNNER_TEMP/release-assets.actual"
 
   release-packaging-macos:
     runs-on: macos-latest
@@ -159,8 +189,12 @@ jobs:
             mounted_dmg=
           done
 
-          dmg_count=$(find "$asset_dir" -maxdepth 1 -type f -name '*.dmg' | wc -l)
-          if [[ "$dmg_count" -ne 2 ]]; then
-            printf 'expected 2 DMGs, found %s\n' "$dmg_count" >&2
-            exit 1
-          fi
+          printf '%s\n' \
+            vibe-proxy_0.0.0-ci_darwin_amd64.dmg \
+            vibe-proxy_0.0.0-ci_darwin_arm64.dmg \
+            >"$RUNNER_TEMP/release-dmgs.expected"
+          find "$asset_dir" -maxdepth 1 -type f -exec basename {} \; |
+            LC_ALL=C sort >"$RUNNER_TEMP/release-dmgs.actual"
+          diff -u \
+            "$RUNNER_TEMP/release-dmgs.expected" \
+            "$RUNNER_TEMP/release-dmgs.actual"

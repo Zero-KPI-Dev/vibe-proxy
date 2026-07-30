@@ -20,6 +20,10 @@ version_without_v=$(release_version_without_v "$version") || {
   printf 'invalid release version: %s\n' "$version" >&2
   exit 2
 }
+debian_version=$version_without_v
+if [[ "$version_without_v" == *-* ]]; then
+  debian_version="${version_without_v%%-*}~${version_without_v#*-}"
+fi
 release_validate_target linux "$goarch" || {
   printf 'unsupported Debian architecture: %s\n' "$goarch" >&2
   exit 2
@@ -52,7 +56,7 @@ mkdir -p \
 
 cat >"$package_root/DEBIAN/control" <<EOF
 Package: vibe-proxy
-Version: $version_without_v
+Version: $debian_version
 Section: utils
 Priority: optional
 Architecture: $goarch

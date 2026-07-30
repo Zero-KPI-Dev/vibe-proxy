@@ -121,8 +121,11 @@ test_deb() {
 
     [[ "$(dpkg-deb --field "$expected_deb" Package)" == vibe-proxy ]] ||
       fail "DEB package name for $arch"
-    [[ "$(dpkg-deb --field "$expected_deb" Version)" == 0.1.0-rc.1 ]] ||
+    [[ "$(dpkg-deb --field "$expected_deb" Version)" == 0.1.0~rc.1 ]] ||
       fail "DEB version for $arch"
+    dpkg --compare-versions \
+      "$(dpkg-deb --field "$expected_deb" Version)" lt 0.1.0 ||
+      fail "DEB release candidate does not sort before stable for $arch"
     [[ "$(dpkg-deb --field "$expected_deb" Architecture)" == "$arch" ]] ||
       fail "DEB architecture for $arch"
 
