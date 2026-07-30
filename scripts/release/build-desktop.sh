@@ -37,6 +37,10 @@ command -v go >/dev/null 2>&1 || {
   printf 'Go is required for native desktop builds\n' >&2
   exit 1
 }
+if [[ "$goos" == windows ]] && ! command -v makensis >/dev/null 2>&1; then
+  printf 'NSIS makensis is required for Windows desktop installers\n' >&2
+  exit 1
+fi
 
 commit=$(git -C "$release_repo_root" rev-parse --short=12 HEAD)
 build_date=$(release_commit_date_utc "$(git -C "$release_repo_root" show -s --format=%ct HEAD)")
