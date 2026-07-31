@@ -18,12 +18,20 @@ type SimpleConfig struct {
 	Server        ServerConfig                  `yaml:"server"`
 	Security      SecurityConfig                `yaml:"security"`
 	Storage       StorageConfig                 `yaml:"storage"`
+	ModelCatalog  ModelCatalogConfig            `yaml:"model_catalog,omitempty"`
 	Multimodal    MultimodalConfig              `yaml:"multimodal,omitempty"`
 	ClientKeys    []ClientKeyConfig             `yaml:"client_keys"`
 	Providers     map[string]ProviderConfig     `yaml:"providers"`
 	Models        ModelsConfig                  `yaml:"models"`
 	AgentProfiles map[string]AgentProfileConfig `yaml:"agent_profiles"`
 	Routes        []AdvancedRouteConfig         `yaml:"routes"`
+}
+
+// ModelCatalogConfig controls optional network access for the advisory
+// models.dev metadata catalog. ProxyURL is deliberately scoped to the catalog;
+// provider traffic keeps using its existing transport configuration.
+type ModelCatalogConfig struct {
+	ProxyURL string `yaml:"proxy_url,omitempty"`
 }
 
 type ProviderConfig struct {
@@ -66,6 +74,7 @@ type RuntimeConfig struct {
 	Server        ServerConfig
 	Security      SecurityConfig
 	Storage       StorageConfig
+	ModelCatalog  ModelCatalogConfig
 	Multimodal    MultimodalConfig
 	ClientKeys    []ClientKeyConfig
 	ModelResolver modelresolver.Config
@@ -140,7 +149,7 @@ func CompileSimple(cfg SimpleConfig) (*RuntimeConfig, error) {
 		}
 		aliases[name] = alias
 	}
-	return &RuntimeConfig{Server: cfg.Server, Security: cfg.Security, Storage: cfg.Storage, Multimodal: cfg.Multimodal, ClientKeys: cfg.ClientKeys, Providers: providers, ModelResolver: modelresolver.Config{DefaultModel: cfg.Models.Default, AllowRaw: cfg.Models.AllowRaw, Aliases: aliases, Providers: resolverProviders}}, nil
+	return &RuntimeConfig{Server: cfg.Server, Security: cfg.Security, Storage: cfg.Storage, ModelCatalog: cfg.ModelCatalog, Multimodal: cfg.Multimodal, ClientKeys: cfg.ClientKeys, Providers: providers, ModelResolver: modelresolver.Config{DefaultModel: cfg.Models.Default, AllowRaw: cfg.Models.AllowRaw, Aliases: aliases, Providers: resolverProviders}}, nil
 }
 
 func CompileLegacy(cfg *Config) *RuntimeConfig {

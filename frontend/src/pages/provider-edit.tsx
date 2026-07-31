@@ -32,7 +32,7 @@ export function ProviderEditPage() {
 
   if (isLoading) {
     return (
-      <div className="max-w-2xl space-y-6">
+      <div className="max-w-4xl space-y-6">
         <Skeleton className="h-8 w-48" />
         <Card>
           <CardContent className="pt-6 space-y-4">
@@ -57,7 +57,7 @@ export function ProviderEditPage() {
   }
 
   return (
-    <div className="max-w-2xl space-y-6">
+    <div className="max-w-4xl space-y-6">
       <div>
         <h1 className="text-2xl font-semibold">{t("providers.editTitle")}</h1>
         <p className="text-sm text-muted-foreground mt-1">

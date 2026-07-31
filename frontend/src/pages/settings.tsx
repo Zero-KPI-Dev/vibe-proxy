@@ -7,7 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { toast } from "sonner"
 import { Database, ExternalLink, FileUp, Languages, Palette, RefreshCw, Shield, Save } from "lucide-react"
 import { desktopApi, setToken, getToken, modelCatalogApi } from "@/lib/api"
-import type { DesktopSnapshot, ModelCatalogState } from "@/lib/types"
+import type { DesktopSnapshot, ModelCatalogProxyState, ModelCatalogState } from "@/lib/types"
 import { normalizeLanguage, setAppLanguage, type AppLanguage } from "@/i18n"
 import { DesktopSettings } from "@/components/desktop-settings"
 import { OCRFallbackSettings } from "@/components/ocr-fallback-settings"
@@ -35,6 +35,9 @@ export function SettingsPage() {
     (localStorage.getItem("vibe_theme") as Theme | null) ?? "dark"
   )
   const [catalog, setCatalog] = useState<ModelCatalogState | null>(null)
+  const [catalogProxy, setCatalogProxy] = useState<ModelCatalogProxyState>({ configured: false })
+  const [catalogProxyInput, setCatalogProxyInput] = useState("")
+  const [catalogProxySaving, setCatalogProxySaving] = useState(false)
   const [catalogLoading, setCatalogLoading] = useState(false)
   const [catalogImporting, setCatalogImporting] = useState(false)
   const catalogFileRef = useRef<HTMLInputElement>(null)
@@ -45,8 +48,27 @@ export function SettingsPage() {
     try {
       const result = await modelCatalogApi.status()
       setCatalog(result.catalog)
+      setCatalogProxy(result.proxy ?? { configured: false })
     } catch {
       // The admin token may not be configured yet. Keep Settings usable.
+    }
+  }
+
+  const handleCatalogProxySave = async (proxyURL: string) => {
+    setCatalogProxySaving(true)
+    try {
+      const result = await modelCatalogApi.updateProxy(proxyURL)
+      setCatalogProxy(result.proxy)
+      setCatalogProxyInput("")
+      toast.success(proxyURL
+        ? t("settings.catalogProxySaved")
+        : t("settings.catalogProxyCleared"))
+    } catch (error) {
+      toast.error(t("settings.catalogProxySaveFailed", {
+        error: error instanceof Error ? error.message : t("common.unknownError"),
+      }))
+    } finally {
+      setCatalogProxySaving(false)
     }
   }
 
@@ -194,6 +216,50 @@ export function SettingsPage() {
           </a>
         </CardHeader>
         <CardContent className="space-y-4">
+          <div className="space-y-3 rounded-lg border border-border bg-muted/20 p-3">
+            <div>
+              <Label htmlFor="catalogProxy">{t("settings.catalogProxy")}</Label>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {catalogProxy.configured
+                  ? t("settings.catalogProxyActive", { url: catalogProxy.display_url })
+                  : t("settings.catalogProxyEnvironment")}
+              </p>
+            </div>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <Input
+                id="catalogProxy"
+                type="password"
+                value={catalogProxyInput}
+                onChange={(event) => setCatalogProxyInput(event.target.value)}
+                placeholder={catalogProxy.configured
+                  ? t("settings.catalogProxyReplacePlaceholder")
+                  : "http://user:password@proxy.example.com:8080"}
+                autoComplete="off"
+                className="min-w-0 flex-1"
+              />
+              <Button
+                type="button"
+                variant="outline"
+                disabled={catalogProxySaving || !catalogProxyInput.trim()}
+                onClick={() => void handleCatalogProxySave(catalogProxyInput.trim())}
+              >
+                {catalogProxySaving ? t("common.saving") : t("common.save")}
+              </Button>
+              {catalogProxy.configured && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  disabled={catalogProxySaving}
+                  onClick={() => void handleCatalogProxySave("")}
+                >
+                  {t("settings.catalogProxyClear")}
+                </Button>
+              )}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {t("settings.catalogProxyHelp")}
+            </p>
+          </div>
           <div className="grid grid-cols-2 gap-3 text-sm">
             <div className="rounded-md border border-border p-3">
               <div className="text-xs text-muted-foreground">{t("settings.catalogModels")}</div>

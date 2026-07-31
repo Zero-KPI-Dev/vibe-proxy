@@ -270,6 +270,17 @@ export interface ModelCatalogState {
 
 export interface ModelCatalogStatusResponse {
   catalog: ModelCatalogState
+  proxy: ModelCatalogProxyState
+}
+
+export interface ModelCatalogProxyState {
+  configured: boolean
+  display_url?: string
+}
+
+export interface ModelCatalogSettingsResponse {
+  ok?: boolean
+  proxy: ModelCatalogProxyState
 }
 
 export interface ModelCatalogRefreshResponse {

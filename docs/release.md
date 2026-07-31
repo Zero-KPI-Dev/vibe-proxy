@@ -217,6 +217,11 @@ export VIBE_PROXY_ADMIN_TOKEN='choose-a-local-admin-token'
   the development key before using the proxy beyond isolated local testing.
 - Provider credentials configured through the UI remain local to the selected
   configuration and database files.
+- If the desktop app cannot reach models.dev on a restricted network, open
+  **Settings → Model capability catalog** and configure an HTTP/HTTPS proxy.
+  Authenticated proxy URLs are supported and credentials are not echoed after
+  saving. Fully offline users can import the official `api.json` from the same
+  card.
 
 By default the SQLite database is created as `vibe-proxy.db` in the process
 working directory. Start `vibe-proxy` from a writable directory that should own

@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -182,6 +183,38 @@ func TestServiceRefreshUsesETagAndDiskCache(t *testing.T) {
 	match := offline.Lookup("openai", "", "", "gpt-vision")
 	if match.ImageInput != SupportSupported {
 		t.Fatalf("offline lookup failed: %#v", match)
+	}
+}
+
+func TestServiceRefreshUsesConfiguredProxy(t *testing.T) {
+	requestedURL := ""
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestedURL = r.URL.String()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, catalogFixture)
+	}))
+	defer proxy.Close()
+
+	service := NewService(Options{
+		SourceURL: "http://catalog.example/api.json",
+		ProxyURL:  proxy.URL,
+	})
+	if err := service.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if requestedURL != "http://catalog.example/api.json" {
+		t.Fatalf("proxy received URL %q", requestedURL)
+	}
+	if state := service.State(); state.Models != 6 || state.Stale {
+		t.Fatalf("unexpected catalog state: %#v", state)
+	}
+}
+
+func TestServiceRejectsInvalidConfiguredProxy(t *testing.T) {
+	service := NewService(Options{ProxyURL: "socks5://proxy.example:1080"})
+	err := service.Refresh(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "invalid model catalog proxy URL") {
+		t.Fatalf("expected invalid proxy error, got %v", err)
 	}
 }
 

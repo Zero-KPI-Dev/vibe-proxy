@@ -14,6 +14,10 @@ assert.match(api, /form\.set\("catalog", file\)/,
   "catalog upload must use the backend catalog form field")
 assert.match(api, /"\/admin\/model-catalog\/import"/,
   "catalog upload must call the offline import endpoint")
+assert.match(api, /"\/admin\/model-catalog\/settings"/,
+  "catalog proxy settings must call the dedicated backend endpoint")
+assert.match(settings, /modelCatalogApi\.updateProxy/,
+  "Settings must allow saving a models.dev proxy")
 assert.match(settings, /accept="\.json,application\/json"/,
   "Settings must limit the offline catalog picker to JSON files")
 assert.match(settings, /file\.size > 10 \* 1024 \* 1024/,

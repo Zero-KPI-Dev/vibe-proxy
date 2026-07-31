@@ -38,7 +38,7 @@ func (s *Server) adminMultimodal(w http.ResponseWriter, r *http.Request) {
 			json.NewEncoder(w).Encode(map[string]any{"error": "invalid_multimodal_config", "message": err.Error()})
 			return
 		}
-		s.snapshot.Store(s.buildSnapshot(next))
+		s.applyRuntimeConfig(next)
 		s.writeJSON(w, map[string]any{"ok": true, "multimodal": multimodalAdminSnapshot(next.Multimodal), "loaded_at": s.current().LoadedAt})
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

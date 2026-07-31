@@ -26,6 +26,9 @@ func ValidateRuntime(cfg *RuntimeConfig) []ValidationIssue {
 	if cfg.Server.Listen == "" {
 		issues = append(issues, issue("error", "server.listen", "missing_listen", "Server listen address is required."))
 	}
+	if proxyURL := strings.TrimSpace(cfg.ModelCatalog.ProxyURL); proxyURL != "" && !isAbsoluteHTTPURL(proxyURL) {
+		issues = append(issues, issue("error", "model_catalog.proxy_url", "invalid_proxy_url", "Model catalog proxy_url must be a valid absolute HTTP or HTTPS URL."))
+	}
 	if len(cfg.Providers) == 0 {
 		issues = append(issues, issue("warning", "providers", "missing_providers", "No providers are configured yet; data-plane requests will fail until one is added."))
 	}

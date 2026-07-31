@@ -137,6 +137,8 @@ Provider credentials are used only for the probe and are never returned.
 
 ```text
 GET  /admin/model-catalog/status
+GET  /admin/model-catalog/settings
+PUT  /admin/model-catalog/settings
 POST /admin/model-catalog/refresh
 POST /admin/model-catalog/import
 POST /admin/model-catalog/lookup
@@ -145,6 +147,13 @@ POST /admin/model-catalog/lookup
 The catalog is downloaded from models.dev into a local cache. Data-plane requests never
 depend on a live models.dev request. `refresh` honors HTTP validators and keeps the last
 usable cache when the remote source is temporarily unavailable.
+
+`PUT /admin/model-catalog/settings` accepts
+`{"proxy_url":"http://user:password@proxy.example.com:8080"}` and applies it
+without restarting vibe-proxy. Send an empty `proxy_url` to clear the explicit
+proxy and return to `HTTP_PROXY` / `HTTPS_PROXY` environment handling. Status
+responses expose only whether a proxy is configured and its credential-free
+origin; usernames and passwords are never returned.
 
 For restricted or fully offline networks, download `https://models.dev/api.json` on
 another machine and import it from Settings, or upload it directly:

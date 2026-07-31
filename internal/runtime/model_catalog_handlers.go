@@ -7,9 +7,11 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
+	"github.com/a448582655/vibe-proxy/internal/config"
 	"github.com/a448582655/vibe-proxy/internal/modelcatalog"
 )
 
@@ -21,7 +23,63 @@ func (s *Server) adminModelCatalogStatus(w http.ResponseWriter, r *http.Request)
 	if !s.adminAuthorize(w, r) {
 		return
 	}
-	s.writeJSON(w, map[string]any{"catalog": s.catalog.State()})
+	s.writeJSON(w, map[string]any{
+		"catalog": s.catalog.State(),
+		"proxy":   modelCatalogProxyView(s.current().Config.ModelCatalog.ProxyURL),
+	})
+}
+
+func (s *Server) adminModelCatalogSettings(w http.ResponseWriter, r *http.Request) {
+	if !s.adminAuthorize(w, r) {
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		s.writeJSON(w, map[string]any{
+			"proxy": modelCatalogProxyView(s.current().Config.ModelCatalog.ProxyURL),
+		})
+	case http.MethodPut:
+		if s.cfgPath == "" {
+			s.writeJSONError(w, http.StatusBadRequest, "config path not writable")
+			return
+		}
+		var input struct {
+			ProxyURL string `json:"proxy_url"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+			s.writeJSONError(w, http.StatusBadRequest, "invalid json")
+			return
+		}
+		next, err := config.UpdateModelCatalogProxy(s.cfgPath, input.ProxyURL)
+		if err != nil {
+			s.writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		s.applyRuntimeConfig(next)
+		s.writeJSON(w, map[string]any{
+			"ok":    true,
+			"proxy": modelCatalogProxyView(next.ModelCatalog.ProxyURL),
+		})
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func modelCatalogProxyView(raw string) map[string]any {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return map[string]any{"configured": false}
+	}
+	display := raw
+	if parsed, err := url.Parse(raw); err == nil && parsed.Host != "" {
+		parsed.User = nil
+		parsed.Path = ""
+		parsed.RawPath = ""
+		parsed.RawQuery = ""
+		parsed.Fragment = ""
+		display = parsed.String()
+	}
+	return map[string]any{"configured": true, "display_url": display}
 }
 
 func (s *Server) adminModelCatalogRefresh(w http.ResponseWriter, r *http.Request) {

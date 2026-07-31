@@ -85,7 +85,7 @@ func NewWithOptions(cfgPath string, cfg *config.RuntimeConfig, sink telemetry.Ev
 		observability = provider.ObservabilityReader()
 	}
 	s := &Server{cfgPath: cfgPath, startedAt: time.Now(), authenticator: auth.NewAuthenticator(), httpClient: &http.Client{Timeout: 0}, ocrHTTPClient: &http.Client{}, builtinOCR: ocr.NewBuiltinProvider(), metrics: prom, sink: sink, recent: recent, observability: observability, catalog: modelcatalog.NewService(modelcatalog.Options{CachePath: modelCatalogCachePath(cfgPath, cfg)}), clientAdapters: []protocol.ClientAdapter{clientopenai.ChatAdapter{}, clientopenai.ResponsesAdapter{}, clientanthropic.MessagesAdapter{}}, providerAdapters: map[string]protocol.ProviderAdapter{"anthropic": provideranthropic.Provider{}, "openai-compatible": provideropenai.Provider{}}, adminTokenOverride: options.AdminTokenOverride, desktopSessions: options.DesktopSessions, passwordAuth: options.PasswordAuth, desktopController: options.DesktopController}
-	s.snapshot.Store(s.buildSnapshot(cfg))
+	s.applyRuntimeConfig(cfg)
 	return s
 }
 
@@ -116,6 +116,15 @@ func modelCatalogCachePath(cfgPath string, cfg *config.RuntimeConfig) string {
 		return ""
 	}
 	return cfg.Storage.SQLitePath + ".models-dev.json"
+}
+
+func (s *Server) applyRuntimeConfig(cfg *config.RuntimeConfig) {
+	if s.catalog != nil {
+		// The URL has already passed configuration validation. Keep catalog
+		// networking in sync with raw-config reloads and admin mutations.
+		_ = s.catalog.SetProxyURL(cfg.ModelCatalog.ProxyURL)
+	}
+	s.snapshot.Store(s.buildSnapshot(cfg))
 }
 
 func (s *Server) buildSnapshot(cfg *config.RuntimeConfig) *Snapshot {
@@ -180,6 +189,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/admin/providers/models", s.adminProviderModels)
 	mux.HandleFunc("/admin/providers/health", s.adminProviderHealth)
 	mux.HandleFunc("/admin/model-catalog/status", s.adminModelCatalogStatus)
+	mux.HandleFunc("/admin/model-catalog/settings", s.adminModelCatalogSettings)
 	mux.HandleFunc("/admin/model-catalog/refresh", s.adminModelCatalogRefresh)
 	mux.HandleFunc("/admin/model-catalog/import", s.adminModelCatalogImport)
 	mux.HandleFunc("/admin/model-catalog/lookup", s.adminModelCatalogLookup)
@@ -504,7 +514,7 @@ func (s *Server) reloadRuntimeConfig(w http.ResponseWriter) bool {
 		s.writeJSONStatus(w, http.StatusBadRequest, map[string]any{"error": "invalid configuration", "issues": issues})
 		return false
 	}
-	s.snapshot.Store(s.buildSnapshot(cfg))
+	s.applyRuntimeConfig(cfg)
 	return true
 }
 func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
@@ -737,7 +747,7 @@ func (s *Server) adminLocalConfigure(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 400)
 		return
 	}
-	s.snapshot.Store(s.buildSnapshot(next))
+	s.applyRuntimeConfig(next)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{"ok": true, "loaded_at": s.current().LoadedAt, "issues": config.ValidateRuntime(next)})
 }

@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -19,6 +21,7 @@ const MaxCatalogBytes = 10 << 20
 type Options struct {
 	SourceURL string
 	CachePath string
+	ProxyURL  string
 	Client    *http.Client
 }
 
@@ -42,7 +45,17 @@ func NewService(opts Options) *Service {
 		opts.SourceURL = DefaultSourceURL
 	}
 	if opts.Client == nil {
-		opts.Client = &http.Client{Timeout: 15 * time.Second}
+		client, err := clientForProxy(opts.ProxyURL)
+		if err != nil {
+			// Runtime configuration validation rejects invalid proxy URLs. Keep
+			// construction total for direct package callers and surface the
+			// problem when they attempt a refresh.
+			client = &http.Client{
+				Timeout:   15 * time.Second,
+				Transport: roundTripError{err: err},
+			}
+		}
+		opts.Client = client
 	}
 	s := &Service{sourceURL: opts.SourceURL, cachePath: opts.CachePath, client: opts.Client}
 	s.value.Store(emptySnapshot(opts.SourceURL))
@@ -52,8 +65,21 @@ func NewService(opts Options) *Service {
 
 func (s *Service) SetHTTPClient(client *http.Client) {
 	if client != nil {
+		s.refreshMu.Lock()
 		s.client = client
+		s.refreshMu.Unlock()
 	}
+}
+
+// SetProxyURL updates catalog network access without restarting the gateway.
+// Empty uses Go's normal HTTP_PROXY/HTTPS_PROXY/NO_PROXY environment handling.
+func (s *Service) SetProxyURL(raw string) error {
+	client, err := clientForProxy(raw)
+	if err != nil {
+		return err
+	}
+	s.SetHTTPClient(client)
+	return nil
 }
 
 func (s *Service) Snapshot() *Snapshot { return s.value.Load() }
@@ -62,6 +88,27 @@ func (s *Service) State() State { return s.Snapshot().State() }
 
 func (s *Service) Lookup(providerHint, vibeProviderID, baseURL, modelID string) Match {
 	return s.Snapshot().Lookup(providerHint, vibeProviderID, baseURL, modelID)
+}
+
+func clientForProxy(raw string) (*http.Client, error) {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		transport.Proxy = http.ProxyFromEnvironment
+	} else {
+		proxyURL, err := url.Parse(raw)
+		if err != nil || proxyURL.Host == "" || (proxyURL.Scheme != "http" && proxyURL.Scheme != "https") {
+			return nil, fmt.Errorf("invalid model catalog proxy URL")
+		}
+		transport.Proxy = http.ProxyURL(proxyURL)
+	}
+	return &http.Client{Timeout: 15 * time.Second, Transport: transport}, nil
+}
+
+type roundTripError struct{ err error }
+
+func (r roundTripError) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, r.err
 }
 
 func (s *Service) Ensure(ctx context.Context, maxAge time.Duration) error {

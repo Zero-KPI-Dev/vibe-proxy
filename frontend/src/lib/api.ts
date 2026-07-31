@@ -16,6 +16,7 @@ import type {
   RawConfigResponse,
   ConfigValidationIssue,
   ModelCatalogRefreshResponse,
+  ModelCatalogSettingsResponse,
   ModelCatalogStatusResponse,
   ModelCatalogLookupResponse,
   MultimodalAdminConfig,
@@ -109,6 +110,11 @@ export const providerApi = {
 
 export const modelCatalogApi = {
   status: () => request<ModelCatalogStatusResponse>("/admin/model-catalog/status"),
+  updateProxy: (proxy_url: string) =>
+    request<ModelCatalogSettingsResponse>("/admin/model-catalog/settings", {
+      method: "PUT",
+      body: JSON.stringify({ proxy_url }),
+    }),
   refresh: () =>
     request<ModelCatalogRefreshResponse>("/admin/model-catalog/refresh", {
       method: "POST",
