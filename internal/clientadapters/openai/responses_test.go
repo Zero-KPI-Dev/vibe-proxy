@@ -93,3 +93,37 @@ func TestEncodeResponsesStreamAddsFunctionCallItem(t *testing.T) {
 		t.Fatalf("function call stream was not encoded: %s", body)
 	}
 }
+
+func TestEncodeResponsesDoesNotExposeRawReasoningAsOutputText(t *testing.T) {
+	response := &ir.Response{Messages: []ir.Message{{
+		Role: ir.RoleAssistant,
+		Content: []ir.ContentBlock{
+			{Type: ir.ContentReasoning, Text: "private reasoning"},
+			{Type: ir.ContentText, Text: "final answer"},
+		},
+	}}}
+	recorder := httptest.NewRecorder()
+	if err := (ResponsesAdapter{}).EncodeUnary(context.Background(), recorder, response); err != nil {
+		t.Fatal(err)
+	}
+	body := recorder.Body.String()
+	if !strings.Contains(body, `"text":"final answer"`) || strings.Contains(body, "private reasoning") {
+		t.Fatalf("raw reasoning leaked into Responses output: %s", body)
+	}
+}
+
+func TestEncodeResponsesStreamDoesNotExposeReasoningAsOutputText(t *testing.T) {
+	events := make(chan ir.StreamEvent, 3)
+	events <- ir.StreamEvent{Type: ir.EventReasoningDelta, Delta: ir.ContentBlock{Type: ir.ContentReasoning, Text: "private reasoning"}}
+	events <- ir.StreamEvent{Type: ir.EventContentDelta, Delta: ir.ContentBlock{Type: ir.ContentText, Text: "final answer"}}
+	events <- ir.StreamEvent{Type: ir.EventMessageDone}
+	close(events)
+	recorder := httptest.NewRecorder()
+	if err := (ResponsesAdapter{}).EncodeStream(context.Background(), recorder, events); err != nil {
+		t.Fatal(err)
+	}
+	body := recorder.Body.String()
+	if !strings.Contains(body, `"delta":"final answer"`) || strings.Contains(body, "private reasoning") {
+		t.Fatalf("raw reasoning leaked into Responses stream: %s", body)
+	}
+}

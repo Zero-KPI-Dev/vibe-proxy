@@ -226,7 +226,7 @@ func onlyText(blocks []ir.ContentBlock) bool {
 func flatten(blocks []ir.ContentBlock) string {
 	var sb strings.Builder
 	for _, b := range blocks {
-		if b.Type == ir.ContentText || b.Type == ir.ContentReasoning {
+		if b.Type == ir.ContentText {
 			sb.WriteString(b.Text)
 		}
 	}

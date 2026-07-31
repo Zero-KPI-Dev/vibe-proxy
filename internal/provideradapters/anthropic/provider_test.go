@@ -32,6 +32,37 @@ func TestBuildAnthropicRequest(t *testing.T) {
 	}
 }
 
+func TestBuildAnthropicRequestDoesNotReplayReasoningAsText(t *testing.T) {
+	req := &ir.Request{
+		ResolvedModel: "claude-test",
+		Messages: []ir.Message{{
+			Role: ir.RoleAssistant,
+			Content: []ir.ContentBlock{
+				{Type: ir.ContentReasoning, Text: "private reasoning"},
+				{Type: ir.ContentText, Text: "visible answer"},
+			},
+		}},
+	}
+
+	hreq, err := Provider{}.BuildRequest(context.Background(), req, modelresolver.Target{
+		BaseURL: "https://api.anthropic.com",
+		Model:   "claude-test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(hreq.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), "private reasoning") {
+		t.Fatalf("reasoning leaked into Anthropic request body: %s", body)
+	}
+	if !strings.Contains(string(body), `"text":"visible answer"`) {
+		t.Fatalf("visible answer missing from Anthropic request body: %s", body)
+	}
+}
+
 func TestParseAnthropicUnary(t *testing.T) {
 	resp := &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"id":"msg_1","model":"claude-test","stop_reason":"tool_use","content":[{"type":"thinking","thinking":"think"},{"type":"text","text":"hi"},{"type":"tool_use","id":"toolu_1","name":"lookup","input":{"q":"vibe"}}],"usage":{"input_tokens":3,"output_tokens":4,"cache_read_input_tokens":1,"cache_creation_input_tokens":2}}`))}
 	out, err := Provider{}.ParseUnary(context.Background(), resp)

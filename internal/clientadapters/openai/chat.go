@@ -54,13 +54,18 @@ func (a ChatAdapter) ParseRequest(ctx context.Context, r *http.Request) (*ir.Req
 
 func (a ChatAdapter) EncodeUnary(ctx context.Context, w http.ResponseWriter, resp *ir.Response) error {
 	content := ""
+	reasoning := ""
 	var toolCalls []any
 	if len(resp.Messages) > 0 {
 		blocks := resp.Messages[len(resp.Messages)-1].Content
-		content = flattenText(blocks)
+		content = contentText(blocks)
+		reasoning = reasoningText(blocks)
 		toolCalls = openAIToolCalls(blocks)
 	}
 	message := map[string]any{"role": "assistant", "content": content}
+	if reasoning != "" {
+		message["reasoning_content"] = reasoning
+	}
 	if len(toolCalls) > 0 {
 		message["tool_calls"] = toolCalls
 		if content == "" {
@@ -101,12 +106,20 @@ func (a ChatAdapter) EncodeStream(ctx context.Context, w http.ResponseWriter, ev
 				if ev.MessageID != "" {
 					id = ev.MessageID
 				}
-			case ir.EventContentDelta, ir.EventReasoningDelta:
+			case ir.EventContentDelta:
 				text := ev.Delta.Text
 				if text == "" {
 					continue
 				}
 				writeSSE(w, streamChunk(id, created, model, text, ""))
+				if flusher != nil {
+					flusher.Flush()
+				}
+			case ir.EventReasoningDelta:
+				if ev.Delta.Text == "" {
+					continue
+				}
+				writeSSE(w, reasoningStreamChunk(id, created, model, ev.Delta.Text))
 				if flusher != nil {
 					flusher.Flush()
 				}
@@ -191,10 +204,19 @@ func openAIContentToIR(content any) []ir.ContentBlock {
 	}
 }
 
-func flattenText(blocks []ir.ContentBlock) string {
+func contentText(blocks []ir.ContentBlock) string {
 	var b strings.Builder
 	for _, c := range blocks {
-		if c.Type == ir.ContentText || c.Type == ir.ContentReasoning {
+		if c.Type == ir.ContentText {
+			b.WriteString(c.Text)
+		}
+	}
+	return b.String()
+}
+func reasoningText(blocks []ir.ContentBlock) string {
+	var b strings.Builder
+	for _, c := range blocks {
+		if c.Type == ir.ContentReasoning {
 			b.WriteString(c.Text)
 		}
 	}
@@ -285,6 +307,12 @@ func streamChunk(id string, created int64, model, text, finish string) map[strin
 		choice["finish_reason"] = finish
 	}
 	return map[string]any{"id": id, "object": "chat.completion.chunk", "created": created, "model": model, "choices": []any{choice}}
+}
+func reasoningStreamChunk(id string, created int64, model, text string) map[string]any {
+	return map[string]any{
+		"id": id, "object": "chat.completion.chunk", "created": created, "model": model,
+		"choices": []any{map[string]any{"index": 0, "delta": map[string]any{"reasoning_content": text}, "finish_reason": nil}},
+	}
 }
 func toolChunk(id string, created int64, model string, tc *ir.ToolCall) map[string]any {
 	delta := map[string]any{}

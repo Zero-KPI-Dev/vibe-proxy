@@ -124,6 +124,34 @@ func TestRuntimeOpenAIChatToOpenAICompatible(t *testing.T) {
 	}
 }
 
+func TestRuntimeDoesNotMergeUpstreamReasoningIntoVisibleContent(t *testing.T) {
+	s := newTestServer(t, func(r *http.Request) (*http.Response, error) {
+		return jsonResponse(200, `{"id":"chatcmpl_reasoning","model":"raw-chat","choices":[{"message":{"role":"assistant","reasoning_content":"private chain of thought","content":"final answer"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":2,"total_tokens":3}}`), nil
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"vibe-fast","messages":[{"role":"user","content":"hi"}]}`))
+	req.Header.Set("Authorization", "Bearer vibe-local-dev-key")
+	w := httptest.NewRecorder()
+	s.Routes().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("unexpected response: %d %s", w.Code, w.Body.String())
+	}
+	var payload struct {
+		Choices []struct {
+			Message struct {
+				Content          string `json:"content"`
+				ReasoningContent string `json:"reasoning_content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	message := payload.Choices[0].Message
+	if message.Content != "final answer" || message.ReasoningContent != "private chain of thought" {
+		t.Fatalf("reasoning leaked into normal content: %s", w.Body.String())
+	}
+}
+
 func TestRuntimeAdminPlaygroundUsesFullPipelineWithoutDataPlaneKey(t *testing.T) {
 	t.Setenv("VIBE_PROXY_ADMIN_TOKEN", "admin-token")
 	cfg, err := config.CompileSimple(config.SimpleConfig{

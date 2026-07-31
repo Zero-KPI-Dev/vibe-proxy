@@ -94,7 +94,7 @@ func (a MessagesAdapter) EncodeStream(ctx context.Context, w http.ResponseWriter
 				return *ev.Error
 			}
 			switch ev.Type {
-			case ir.EventContentDelta, ir.EventReasoningDelta:
+			case ir.EventContentDelta:
 				if ev.Delta.Text == "" {
 					continue
 				}
@@ -106,6 +106,19 @@ func (a MessagesAdapter) EncodeStream(ctx context.Context, w http.ResponseWriter
 					writeEvent(w, "content_block_start", map[string]any{"type": "content_block_start", "index": activeBlockIndex, "content_block": map[string]any{"type": "text", "text": ""}})
 				}
 				writeEvent(w, "content_block_delta", map[string]any{"type": "content_block_delta", "index": activeBlockIndex, "delta": map[string]any{"type": "text_delta", "text": ev.Delta.Text}})
+				flush(flusher)
+			case ir.EventReasoningDelta:
+				if ev.Delta.Text == "" {
+					continue
+				}
+				if activeBlockType != "thinking" {
+					closeActiveBlock()
+					activeBlockIndex = nextBlockIndex
+					nextBlockIndex++
+					activeBlockType = "thinking"
+					writeEvent(w, "content_block_start", map[string]any{"type": "content_block_start", "index": activeBlockIndex, "content_block": map[string]any{"type": "thinking", "thinking": ""}})
+				}
+				writeEvent(w, "content_block_delta", map[string]any{"type": "content_block_delta", "index": activeBlockIndex, "delta": map[string]any{"type": "thinking_delta", "thinking": ev.Delta.Text}})
 				flush(flusher)
 			case ir.EventToolCallStart, ir.EventToolCallDelta:
 				if ev.ToolCall == nil {

@@ -212,8 +212,16 @@ func toBlocks(blocks []ir.ContentBlock) []contentBlock {
 	out := []contentBlock{}
 	for _, b := range blocks {
 		switch b.Type {
-		case ir.ContentText, ir.ContentReasoning:
+		case ir.ContentText:
 			out = append(out, contentBlock{Type: "text", Text: b.Text})
+		case ir.ContentReasoning:
+			// Reasoning captured from an earlier response is not ordinary
+			// conversation text. Replaying it as a text block both exposes
+			// private reasoning and changes the meaning of the next request.
+			// Anthropic thinking blocks require provider-owned metadata such as
+			// signatures, so omit untrusted IR reasoning instead of fabricating
+			// a replayable thinking block.
+			continue
 		case ir.ContentImage:
 			if b.Image != nil {
 				src := &source{Type: "base64", MediaType: b.Image.MediaType, Data: b.Image.Base64}

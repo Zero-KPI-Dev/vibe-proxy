@@ -3,6 +3,7 @@ package multimodal
 import (
 	"context"
 	"encoding/base64"
+	"strings"
 	"testing"
 	"time"
 
@@ -70,6 +71,22 @@ func TestRouteDecisionMatrixSkeleton(t *testing.T) {
 	route.AdapterCapabilities.Vision = false
 	if got := processor.Decide(imageRequest(), route); got.Mode != RouteRejected || got.Reason != "image_transport_unsupported" {
 		t.Fatalf("adapter without image transport should reject: %+v", got)
+	}
+}
+
+func TestProcessorDoesNotInjectOCRPromptIntoTextOnlyRequest(t *testing.T) {
+	processor := &Processor{Enabled: true, OCR: &fakeOCRProvider{confidence: 0.9}}
+	req := &ir.Request{Messages: []ir.Message{{
+		Role:    ir.RoleUser,
+		Content: []ir.ContentBlock{{Type: ir.ContentText, Text: "normal text request"}},
+	}}}
+	result, err := processor.Prepare(context.Background(), req, preprocess.RouteContext{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Request != req || len(result.Request.Messages) != 1 ||
+		strings.Contains(result.Request.Messages[0].Content[0].Text, "vibe-proxy-ocr") {
+		t.Fatalf("text-only request was modified: %+v", result.Request.Messages)
 	}
 }
 

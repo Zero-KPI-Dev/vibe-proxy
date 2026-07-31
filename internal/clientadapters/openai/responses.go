@@ -50,7 +50,7 @@ func (a ResponsesAdapter) EncodeUnary(ctx context.Context, w http.ResponseWriter
 	var blocks []ir.ContentBlock
 	if len(resp.Messages) > 0 {
 		blocks = resp.Messages[len(resp.Messages)-1].Content
-		text = flattenText(blocks)
+		text = contentText(blocks)
 	}
 	id := resp.ID
 	if id == "" {
@@ -101,7 +101,7 @@ func (a ResponsesAdapter) EncodeStream(ctx context.Context, w http.ResponseWrite
 				return *ev.Error
 			}
 			switch ev.Type {
-			case ir.EventContentDelta, ir.EventReasoningDelta:
+			case ir.EventContentDelta:
 				if ev.Delta.Text == "" {
 					continue
 				}
