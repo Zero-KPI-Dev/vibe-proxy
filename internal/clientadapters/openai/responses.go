@@ -52,11 +52,22 @@ func (a ResponsesAdapter) EncodeUnary(ctx context.Context, w http.ResponseWriter
 		blocks = resp.Messages[len(resp.Messages)-1].Content
 		text = contentText(blocks)
 	}
+	reasoning := reasoningText(blocks)
 	id := resp.ID
 	if id == "" {
 		id = "resp_" + uuid.NewString()
 	}
 	output := []any{}
+	if reasoning != "" {
+		output = append(output, map[string]any{
+			"id":     "rs_" + uuid.NewString(),
+			"type":   "reasoning",
+			"status": "completed",
+			"summary": []any{
+				map[string]any{"type": "summary_text", "text": reasoning},
+			},
+		})
+	}
 	toolCalls := responseToolCalls(blocks)
 	if text != "" || len(toolCalls) == 0 {
 		output = append(output, map[string]any{"id": "msg_" + uuid.NewString(), "type": "message", "status": "completed", "role": "assistant", "content": []any{map[string]any{"type": "output_text", "text": text, "annotations": []any{}}}})
@@ -77,6 +88,10 @@ func (a ResponsesAdapter) EncodeStream(ctx context.Context, w http.ResponseWrite
 	flushOpenAI(flusher)
 	messageAdded := false
 	messageIndex := -1
+	reasoningAdded := false
+	reasoningIndex := -1
+	reasoningID := "rs_" + uuid.NewString()
+	var reasoning strings.Builder
 	nextOutputIndex := 0
 	type functionItem struct {
 		OutputIndex int
@@ -101,6 +116,28 @@ func (a ResponsesAdapter) EncodeStream(ctx context.Context, w http.ResponseWrite
 				return *ev.Error
 			}
 			switch ev.Type {
+			case ir.EventReasoningDelta:
+				if ev.Delta.Text == "" {
+					continue
+				}
+				if !reasoningAdded {
+					reasoningIndex = nextOutputIndex
+					nextOutputIndex++
+					reasoningAdded = true
+					writeResponsesEvent(w, "response.output_item.added", map[string]any{
+						"type":         "response.output_item.added",
+						"output_index": reasoningIndex,
+						"item": map[string]any{
+							"id": reasoningID, "type": "reasoning", "status": "in_progress", "summary": []any{},
+						},
+					})
+				}
+				reasoning.WriteString(ev.Delta.Text)
+				writeResponsesEvent(w, "response.reasoning_summary_text.delta", map[string]any{
+					"type": "response.reasoning_summary_text.delta", "item_id": reasoningID,
+					"output_index": reasoningIndex, "summary_index": 0, "delta": ev.Delta.Text,
+				})
+				flushOpenAI(flusher)
 			case ir.EventContentDelta:
 				if ev.Delta.Text == "" {
 					continue
@@ -144,10 +181,19 @@ func (a ResponsesAdapter) EncodeStream(ctx context.Context, w http.ResponseWrite
 					flushOpenAI(flusher)
 				}
 			case ir.EventMessageDone:
-				if !messageAdded && len(functionOrder) == 0 {
+				if !messageAdded && !reasoningAdded && len(functionOrder) == 0 {
 					messageIndex = nextOutputIndex
 					messageAdded = true
 					writeResponsesEvent(w, "response.output_item.added", map[string]any{"type": "response.output_item.added", "output_index": messageIndex, "item": map[string]any{"id": itemID, "type": "message", "status": "in_progress", "role": "assistant", "content": []any{}}})
+				}
+				if reasoningAdded {
+					writeResponsesEvent(w, "response.output_item.done", map[string]any{
+						"type": "response.output_item.done", "output_index": reasoningIndex,
+						"item": map[string]any{
+							"id": reasoningID, "type": "reasoning", "status": "completed",
+							"summary": []any{map[string]any{"type": "summary_text", "text": reasoning.String()}},
+						},
+					})
 				}
 				if messageAdded {
 					writeResponsesEvent(w, "response.output_item.done", map[string]any{"type": "response.output_item.done", "output_index": messageIndex, "item": map[string]any{"id": itemID, "type": "message", "status": "completed", "role": "assistant"}})

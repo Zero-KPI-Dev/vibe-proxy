@@ -296,6 +296,7 @@
     "selectModelFirst": "Select a model first...",
     "stopped": "[Stopped]",
     "requestError": "Error: {{error}}",
+    "reasoning": "Reasoning",
     "attachImage": "Attach image",
     "image": "Image",
     "pasteImageHint": "Paste screenshots directly",

@@ -296,6 +296,7 @@
     "selectModelFirst": "请先选择模型...",
     "stopped": "[已停止]",
     "requestError": "错误：{{error}}",
+    "reasoning": "思考过程",
     "attachImage": "附加图片",
     "image": "图片",
     "pasteImageHint": "可直接粘贴截图",

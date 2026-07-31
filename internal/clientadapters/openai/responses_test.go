@@ -94,7 +94,7 @@ func TestEncodeResponsesStreamAddsFunctionCallItem(t *testing.T) {
 	}
 }
 
-func TestEncodeResponsesDoesNotExposeRawReasoningAsOutputText(t *testing.T) {
+func TestEncodeResponsesKeepsReasoningSeparateFromOutputText(t *testing.T) {
 	response := &ir.Response{Messages: []ir.Message{{
 		Role: ir.RoleAssistant,
 		Content: []ir.ContentBlock{
@@ -107,12 +107,16 @@ func TestEncodeResponsesDoesNotExposeRawReasoningAsOutputText(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := recorder.Body.String()
-	if !strings.Contains(body, `"text":"final answer"`) || strings.Contains(body, "private reasoning") {
-		t.Fatalf("raw reasoning leaked into Responses output: %s", body)
+	if !strings.Contains(body, `"type":"reasoning"`) ||
+		!strings.Contains(body, `"type":"summary_text"`) ||
+		!strings.Contains(body, `"text":"private reasoning"`) ||
+		!strings.Contains(body, `"type":"output_text"`) ||
+		!strings.Contains(body, `"text":"final answer"`) {
+		t.Fatalf("reasoning was not encoded separately from output text: %s", body)
 	}
 }
 
-func TestEncodeResponsesStreamDoesNotExposeReasoningAsOutputText(t *testing.T) {
+func TestEncodeResponsesStreamKeepsReasoningSeparateFromOutputText(t *testing.T) {
 	events := make(chan ir.StreamEvent, 3)
 	events <- ir.StreamEvent{Type: ir.EventReasoningDelta, Delta: ir.ContentBlock{Type: ir.ContentReasoning, Text: "private reasoning"}}
 	events <- ir.StreamEvent{Type: ir.EventContentDelta, Delta: ir.ContentBlock{Type: ir.ContentText, Text: "final answer"}}
@@ -123,7 +127,10 @@ func TestEncodeResponsesStreamDoesNotExposeReasoningAsOutputText(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := recorder.Body.String()
-	if !strings.Contains(body, `"delta":"final answer"`) || strings.Contains(body, "private reasoning") {
-		t.Fatalf("raw reasoning leaked into Responses stream: %s", body)
+	if !strings.Contains(body, `event: response.reasoning_summary_text.delta`) ||
+		!strings.Contains(body, `"delta":"private reasoning"`) ||
+		!strings.Contains(body, `event: response.output_text.delta`) ||
+		!strings.Contains(body, `"delta":"final answer"`) {
+		t.Fatalf("reasoning stream was not encoded separately from output text: %s", body)
 	}
 }

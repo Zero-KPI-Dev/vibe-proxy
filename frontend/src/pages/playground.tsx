@@ -55,7 +55,9 @@ import {
   buildPlaygroundBody,
   clipboardImageFiles,
   streamDelta,
+  streamReasoningDelta,
   unaryText,
+  unaryReasoning,
   type PlaygroundEndpoint,
   type PlaygroundImage,
   type PlaygroundMessage,
@@ -349,11 +351,16 @@ export function PlaygroundPage() {
               try {
                 const parsed = JSON.parse(data) as Record<string, any>
                 const delta = streamDelta(endpoint, parsed)
-                if (delta) {
+                const reasoningDelta = streamReasoningDelta(endpoint, parsed)
+                if (delta || reasoningDelta) {
                   setMessages((prev) =>
                     prev.map((m) =>
                       m.id === assistantMsg.id
-                        ? { ...m, content: m.content + delta }
+                        ? {
+                            ...m,
+                            content: m.content + delta,
+                            reasoning: (m.reasoning ?? "") + reasoningDelta,
+                          }
                         : m
                     )
                   )
@@ -368,9 +375,10 @@ export function PlaygroundPage() {
         const json = await resp.json()
         setRawJson(JSON.stringify(json, null, 2))
         const content = unaryText(endpoint, json)
+        const reasoning = unaryReasoning(endpoint, json)
         setMessages((prev) =>
           prev.map((m) =>
-            m.id === assistantMsg.id ? { ...m, content } : m
+            m.id === assistantMsg.id ? { ...m, content, reasoning } : m
           )
         )
       }
@@ -659,6 +667,7 @@ export function PlaygroundPage() {
                 key={msg.id}
                 role={msg.role}
                 content={msg.content}
+                reasoning={msg.reasoning}
                 images={msg.images}
               />
             ))}
