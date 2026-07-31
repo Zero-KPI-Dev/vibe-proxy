@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -36,7 +37,7 @@ func TestPasswordAuthInitializesPersistsAndVerifiesWithoutPlaintext(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := info.Mode().Perm(); got != 0o600 {
+	if got := info.Mode().Perm(); runtime.GOOS != "windows" && got != 0o600 {
 		t.Fatalf("password file permissions = %#o, want 0600", got)
 	}
 	data, err := os.ReadFile(path)
@@ -55,18 +56,20 @@ func TestPasswordAuthInitializesPersistsAndVerifiesWithoutPlaintext(t *testing.T
 		t.Fatal("reloaded password store did not verify the password")
 	}
 
-	if err := os.Chmod(path, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := NewPasswordAuth(path); err != nil {
-		t.Fatal(err)
-	}
-	info, err = os.Stat(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := info.Mode().Perm(); got != 0o600 {
-		t.Fatalf("reloaded password file permissions = %#o, want 0600", got)
+	if runtime.GOOS != "windows" {
+		if err := os.Chmod(path, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := NewPasswordAuth(path); err != nil {
+			t.Fatal(err)
+		}
+		info, err = os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := info.Mode().Perm(); got != 0o600 {
+			t.Fatalf("reloaded password file permissions = %#o, want 0600", got)
+		}
 	}
 }
 
