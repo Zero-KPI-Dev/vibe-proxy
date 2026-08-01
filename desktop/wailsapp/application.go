@@ -47,8 +47,9 @@ func Run(ctx context.Context) error {
 
 	var mainWindow *application.WebviewWindow
 	nativeApp := application.New(application.Options{
-		Name:   "Vibe Proxy",
-		Assets: application.AssetOptions{Handler: http.NotFoundHandler()},
+		Name:         "Vibe Proxy",
+		ErrorHandler: NativeErrorHandler(paths),
+		Assets:       application.AssetOptions{Handler: http.NotFoundHandler()},
 		SingleInstance: &application.SingleInstanceOptions{
 			UniqueID: uniqueInstanceID,
 			OnSecondInstanceLaunch: func(application.SecondInstanceData) {
