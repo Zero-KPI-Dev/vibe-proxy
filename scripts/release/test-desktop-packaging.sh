@@ -21,7 +21,7 @@ for path in \
   require_file "$path"
 done
 
-require_text desktop/go.mod 'github.com/wailsapp/wails/v3 v3.0.0-alpha2.117'
+require_text desktop/go.mod 'github.com/wailsapp/wails/v3 v3.0.0-alpha2.118'
 require_text desktop/build/config.yml 'productIdentifier: io.vibeproxy.desktop'
 require_text desktop/build/darwin/Info.plist '<string>io.vibeproxy.desktop</string>'
 require_text desktop/build/windows/Taskfile.yml '-H windowsgui'
@@ -61,7 +61,7 @@ require_text docs/release.md 'auth.json'
 require_text docs/release.md 'SmartScreen'
 require_text docs/release.md 'Gatekeeper'
 require_text docs/release.md 'requires code signing and macOS notarization'
-require_text docs/development.md 'Wails v3.0.0-alpha2.117'
+require_text docs/development.md 'Wails v3.0.0-alpha2.118'
 require_text docs/development.md 'Docker is useful'
 require_text docs/admin-api.md '/desktop/bootstrap/{nonce}'
 require_text docs/admin-api.md 'POST /auth/setup'

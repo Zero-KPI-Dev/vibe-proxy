@@ -28,12 +28,12 @@ CGO_ENABLED=0 go test ./app/... ./wailsapp
 ## Native Desktop Development
 
 Desktop builds pin **Go 1.26.5**, **Node.js 22**, and
-**Wails v3.0.0-alpha2.117**. Windows also needs Microsoft WebView2 and NSIS;
+**Wails v3.0.0-alpha2.118**. Windows also needs Microsoft WebView2 and NSIS;
 macOS needs Xcode Command Line Tools. Use the exact pinned CLI:
 
 ```bash
 cd desktop
-go run github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-alpha2.117 \
+go run github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-alpha2.118 \
   build GOOS=darwin GOARCH="$(go env GOARCH)" ARCH="$(go env GOARCH)" \
   VERSION=v0.0.0-dev
 ```

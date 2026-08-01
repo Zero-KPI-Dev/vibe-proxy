@@ -67,6 +67,10 @@ func Run(ctx context.Context) error {
 		Width: preferences.Window.Width, Height: preferences.Window.Height,
 		MinWidth: windowContract.MinWidth, MinHeight: windowContract.MinHeight,
 		Hidden: true,
+		HTML:   "<!doctype html><html><head><title>Vibe Proxy</title></head><body></body></html>",
+		// Wails' inline-event shim turns the controlled startup document into
+		// a reliable WindowRuntimeReady signal without exposing the window.
+		AllowSimpleEventEmit: true,
 	})
 	var preferencesMu sync.Mutex
 	persistWindowSize := func() {
@@ -124,7 +128,11 @@ func Run(ctx context.Context) error {
 		}
 		tray.Destroy()
 	})
-	nativeApp.Event.OnApplicationEvent(events.Common.ApplicationStarted, func(*application.ApplicationEvent) {
+	wireWindowReadyStartup(func(callback func()) {
+		mainWindow.OnWindowEvent(events.Common.WindowRuntimeReady, func(*application.WindowEvent) {
+			callback()
+		})
+	}, func() {
 		go func() {
 			if err := host.Start(ctx); err != nil {
 				fmt.Fprintln(os.Stderr, "vibe-proxy desktop startup:", err)

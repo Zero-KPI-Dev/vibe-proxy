@@ -4,7 +4,7 @@ go 1.25.0
 
 require (
 	github.com/a448582655/vibe-proxy v0.0.0
-	github.com/wailsapp/wails/v3 v3.0.0-alpha2.117
+	github.com/wailsapp/wails/v3 v3.0.0-alpha2.118
 	golang.org/x/sys v0.46.0
 	gopkg.in/yaml.v3 v3.0.1
 )

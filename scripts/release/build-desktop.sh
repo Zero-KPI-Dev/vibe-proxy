@@ -29,8 +29,8 @@ case "$goos/$goarch" in
 esac
 
 desktop_dir="$release_repo_root/desktop"
-grep -Fxq '	github.com/wailsapp/wails/v3 v3.0.0-alpha2.117' "$desktop_dir/go.mod" || {
-  printf 'desktop/go.mod must pin Wails v3.0.0-alpha2.117 exactly\n' >&2
+grep -Fxq '	github.com/wailsapp/wails/v3 v3.0.0-alpha2.118' "$desktop_dir/go.mod" || {
+  printf 'desktop/go.mod must pin Wails v3.0.0-alpha2.118 exactly\n' >&2
   exit 1
 }
 command -v go >/dev/null 2>&1 || {
