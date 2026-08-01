@@ -283,14 +283,12 @@ jobs:
           $machine = [BitConverter]::ToUInt16($bytes, $offset + 4)
           $expected = if ("${{ matrix.goarch }}" -eq "amd64") { 0x8664 } else { 0xAA64 }
           if ($machine -ne $expected) { throw "Unexpected PE machine: $machine" }
-          # GitHub's Windows runner is x64, so an ARM64 cross-build can only be
-          # inspected here. Execute the binary only when the host supports it.
-          if ("${{ matrix.goarch }}" -eq "amd64") {
-            $process = Start-Process -FilePath $binary -ArgumentList "--version" -Wait -PassThru
-            if ($process.ExitCode -ne 0) {
-              throw "Desktop smoke test exited with $($process.ExitCode)"
-            }
-          }
+      - name: Smoke-test installed Windows desktop
+        if: matrix.goarch == 'amd64'
+        shell: pwsh
+        run: |
+          ./scripts/release/test-windows-desktop-startup.ps1 `
+            -Installer "desktop/bin/vibe-proxy-desktop-amd64-setup.exe"
       - name: Package portable desktop app
         shell: pwsh
         run: |

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -112,5 +113,22 @@ func TestStartupErrorLogIsStructuredOnOneLine(t *testing.T) {
 	}
 	if !strings.Contains(text, `stage="config"`) || !strings.Contains(text, `address="127.0.0.1:8080"`) {
 		t.Fatalf("log missing structured fields: %q", text)
+	}
+}
+
+func TestTryWriteStartupErrorLogReturnsFilesystemError(t *testing.T) {
+	blockedParent := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(blockedParent, []byte("occupied"), 0o600); err != nil {
+		t.Fatalf("WriteFile(blocked parent) error = %v", err)
+	}
+
+	err := TryWriteStartupErrorLog(
+		Paths{LogPath: filepath.Join(blockedParent, "vibe-proxy.log")},
+		"native",
+		"",
+		errors.New("startup failed"),
+	)
+	if err == nil || !strings.Contains(err.Error(), "startup log directory") {
+		t.Fatalf("TryWriteStartupErrorLog() error = %v, want directory error", err)
 	}
 }

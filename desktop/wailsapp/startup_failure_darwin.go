@@ -7,10 +7,12 @@ import (
 	"os"
 )
 
-func reportNativeStartupFailure(logPath string) {
-	if logPath != "" {
-		_, _ = fmt.Fprintf(os.Stderr, "Vibe Proxy could not open its desktop window. Diagnostics: %s\n", logPath)
-		return
+func reportNativeStartupFailure(failure nativeStartupFailure) {
+	_, _ = fmt.Fprintf(os.Stderr, "Vibe Proxy could not open its desktop window: %s\n", displayStartupError(failure.cause))
+	if failure.logPath != "" {
+		_, _ = fmt.Fprintf(os.Stderr, "Diagnostics: %s\n", failure.logPath)
 	}
-	_, _ = fmt.Fprintln(os.Stderr, "Vibe Proxy could not open its desktop window.")
+	if failure.logWriteErr != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "Diagnostic write error: %s\n", displayStartupError(failure.logWriteErr))
+	}
 }

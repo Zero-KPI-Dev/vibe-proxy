@@ -70,6 +70,7 @@ require_text docs/admin-api.md 'POST /admin/desktop/import-config'
 
 require_file .github/workflows/desktop-build.yml
 require_file .github/workflows/release.yml
+require_file scripts/release/test-windows-desktop-startup.ps1
 for workflow in .github/workflows/desktop-build.yml .github/workflows/release.yml; do
   require_text "$workflow" 'actions/checkout@v6'
   require_text "$workflow" 'actions/setup-go@v6'
@@ -85,10 +86,10 @@ require_text .github/workflows/release.yml 'windows-latest'
 require_text .github/workflows/release.yml 'choco install nsis'
 require_text .github/workflows/desktop-build.yml 'macos-15-intel'
 require_text .github/workflows/desktop-build.yml 'choco install nsis'
-require_text .github/workflows/desktop-build.yml 'if ("${{ matrix.goarch }}" -eq "amd64")'
-require_text .github/workflows/release.yml 'if ("${{ matrix.goarch }}" -eq "amd64")'
-require_text .github/workflows/desktop-build.yml 'Start-Process -FilePath $binary'
-require_text .github/workflows/release.yml 'Start-Process -FilePath $binary'
+require_text .github/workflows/desktop-build.yml "if: matrix.goarch == 'amd64'"
+require_text .github/workflows/release.yml "if: matrix.goarch == 'amd64'"
+require_text .github/workflows/desktop-build.yml 'test-windows-desktop-startup.ps1'
+require_text .github/workflows/release.yml 'test-windows-desktop-startup.ps1'
 require_text .github/workflows/release.yml '--prerelease --latest=false'
 
 bash -n "$repo_root/scripts/release/build-desktop.sh"
