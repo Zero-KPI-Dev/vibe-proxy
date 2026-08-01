@@ -11,6 +11,7 @@ vibe-proxy
 .DS_Store
 .idea/
 .vscode/
+.superpowers/
 
 # logs
 *.log
