@@ -1,7 +1,6 @@
 package config
 
 import (
-	"os"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -14,12 +13,8 @@ func UpdateModelCatalogProxy(path, proxyURL string) (*RuntimeConfig, error) {
 	unlock := lockConfigMutation(path)
 	defer unlock()
 
-	raw, err := os.ReadFile(path)
+	cfg, err := readSimpleConfig(path)
 	if err != nil {
-		return nil, err
-	}
-	var cfg SimpleConfig
-	if err := yaml.Unmarshal(raw, &cfg); err != nil {
 		return nil, err
 	}
 	cfg.ModelCatalog.ProxyURL = strings.TrimSpace(proxyURL)
