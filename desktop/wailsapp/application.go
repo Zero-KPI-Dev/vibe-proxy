@@ -34,13 +34,6 @@ type nativeApplication struct {
 
 func (a *nativeApplication) Quit() { a.application.Quit() }
 
-func wireWindowReadyStartup(register func(func()), start func()) {
-	var once sync.Once
-	register(func() {
-		once.Do(start)
-	})
-}
-
 // Run creates the Wails shell and connects it to the platform-neutral Host.
 func Run(ctx context.Context) error {
 	paths, err := app.PlatformPaths()
