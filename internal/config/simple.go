@@ -86,6 +86,10 @@ func LoadRuntime(path string) (*RuntimeConfig, error) {
 	if err != nil {
 		return nil, err
 	}
+	return compileRuntimeYAML(b)
+}
+
+func compileRuntimeYAML(b []byte) (*RuntimeConfig, error) {
 	var probe struct {
 		Version   string                    `yaml:"version"`
 		Providers map[string]ProviderConfig `yaml:"providers"`
@@ -100,11 +104,22 @@ func LoadRuntime(path string) (*RuntimeConfig, error) {
 		}
 		return CompileSimple(cfg)
 	}
-	legacy, err := Load(path)
-	if err != nil {
+	var legacy Config
+	if err := yaml.Unmarshal(b, &legacy); err != nil {
 		return nil, err
 	}
-	return CompileLegacy(legacy), nil
+	return CompileLegacy(&legacy), nil
+}
+
+func isSimpleConfigYAML(b []byte) (bool, error) {
+	var probe struct {
+		Version   string                    `yaml:"version"`
+		Providers map[string]ProviderConfig `yaml:"providers"`
+	}
+	if err := yaml.Unmarshal(b, &probe); err != nil {
+		return false, err
+	}
+	return probe.Version != "" || len(probe.Providers) > 0, nil
 }
 
 func CompileSimple(cfg SimpleConfig) (*RuntimeConfig, error) {

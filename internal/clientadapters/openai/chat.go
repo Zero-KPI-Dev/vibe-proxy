@@ -86,6 +86,7 @@ func (a ChatAdapter) EncodeStream(ctx context.Context, w http.ResponseWriter, ev
 	created := time.Now().Unix()
 	model := ""
 	sawToolCall := false
+	var usage ir.Usage
 	for {
 		select {
 		case <-ctx.Done():
@@ -129,7 +130,14 @@ func (a ChatAdapter) EncodeStream(ctx context.Context, w http.ResponseWriter, ev
 				if flusher != nil {
 					flusher.Flush()
 				}
+			case ir.EventUsageDelta:
+				if ev.Usage != nil {
+					usage = mergeStreamUsage(usage, *ev.Usage)
+				}
 			case ir.EventMessageDone:
+				if usage.TotalTokens > 0 || usage.PromptTokens > 0 || usage.CompletionTokens > 0 {
+					writeSSE(w, streamUsageChunk(id, created, model, usage))
+				}
 				finish := "stop"
 				if sawToolCall {
 					finish = "tool_calls"
@@ -263,6 +271,33 @@ func stringSlice(v any) []string {
 func openAIUsage(u ir.Usage) map[string]any {
 	return map[string]any{"prompt_tokens": u.PromptTokens, "completion_tokens": u.CompletionTokens, "total_tokens": u.TotalTokens}
 }
+func mergeStreamUsage(a, b ir.Usage) ir.Usage {
+	if b.PromptTokens != 0 {
+		a.PromptTokens = b.PromptTokens
+	}
+	if b.CompletionTokens != 0 {
+		a.CompletionTokens = b.CompletionTokens
+	}
+	if b.TotalTokens != 0 {
+		a.TotalTokens = b.TotalTokens
+	}
+	if b.ReasoningTokens != 0 {
+		a.ReasoningTokens = b.ReasoningTokens
+	}
+	if b.CacheReadTokens != 0 {
+		a.CacheReadTokens = b.CacheReadTokens
+	}
+	if b.CacheWriteTokens != 0 {
+		a.CacheWriteTokens = b.CacheWriteTokens
+	}
+	if b.CacheHitRatio != 0 {
+		a.CacheHitRatio = b.CacheHitRatio
+	}
+	if a.TotalTokens == 0 {
+		a.TotalTokens = a.PromptTokens + a.CompletionTokens
+	}
+	return a
+}
 func openAIToolCalls(blocks []ir.ContentBlock) []any {
 	out := []any{}
 	for _, block := range blocks {
@@ -307,6 +342,9 @@ func streamChunk(id string, created int64, model, text, finish string) map[strin
 		choice["finish_reason"] = finish
 	}
 	return map[string]any{"id": id, "object": "chat.completion.chunk", "created": created, "model": model, "choices": []any{choice}}
+}
+func streamUsageChunk(id string, created int64, model string, usage ir.Usage) map[string]any {
+	return map[string]any{"id": id, "object": "chat.completion.chunk", "created": created, "model": model, "choices": []any{}, "usage": openAIUsage(usage)}
 }
 func reasoningStreamChunk(id string, created int64, model, text string) map[string]any {
 	return map[string]any{

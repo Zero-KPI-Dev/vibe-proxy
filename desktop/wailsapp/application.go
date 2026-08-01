@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"runtime"
+	"sync"
 
 	"github.com/a448582655/vibe-proxy/desktop/app"
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -62,10 +63,27 @@ func Run(ctx context.Context) error {
 	windowContract := MainWindowContract()
 	mainWindow = nativeApp.Window.NewWithOptions(application.WebviewWindowOptions{
 		Name: windowContract.Name, Title: windowContract.Title,
-		Width: windowContract.Width, Height: windowContract.Height,
+		Width: preferences.Window.Width, Height: preferences.Window.Height,
 		MinWidth: windowContract.MinWidth, MinHeight: windowContract.MinHeight,
 		Hidden: true,
 	})
+	var preferencesMu sync.Mutex
+	persistWindowSize := func() {
+		width, height := mainWindow.Size()
+		if width <= 0 || height <= 0 {
+			return
+		}
+		preferencesMu.Lock()
+		defer preferencesMu.Unlock()
+		next := preferences
+		next.Window.Width = width
+		next.Window.Height = height
+		if err := app.SavePreferences(paths.PreferencesPath, next); err != nil {
+			log.Printf("save desktop window size: %v", err)
+			return
+		}
+		preferences = next
+	}
 
 	actions := &trayActions{}
 	tray := newNativeTray(nativeApp, mainWindow, actions, trayIconBytes(), trayTemplateIconBytes())
@@ -88,12 +106,18 @@ func Run(ctx context.Context) error {
 	actions.openBrowser = host.OpenControlPlaneInBrowser
 	actions.resetClose = host.ResetCloseBehavior
 	actions.requestQuit = func() { host.RequestQuit(context.Background()) }
+	mainWindow.OnWindowEvent(events.Common.WindowDidResize, func(*application.WindowEvent) {
+		// Persist outside the Wails event callback so the native event loop is not
+		// blocked by filesystem I/O or a synchronous Size() query.
+		go persistWindowSize()
+	})
 
 	mainWindow.RegisterHook(events.Common.WindowClosing, func(event *application.WindowEvent) {
 		event.Cancel()
 		go host.HandleWindowClose(context.Background())
 	})
 	nativeApp.OnShutdown(func() {
+		persistWindowSize()
 		if err := host.Shutdown(context.Background()); err != nil {
 			log.Printf("desktop shutdown: %v", err)
 		}

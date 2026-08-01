@@ -169,6 +169,8 @@
     "testResult": "Test {{result}} ({{detail}}, {{latency}}ms)",
     "testSucceeded": "succeeded",
     "testFailedResult": "failed",
+    "testReachable": "reachable",
+    "modelListingUnsupported": "model listing is not supported",
     "testFailed": "Test failed: {{error}}",
     "type": "Type",
     "baseUrl": "Base URL",

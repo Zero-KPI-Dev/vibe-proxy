@@ -192,6 +192,8 @@ export interface RawConfigResponse {
 
 export interface ProviderTestResponse {
   ok: boolean
+  reachable?: boolean
+  model_listing?: "supported" | "unsupported"
   provider: string
   status?: number
   latency_ms?: number

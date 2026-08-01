@@ -1,0 +1,1 @@
+import{d as e,J as t,M as s}from"./index-BfIcH00I.js";function i(){return e({queryKey:["metrics-summary"],queryFn:t.summary,refetchInterval:3e4})}function y(r){return e({queryKey:["metrics-history",r],queryFn:()=>t.history(r),refetchInterval:3e4})}function a(){return e({queryKey:["provider-health"],queryFn:s.list,refetchInterval:3e4})}export{a,y as b,i as u};

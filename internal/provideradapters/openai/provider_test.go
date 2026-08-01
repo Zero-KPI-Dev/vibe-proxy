@@ -24,7 +24,7 @@ func TestBuildOpenAICompatibleRequest(t *testing.T) {
 		t.Fatalf("unexpected url: %s", hreq.URL.String())
 	}
 	body, _ := io.ReadAll(hreq.Body)
-	if !strings.Contains(string(body), `"model":"deepseek-chat"`) || !strings.Contains(string(body), `"content":"hello"`) || !strings.Contains(string(body), `"name":"lookup"`) || !strings.Contains(string(body), `"tool_choice":{"function":{"name":"lookup"},"type":"function"}`) || !strings.Contains(string(body), `"json_schema":{"name":"answer","schema":{"type":"object"}}`) {
+	if !strings.Contains(string(body), `"model":"deepseek-chat"`) || !strings.Contains(string(body), `"content":"hello"`) || !strings.Contains(string(body), `"name":"lookup"`) || !strings.Contains(string(body), `"tool_choice":{"function":{"name":"lookup"},"type":"function"}`) || !strings.Contains(string(body), `"json_schema":{"name":"answer","schema":{"type":"object"}}`) || !strings.Contains(string(body), `"stream_options":{"include_usage":true}`) {
 		t.Fatalf("unexpected body: %s", body)
 	}
 }
@@ -73,6 +73,32 @@ func TestParseOpenAICompatibleStream(t *testing.T) {
 	}
 	if text != "hello" || !sawUsage || !sawDone {
 		t.Fatalf("unexpected stream text=%q usage=%v done=%v", text, sawUsage, sawDone)
+	}
+}
+
+func TestParseOpenAICompatibleStreamReadsUsageAfterFinish(t *testing.T) {
+	sse := strings.Join([]string{
+		"data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\n",
+		"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+		"data: {\"choices\":[],\"usage\":{\"prompt_tokens\":2,\"completion_tokens\":5,\"total_tokens\":7}}\n\n",
+		"data: [DONE]\n\n",
+	}, "")
+	resp := &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(sse))}
+	events, err := Provider{}.ParseStream(context.Background(), resp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sawUsage, sawDone bool
+	for ev := range events {
+		switch ev.Type {
+		case ir.EventUsageDelta:
+			sawUsage = ev.Usage != nil && ev.Usage.TotalTokens == 7
+		case ir.EventMessageDone:
+			sawDone = true
+		}
+	}
+	if !sawUsage || !sawDone {
+		t.Fatalf("trailing usage was lost: usage=%v done=%v", sawUsage, sawDone)
 	}
 }
 

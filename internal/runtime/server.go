@@ -611,8 +611,16 @@ func (s *Server) adminProviderTest(w http.ResponseWriter, r *http.Request) {
 	}
 	io.Copy(io.Discard, io.LimitReader(resp.Body, 1024))
 	resp.Body.Close()
+	modelListing := "supported"
+	probeOK := resp.StatusCode >= 200 && resp.StatusCode < 400
+	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed {
+		// A reachable provider may not expose a model-listing endpoint. This is
+		// not, by itself, evidence that its configured chat endpoint is unusable.
+		probeOK = true
+		modelListing = "unsupported"
+	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"ok": resp.StatusCode >= 200 && resp.StatusCode < 400, "provider": providerID, "status": resp.StatusCode, "latency_ms": latency, "target": testURL})
+	json.NewEncoder(w).Encode(map[string]any{"ok": probeOK, "reachable": true, "model_listing": modelListing, "provider": providerID, "status": resp.StatusCode, "latency_ms": latency, "target": testURL})
 }
 
 func (s *Server) adminProviderModels(w http.ResponseWriter, r *http.Request) {

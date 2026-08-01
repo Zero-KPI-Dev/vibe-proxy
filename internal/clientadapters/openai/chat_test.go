@@ -100,9 +100,10 @@ func TestEncodeChatKeepsReasoningOutOfVisibleContent(t *testing.T) {
 }
 
 func TestEncodeChatStreamKeepsReasoningInExtensionDelta(t *testing.T) {
-	events := make(chan ir.StreamEvent, 3)
+	events := make(chan ir.StreamEvent, 4)
 	events <- ir.StreamEvent{Type: ir.EventReasoningDelta, Delta: ir.ContentBlock{Type: ir.ContentReasoning, Text: "private reasoning"}}
 	events <- ir.StreamEvent{Type: ir.EventContentDelta, Delta: ir.ContentBlock{Type: ir.ContentText, Text: "final answer"}}
+	events <- ir.StreamEvent{Type: ir.EventUsageDelta, Usage: &ir.Usage{PromptTokens: 2, CompletionTokens: 3, TotalTokens: 5}}
 	events <- ir.StreamEvent{Type: ir.EventMessageDone}
 	close(events)
 	recorder := httptest.NewRecorder()
@@ -112,6 +113,10 @@ func TestEncodeChatStreamKeepsReasoningInExtensionDelta(t *testing.T) {
 	body := recorder.Body.String()
 	if !strings.Contains(body, `"reasoning_content":"private reasoning"`) ||
 		!strings.Contains(body, `"content":"final answer"`) ||
+		!strings.Contains(body, `"choices":[]`) ||
+		!strings.Contains(body, `"prompt_tokens":2`) ||
+		!strings.Contains(body, `"completion_tokens":3`) ||
+		!strings.Contains(body, `"total_tokens":5`) ||
 		strings.Contains(body, `"content":"private reasoning"`) {
 		t.Fatalf("reasoning stream leaked into visible content: %s", body)
 	}

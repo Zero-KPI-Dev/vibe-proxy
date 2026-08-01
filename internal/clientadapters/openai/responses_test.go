@@ -117,9 +117,10 @@ func TestEncodeResponsesKeepsReasoningSeparateFromOutputText(t *testing.T) {
 }
 
 func TestEncodeResponsesStreamKeepsReasoningSeparateFromOutputText(t *testing.T) {
-	events := make(chan ir.StreamEvent, 3)
+	events := make(chan ir.StreamEvent, 4)
 	events <- ir.StreamEvent{Type: ir.EventReasoningDelta, Delta: ir.ContentBlock{Type: ir.ContentReasoning, Text: "private reasoning"}}
 	events <- ir.StreamEvent{Type: ir.EventContentDelta, Delta: ir.ContentBlock{Type: ir.ContentText, Text: "final answer"}}
+	events <- ir.StreamEvent{Type: ir.EventUsageDelta, Usage: &ir.Usage{PromptTokens: 2, CompletionTokens: 3, TotalTokens: 5}}
 	events <- ir.StreamEvent{Type: ir.EventMessageDone}
 	close(events)
 	recorder := httptest.NewRecorder()
@@ -130,7 +131,8 @@ func TestEncodeResponsesStreamKeepsReasoningSeparateFromOutputText(t *testing.T)
 	if !strings.Contains(body, `event: response.reasoning_summary_text.delta`) ||
 		!strings.Contains(body, `"delta":"private reasoning"`) ||
 		!strings.Contains(body, `event: response.output_text.delta`) ||
-		!strings.Contains(body, `"delta":"final answer"`) {
+		!strings.Contains(body, `"delta":"final answer"`) ||
+		!strings.Contains(body, `"usage":{"input_tokens":2,"output_tokens":3,"total_tokens":5}`) {
 		t.Fatalf("reasoning stream was not encoded separately from output text: %s", body)
 	}
 }

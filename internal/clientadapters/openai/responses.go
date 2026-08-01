@@ -92,6 +92,7 @@ func (a ResponsesAdapter) EncodeStream(ctx context.Context, w http.ResponseWrite
 	reasoningIndex := -1
 	reasoningID := "rs_" + uuid.NewString()
 	var reasoning strings.Builder
+	var usage ir.Usage
 	nextOutputIndex := 0
 	type functionItem struct {
 		OutputIndex int
@@ -108,7 +109,7 @@ func (a ResponsesAdapter) EncodeStream(ctx context.Context, w http.ResponseWrite
 			return ctx.Err()
 		case ev, ok := <-events:
 			if !ok {
-				writeResponsesDone(w, responseID)
+				writeResponsesDone(w, responseID, usage)
 				flushOpenAI(flusher)
 				return nil
 			}
@@ -180,6 +181,10 @@ func (a ResponsesAdapter) EncodeStream(ctx context.Context, w http.ResponseWrite
 					}
 					flushOpenAI(flusher)
 				}
+			case ir.EventUsageDelta:
+				if ev.Usage != nil {
+					usage = mergeStreamUsage(usage, *ev.Usage)
+				}
 			case ir.EventMessageDone:
 				if !messageAdded && !reasoningAdded && len(functionOrder) == 0 {
 					messageIndex = nextOutputIndex
@@ -201,7 +206,7 @@ func (a ResponsesAdapter) EncodeStream(ctx context.Context, w http.ResponseWrite
 				for _, item := range functionOrder {
 					writeResponsesEvent(w, "response.output_item.done", map[string]any{"type": "response.output_item.done", "output_index": item.OutputIndex, "item": map[string]any{"id": item.ItemID, "type": "function_call", "status": "completed", "call_id": item.CallID, "name": item.Name, "arguments": item.Arguments.String()}})
 				}
-				writeResponsesDone(w, responseID)
+				writeResponsesDone(w, responseID, usage)
 				flushOpenAI(flusher)
 				return nil
 			}
@@ -296,8 +301,12 @@ func writeResponsesEvent(w http.ResponseWriter, event string, payload any) {
 	b, _ := json.Marshal(payload)
 	fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, b)
 }
-func writeResponsesDone(w http.ResponseWriter, id string) {
-	writeResponsesEvent(w, "response.completed", map[string]any{"type": "response.completed", "response": map[string]any{"id": id, "status": "completed"}})
+func writeResponsesDone(w http.ResponseWriter, id string, usage ir.Usage) {
+	response := map[string]any{"id": id, "status": "completed"}
+	if usage.TotalTokens > 0 || usage.PromptTokens > 0 || usage.CompletionTokens > 0 {
+		response["usage"] = map[string]any{"input_tokens": usage.PromptTokens, "output_tokens": usage.CompletionTokens, "total_tokens": usage.TotalTokens}
+	}
+	writeResponsesEvent(w, "response.completed", map[string]any{"type": "response.completed", "response": response})
 	fmt.Fprint(w, "data: [DONE]\n\n")
 }
 func flushOpenAI(f http.Flusher) {

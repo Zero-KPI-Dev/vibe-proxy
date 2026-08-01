@@ -578,7 +578,7 @@ func TestRuntimeAdminValidateAndProviderTest(t *testing.T) {
 	}
 }
 
-func TestRuntimeProviderTestTreats404AsFailure(t *testing.T) {
+func TestRuntimeProviderTestReportsUnsupportedModelListing(t *testing.T) {
 	t.Setenv("VIBE_PROXY_ADMIN_TOKEN", "admin-token")
 	cfg, err := config.CompileSimple(config.SimpleConfig{Security: config.SecurityConfig{AdminBearerTokenEnv: "VIBE_PROXY_ADMIN_TOKEN"}, ClientKeys: []config.ClientKeyConfig{{Name: "test", KeyHash: "$2a$10$AXRkz.6y44ygdJFk6L1/IO0aRVp9zRMfXDJoBCBsroxVac/Lovvz6", Enabled: true, AllowedModels: []string{"*"}, RPM: 1000}}, Providers: map[string]config.ProviderConfig{"mockai": {Type: "openai-compatible", BaseURL: "https://mock.openai/v1", Auth: upstreamauth.Profile{Type: "none"}, Models: []string{"raw-chat"}}}, Models: config.ModelsConfig{AllowRaw: true, Aliases: map[string]string{"vibe-fast": "mockai/raw-chat"}}})
 	if err != nil {
@@ -594,7 +594,7 @@ func TestRuntimeProviderTestTreats404AsFailure(t *testing.T) {
 	testReq.Header.Set("Authorization", "Bearer admin-token")
 	testW := httptest.NewRecorder()
 	s.Routes().ServeHTTP(testW, testReq)
-	if testW.Code != 200 || !strings.Contains(testW.Body.String(), `"ok":false`) || !strings.Contains(testW.Body.String(), `"status":404`) {
+	if testW.Code != 200 || !strings.Contains(testW.Body.String(), `"ok":true`) || !strings.Contains(testW.Body.String(), `"reachable":true`) || !strings.Contains(testW.Body.String(), `"model_listing":"unsupported"`) || !strings.Contains(testW.Body.String(), `"status":404`) {
 		t.Fatalf("unexpected provider test response: %d %s", testW.Code, testW.Body.String())
 	}
 }

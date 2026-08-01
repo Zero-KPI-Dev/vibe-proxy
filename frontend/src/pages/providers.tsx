@@ -52,8 +52,12 @@ export function ProvidersPage() {
     toast.promise(testProvider.mutateAsync(id), {
       loading: t("providers.testing", { id }),
       success: (res) => t("providers.testResult", {
-        result: res.ok ? t("providers.testSucceeded") : t("providers.testFailedResult"),
-        detail: res.status ?? res.error,
+        result: res.model_listing === "unsupported"
+          ? t("providers.testReachable")
+          : res.ok ? t("providers.testSucceeded") : t("providers.testFailedResult"),
+        detail: res.model_listing === "unsupported"
+          ? t("providers.modelListingUnsupported")
+          : res.status ?? res.error,
         latency: res.latency_ms,
       }),
       error: (e) => t("providers.testFailed", {

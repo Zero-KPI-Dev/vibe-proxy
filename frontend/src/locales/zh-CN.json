@@ -169,6 +169,8 @@
     "testResult": "测试{{result}}（{{detail}}，{{latency}}ms）",
     "testSucceeded": "成功",
     "testFailedResult": "失败",
+    "testReachable": "已连通",
+    "modelListingUnsupported": "不支持模型列表接口",
     "testFailed": "测试失败：{{error}}",
     "type": "类型",
     "baseUrl": "基础 URL",
