@@ -564,7 +564,7 @@ export function ProviderForm({ defaultValues, onSubmit, isPending, mode }: Provi
             <p className="mt-2 text-xs text-muted-foreground">
               {t("providerForm.modelCapabilityOverridesHelp")}
             </p>
-            <div className="mt-3 max-h-72 space-y-2 overflow-y-auto pr-1">
+            <div className="mt-3 space-y-2">
               {Array.from(selectedModels).sort().map((model) => (
                 <div key={model} className="grid items-center gap-2 rounded-md border border-border px-3 py-2 sm:grid-cols-[minmax(0,1fr)_12rem]">
                   <div className="min-w-0">

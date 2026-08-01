@@ -1,0 +1,41 @@
+version: '3'
+
+includes:
+  common: ../Taskfile.yml
+
+vars:
+  DARWIN_LDFLAGS: >-
+    -w -s
+    -X github.com/a448582655/vibe-proxy/internal/buildinfo.Version={{.VERSION}}
+    -X github.com/a448582655/vibe-proxy/internal/buildinfo.Commit={{.COMMIT}}
+    -X github.com/a448582655/vibe-proxy/internal/buildinfo.BuildDate={{.BUILD_DATE}}
+
+tasks:
+  build:
+    deps: [common:go:mod:verify, common:generate:icons]
+    cmds:
+      - go build -trimpath -buildvcs=false -ldflags='{{.DARWIN_LDFLAGS}}' -o {{.BIN_DIR}}/{{.APP_NAME}} .
+    env:
+      GOOS: darwin
+      GOARCH: '{{.ARCH}}'
+      CGO_ENABLED: 1
+      MACOSX_DEPLOYMENT_TARGET: '12.0'
+      CGO_CFLAGS: -mmacosx-version-min=12.0
+      CGO_LDFLAGS: -mmacosx-version-min=12.0
+
+  package:
+    deps:
+      - task: build
+    cmds:
+      - rm -rf '{{.BIN_DIR}}/Vibe Proxy.app'
+      - mkdir -p '{{.BIN_DIR}}/Vibe Proxy.app/Contents/MacOS' '{{.BIN_DIR}}/Vibe Proxy.app/Contents/Resources'
+      - cp build/darwin/icons.icns '{{.BIN_DIR}}/Vibe Proxy.app/Contents/Resources/icons.icns'
+      - cp '{{.BIN_DIR}}/{{.APP_NAME}}' '{{.BIN_DIR}}/Vibe Proxy.app/Contents/MacOS/{{.APP_NAME}}'
+      - cp build/darwin/Info.plist '{{.BIN_DIR}}/Vibe Proxy.app/Contents/Info.plist'
+      - /usr/libexec/PlistBuddy -c 'Set :CFBundleShortVersionString {{.VERSION_NUMERIC}}' '{{.BIN_DIR}}/Vibe Proxy.app/Contents/Info.plist'
+      - /usr/libexec/PlistBuddy -c 'Set :CFBundleVersion {{.VERSION_NUMERIC}}' '{{.BIN_DIR}}/Vibe Proxy.app/Contents/Info.plist'
+      - codesign --force --deep --sign - '{{.BIN_DIR}}/Vibe Proxy.app'
+
+  run:
+    cmds:
+      - open '{{.BIN_DIR}}/Vibe Proxy.app'

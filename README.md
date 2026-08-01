@@ -100,15 +100,20 @@ models:
 
 ## Download a Release
 
-Cross-platform releases contain a single server binary with the local web
-control plane embedded. Windows, macOS, and Linux users all open the same panel
-at `http://127.0.0.1:8080/`; Linux does not require Docker or a separate desktop
-application.
+Windows and macOS users can choose the **Vibe Proxy Desktop** application. It
+starts the gateway, opens the embedded control plane in a native window, remains
+available from the system tray/menu bar, and stores its state in the normal
+per-user application-data directory. CLI packages remain available for
+automation and terminal-first workflows.
 
-Download Windows ZIP, macOS tarball/DMG, or Linux tarball/DEB artifacts from
-[GitHub Releases](https://github.com/a448582655/vibe-proxy/releases). The first
-public build, `v0.1.0-rc.1`, is a testing pre-release for physical
-cross-platform acceptance rather than a stable release.
+Linux continues to use the lightweight CLI binary or DEB plus the browser-based
+control plane at `http://127.0.0.1:8080/`; Docker and a native GUI are not
+required.
+
+Download the matching desktop installer/portable ZIP, desktop DMG, or CLI
+artifact from [GitHub Releases](https://github.com/a448582655/vibe-proxy/releases).
+Desktop builds are initially published as unsigned release candidates for
+cross-platform acceptance rather than as stable releases.
 
 See [`docs/release.md`](docs/release.md) for architecture selection, checksum
 verification, platform-specific startup commands, and the release-candidate

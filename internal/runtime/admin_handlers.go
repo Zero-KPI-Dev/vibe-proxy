@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -14,11 +15,54 @@ import (
 
 func (s *Server) adminAuthorize(w http.ResponseWriter, r *http.Request) bool {
 	snap := s.current()
-	if !auth.AuthorizeAdmin(r, snap.AdminToken) {
-		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+	if auth.AuthorizeAdmin(r, snap.AdminToken) {
+		return true
+	}
+	if s.desktopSessions == nil || !s.desktopSessions.Authorize(r) {
+		writeUnauthorized(w)
 		return false
 	}
-	return true
+	if isSafeMethod(r.Method) || sameOrigin(r) {
+		return true
+	}
+	writeForbidden(w, "desktop session requires same-origin request")
+	return false
+}
+
+func writeUnauthorized(w http.ResponseWriter) {
+	http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+}
+
+func writeForbidden(w http.ResponseWriter, message string) {
+	http.Error(w, message, http.StatusForbidden)
+}
+
+func isSafeMethod(method string) bool {
+	switch method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions, http.MethodTrace:
+		return true
+	default:
+		return false
+	}
+}
+
+func sameOrigin(r *http.Request) bool {
+	origins := r.Header.Values("Origin")
+	if len(origins) != 1 || origins[0] == "" || r.Host == "" {
+		return false
+	}
+	rawOrigin := origins[0]
+	origin, err := url.Parse(rawOrigin)
+	if err != nil || !origin.IsAbs() || origin.Opaque != "" || origin.User != nil {
+		return false
+	}
+	if !strings.EqualFold(origin.Scheme, "http") && !strings.EqualFold(origin.Scheme, "https") {
+		return false
+	}
+	if origin.Host == "" || origin.Path != "" || origin.RawQuery != "" || origin.Fragment != "" {
+		return false
+	}
+	return strings.EqualFold(origin.Host, r.Host)
 }
 
 func (s *Server) writeJSON(w http.ResponseWriter, v any) {
@@ -61,7 +105,7 @@ func (s *Server) adminProviderDelete(w http.ResponseWriter, r *http.Request) {
 		s.writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	s.snapshot.Store(s.buildSnapshot(next))
+	s.applyRuntimeConfig(next)
 	s.writeJSON(w, map[string]bool{"ok": true})
 }
 
@@ -93,7 +137,7 @@ func (s *Server) adminProviderUpdate(w http.ResponseWriter, r *http.Request) {
 		s.writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	s.snapshot.Store(s.buildSnapshot(next))
+	s.applyRuntimeConfig(next)
 	s.writeJSON(w, map[string]any{"ok": true, "loaded_at": s.current().LoadedAt, "issues": config.ValidateRuntime(next)})
 }
 
@@ -162,7 +206,7 @@ func (s *Server) adminAliasesCreate(w http.ResponseWriter, r *http.Request) {
 		s.writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	s.snapshot.Store(s.buildSnapshot(next))
+	s.applyRuntimeConfig(next)
 	s.writeJSON(w, map[string]bool{"ok": true})
 }
 
@@ -188,7 +232,7 @@ func (s *Server) adminAliasesDelete(w http.ResponseWriter, r *http.Request) {
 		s.writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	s.snapshot.Store(s.buildSnapshot(next))
+	s.applyRuntimeConfig(next)
 	s.writeJSON(w, map[string]bool{"ok": true})
 }
 
@@ -217,7 +261,7 @@ func (s *Server) adminAliasesDefaults(w http.ResponseWriter, r *http.Request) {
 		s.writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	s.snapshot.Store(s.buildSnapshot(next))
+	s.applyRuntimeConfig(next)
 	s.writeJSON(w, map[string]bool{"ok": true})
 }
 
@@ -279,7 +323,7 @@ func (s *Server) adminClientKeysCreate(w http.ResponseWriter, r *http.Request) {
 		s.writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	s.snapshot.Store(s.buildSnapshot(next))
+	s.applyRuntimeConfig(next)
 	s.writeJSON(w, map[string]any{
 		"key": map[string]any{
 			"name":           input.Name,
@@ -319,7 +363,7 @@ func (s *Server) adminClientKeysUpdate(w http.ResponseWriter, r *http.Request) {
 		s.writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	s.snapshot.Store(s.buildSnapshot(next))
+	s.applyRuntimeConfig(next)
 	s.writeJSON(w, map[string]bool{"ok": true})
 }
 
@@ -345,7 +389,7 @@ func (s *Server) adminClientKeysDelete(w http.ResponseWriter, r *http.Request) {
 		s.writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	s.snapshot.Store(s.buildSnapshot(next))
+	s.applyRuntimeConfig(next)
 	s.writeJSON(w, map[string]bool{"ok": true})
 }
 
@@ -533,7 +577,7 @@ func (s *Server) adminRawConfig(w http.ResponseWriter, r *http.Request) {
 			s.writeJSONError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		s.snapshot.Store(s.buildSnapshot(next))
+		s.applyRuntimeConfig(next)
 		s.writeJSON(w, map[string]any{"ok": true, "issues": config.ValidateRuntime(next), "loaded_at": s.current().LoadedAt})
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

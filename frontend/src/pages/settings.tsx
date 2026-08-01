@@ -1,14 +1,15 @@
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState, type ChangeEvent } from "react"
 import { useTranslation } from "react-i18next"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { toast } from "sonner"
-import { Database, Languages, Palette, RefreshCw, Shield, Save } from "lucide-react"
-import { setToken, getToken, modelCatalogApi } from "@/lib/api"
-import type { ModelCatalogState } from "@/lib/types"
+import { Database, ExternalLink, FileUp, Languages, Palette, RefreshCw, Shield, Save } from "lucide-react"
+import { desktopApi, setToken, getToken, modelCatalogApi } from "@/lib/api"
+import type { DesktopSnapshot, ModelCatalogProxyState, ModelCatalogState } from "@/lib/types"
 import { normalizeLanguage, setAppLanguage, type AppLanguage } from "@/i18n"
+import { DesktopSettings } from "@/components/desktop-settings"
 import { OCRFallbackSettings } from "@/components/ocr-fallback-settings"
 import {
   Select,
@@ -34,21 +35,55 @@ export function SettingsPage() {
     (localStorage.getItem("vibe_theme") as Theme | null) ?? "dark"
   )
   const [catalog, setCatalog] = useState<ModelCatalogState | null>(null)
+  const [catalogProxy, setCatalogProxy] = useState<ModelCatalogProxyState>({ configured: false })
+  const [catalogProxyInput, setCatalogProxyInput] = useState("")
+  const [catalogProxySaving, setCatalogProxySaving] = useState(false)
   const [catalogLoading, setCatalogLoading] = useState(false)
+  const [catalogImporting, setCatalogImporting] = useState(false)
+  const catalogFileRef = useRef<HTMLInputElement>(null)
+  const [desktop, setDesktop] = useState<DesktopSnapshot | null | undefined>(undefined)
   const [authVersion, setAuthVersion] = useState(0)
 
   const loadCatalogStatus = async () => {
-    if (!getToken()) return
     try {
       const result = await modelCatalogApi.status()
       setCatalog(result.catalog)
+      setCatalogProxy(result.proxy ?? { configured: false })
     } catch {
       // The admin token may not be configured yet. Keep Settings usable.
     }
   }
 
+  const handleCatalogProxySave = async (proxyURL: string) => {
+    setCatalogProxySaving(true)
+    try {
+      const result = await modelCatalogApi.updateProxy(proxyURL)
+      setCatalogProxy(result.proxy)
+      setCatalogProxyInput("")
+      toast.success(proxyURL
+        ? t("settings.catalogProxySaved")
+        : t("settings.catalogProxyCleared"))
+    } catch (error) {
+      toast.error(t("settings.catalogProxySaveFailed", {
+        error: error instanceof Error ? error.message : t("common.unknownError"),
+      }))
+    } finally {
+      setCatalogProxySaving(false)
+    }
+  }
+
+  const loadDesktopSnapshot = async () => {
+    try {
+      setDesktop(await desktopApi.snapshot())
+    } catch {
+      // Desktop detection is optional; an unavailable admin endpoint uses browser mode.
+      setDesktop(null)
+    }
+  }
+
   useEffect(() => {
     void loadCatalogStatus()
+    void loadDesktopSnapshot()
   }, [])
 
   const handleSaveToken = () => {
@@ -74,6 +109,33 @@ export function SettingsPage() {
     }
   }
 
+  const handleCatalogImport = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    event.target.value = ""
+    if (!file) return
+    if (file.size > 10 * 1024 * 1024) {
+      toast.error(t("settings.catalogImportTooLarge"))
+      return
+    }
+    setCatalogImporting(true)
+    try {
+      const result = await modelCatalogApi.importFile(file)
+      setCatalog(result.catalog)
+      toast.success(t("settings.catalogImported", { count: result.catalog.models }))
+    } catch (error) {
+      toast.error(t("settings.catalogImportFailed", {
+        error: error instanceof Error ? error.message : t("common.unknownError"),
+      }))
+      await loadCatalogStatus()
+    } finally {
+      setCatalogImporting(false)
+    }
+  }
+
+  const handleDesktopImport = async () => {
+    await Promise.all([loadCatalogStatus(), loadDesktopSnapshot()])
+  }
+
   const handleThemeChange = (next: Theme) => {
     setTheme(next)
     applyTheme(next)
@@ -94,7 +156,7 @@ export function SettingsPage() {
         </p>
       </div>
 
-      <Card>
+      {desktop !== undefined && !desktop?.available && <Card>
         <CardHeader>
           <div className="flex items-center gap-2">
             <Shield className="h-5 w-5 text-primary" />
@@ -126,7 +188,13 @@ export function SettingsPage() {
             </p>
           </div>
         </CardContent>
-      </Card>
+      </Card>}
+
+      {desktop?.available && <DesktopSettings
+        desktop={desktop}
+        onDesktopChange={setDesktop}
+        onImported={handleDesktopImport}
+      />}
 
       <OCRFallbackSettings authVersion={authVersion} />
 
@@ -137,8 +205,61 @@ export function SettingsPage() {
             <CardTitle className="text-base">{t("settings.modelCatalog")}</CardTitle>
           </div>
           <CardDescription>{t("settings.modelCatalogDescription")}</CardDescription>
+          <a
+            href="https://models.dev/api.json"
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex w-fit items-center gap-1 text-xs font-medium text-primary underline-offset-4 hover:underline"
+          >
+            <ExternalLink className="h-3.5 w-3.5" />
+            {t("settings.catalogDownload")}
+          </a>
         </CardHeader>
         <CardContent className="space-y-4">
+          <div className="space-y-3 rounded-lg border border-border bg-muted/20 p-3">
+            <div>
+              <Label htmlFor="catalogProxy">{t("settings.catalogProxy")}</Label>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {catalogProxy.configured
+                  ? t("settings.catalogProxyActive", { url: catalogProxy.display_url })
+                  : t("settings.catalogProxyEnvironment")}
+              </p>
+            </div>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <Input
+                id="catalogProxy"
+                type="password"
+                value={catalogProxyInput}
+                onChange={(event) => setCatalogProxyInput(event.target.value)}
+                placeholder={catalogProxy.configured
+                  ? t("settings.catalogProxyReplacePlaceholder")
+                  : "http://user:password@proxy.example.com:8080"}
+                autoComplete="off"
+                className="min-w-0 flex-1"
+              />
+              <Button
+                type="button"
+                variant="outline"
+                disabled={catalogProxySaving || !catalogProxyInput.trim()}
+                onClick={() => void handleCatalogProxySave(catalogProxyInput.trim())}
+              >
+                {catalogProxySaving ? t("common.saving") : t("common.save")}
+              </Button>
+              {catalogProxy.configured && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  disabled={catalogProxySaving}
+                  onClick={() => void handleCatalogProxySave("")}
+                >
+                  {t("settings.catalogProxyClear")}
+                </Button>
+              )}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {t("settings.catalogProxyHelp")}
+            </p>
+          </div>
           <div className="grid grid-cols-2 gap-3 text-sm">
             <div className="rounded-md border border-border p-3">
               <div className="text-xs text-muted-foreground">{t("settings.catalogModels")}</div>
@@ -154,22 +275,52 @@ export function SettingsPage() {
             </div>
           </div>
           <div className="flex items-center justify-between gap-3">
-            <p className="text-xs text-muted-foreground">
-              {catalog?.error
-                ? t("settings.catalogError", { error: catalog.error })
-                : catalog?.stale
-                  ? t("settings.catalogStale")
-                  : t("settings.catalogReady")}
-            </p>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => void handleCatalogRefresh()}
-              disabled={catalogLoading}
-            >
-              <RefreshCw className={`mr-1 h-4 w-4 ${catalogLoading ? "animate-spin" : ""}`} />
-              {catalogLoading ? t("settings.catalogRefreshing") : t("settings.catalogRefresh")}
-            </Button>
+            <div className="space-y-1">
+              <p className="text-xs text-muted-foreground">
+                {catalog?.error
+                  ? t("settings.catalogError", { error: catalog.error })
+                  : catalog?.stale
+                    ? t("settings.catalogStale")
+                    : t("settings.catalogReady")}
+              </p>
+              {catalog?.origin && (
+                <p className="text-xs text-muted-foreground">
+                  {t("settings.catalogOrigin")}:{" "}
+                  {catalog.origin === "upload"
+                    ? t("settings.catalogOriginUpload")
+                    : catalog.origin === "remote"
+                      ? t("settings.catalogOriginRemote")
+                      : t("settings.catalogOriginCache")}
+                </p>
+              )}
+            </div>
+            <div className="flex shrink-0 flex-wrap justify-end gap-2">
+              <input
+                ref={catalogFileRef}
+                type="file"
+                accept=".json,application/json"
+                className="hidden"
+                onChange={(event) => void handleCatalogImport(event)}
+              />
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => catalogFileRef.current?.click()}
+                disabled={catalogImporting || catalogLoading}
+              >
+                <FileUp className="mr-1 h-4 w-4" />
+                {catalogImporting ? t("settings.catalogImporting") : t("settings.catalogImport")}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => void handleCatalogRefresh()}
+                disabled={catalogLoading || catalogImporting}
+              >
+                <RefreshCw className={`mr-1 h-4 w-4 ${catalogLoading ? "animate-spin" : ""}`} />
+                {catalogLoading ? t("settings.catalogRefreshing") : t("settings.catalogRefresh")}
+              </Button>
+            </div>
           </div>
         </CardContent>
       </Card>

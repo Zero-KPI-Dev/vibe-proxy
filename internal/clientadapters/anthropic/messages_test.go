@@ -74,3 +74,23 @@ func TestEncodeAnthropicStreamPreservesToolCalls(t *testing.T) {
 		t.Fatalf("tool call stream was not encoded: %s", body)
 	}
 }
+
+func TestEncodeAnthropicStreamKeepsThinkingSeparateFromText(t *testing.T) {
+	events := make(chan ir.StreamEvent, 3)
+	events <- ir.StreamEvent{Type: ir.EventReasoningDelta, Delta: ir.ContentBlock{Type: ir.ContentReasoning, Text: "private reasoning"}}
+	events <- ir.StreamEvent{Type: ir.EventContentDelta, Delta: ir.ContentBlock{Type: ir.ContentText, Text: "final answer"}}
+	events <- ir.StreamEvent{Type: ir.EventMessageDone}
+	close(events)
+	recorder := httptest.NewRecorder()
+	if err := (MessagesAdapter{}).EncodeStream(context.Background(), recorder, events); err != nil {
+		t.Fatal(err)
+	}
+	body := recorder.Body.String()
+	if !strings.Contains(body, `"type":"thinking_delta"`) ||
+		!strings.Contains(body, `"thinking":"private reasoning"`) ||
+		!strings.Contains(body, `"type":"text_delta"`) ||
+		!strings.Contains(body, `"text":"final answer"`) ||
+		strings.Contains(body, `"text":"private reasoning"`) {
+		t.Fatalf("thinking stream leaked into visible text: %s", body)
+	}
+}

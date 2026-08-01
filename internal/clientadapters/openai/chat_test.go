@@ -69,3 +69,55 @@ func TestEncodeChatUnaryPreservesToolCalls(t *testing.T) {
 		t.Fatalf("tool call was not encoded: %s", body)
 	}
 }
+
+func TestEncodeChatKeepsReasoningOutOfVisibleContent(t *testing.T) {
+	response := &ir.Response{Messages: []ir.Message{{
+		Role: ir.RoleAssistant,
+		Content: []ir.ContentBlock{
+			{Type: ir.ContentReasoning, Text: "private reasoning"},
+			{Type: ir.ContentText, Text: "final answer"},
+		},
+	}}}
+	recorder := httptest.NewRecorder()
+	if err := (ChatAdapter{}).EncodeUnary(context.Background(), recorder, response); err != nil {
+		t.Fatal(err)
+	}
+	var payload struct {
+		Choices []struct {
+			Message struct {
+				Content          string `json:"content"`
+				ReasoningContent string `json:"reasoning_content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	message := payload.Choices[0].Message
+	if message.Content != "final answer" || message.ReasoningContent != "private reasoning" {
+		t.Fatalf("reasoning was merged into content: %s", recorder.Body.String())
+	}
+}
+
+func TestEncodeChatStreamKeepsReasoningInExtensionDelta(t *testing.T) {
+	events := make(chan ir.StreamEvent, 4)
+	events <- ir.StreamEvent{Type: ir.EventReasoningDelta, Delta: ir.ContentBlock{Type: ir.ContentReasoning, Text: "private reasoning"}}
+	events <- ir.StreamEvent{Type: ir.EventContentDelta, Delta: ir.ContentBlock{Type: ir.ContentText, Text: "final answer"}}
+	events <- ir.StreamEvent{Type: ir.EventUsageDelta, Usage: &ir.Usage{PromptTokens: 2, CompletionTokens: 3, TotalTokens: 5}}
+	events <- ir.StreamEvent{Type: ir.EventMessageDone}
+	close(events)
+	recorder := httptest.NewRecorder()
+	if err := (ChatAdapter{}).EncodeStream(context.Background(), recorder, events); err != nil {
+		t.Fatal(err)
+	}
+	body := recorder.Body.String()
+	if !strings.Contains(body, `"reasoning_content":"private reasoning"`) ||
+		!strings.Contains(body, `"content":"final answer"`) ||
+		!strings.Contains(body, `"choices":[]`) ||
+		!strings.Contains(body, `"prompt_tokens":2`) ||
+		!strings.Contains(body, `"completion_tokens":3`) ||
+		!strings.Contains(body, `"total_tokens":5`) ||
+		strings.Contains(body, `"content":"private reasoning"`) {
+		t.Fatalf("reasoning stream leaked into visible content: %s", body)
+	}
+}

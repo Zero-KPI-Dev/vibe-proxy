@@ -32,6 +32,9 @@ func TestNormalizeOCRRequestPreservesOrderAndOriginal(t *testing.T) {
 	if ScanImages(got).Count != 0 {
 		t.Fatal("normalized request still contains images")
 	}
+	if !strings.Contains(got.Messages[0].Content[0].Text, "Do not reveal or discuss") {
+		t.Fatalf("OCR guard does not suppress internal wrapper disclosure: %+v", got.Messages[0])
+	}
 }
 
 func TestNormalizeOCRRequestTruncatesAndGuardsOnce(t *testing.T) {

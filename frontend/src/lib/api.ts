@@ -16,12 +16,16 @@ import type {
   RawConfigResponse,
   ConfigValidationIssue,
   ModelCatalogRefreshResponse,
+  ModelCatalogSettingsResponse,
   ModelCatalogStatusResponse,
   ModelCatalogLookupResponse,
   MultimodalAdminConfig,
   MultimodalAdminInput,
   OCRTestResponse,
+  CloseBehavior,
+  DesktopSnapshot,
 } from "./types"
+import { AUTH_REQUIRED_EVENT } from "./auth-api"
 
 export function getToken(): string {
   return localStorage.getItem("vibe_admin_token") ?? ""
@@ -33,13 +37,17 @@ export function setToken(t: string) {
 
 async function request<T>(path: string, opts: RequestInit = {}): Promise<T> {
   const headers: Record<string, string> = {
-    "Content-Type": "application/json",
     ...(opts.headers as Record<string, string>),
   }
+  const isFormData = typeof FormData !== "undefined" && opts.body instanceof FormData
+  if (!isFormData && !headers["Content-Type"]) headers["Content-Type"] = "application/json"
   const token = getToken()
   if (token) headers["Authorization"] = `Bearer ${token}`
 
-  const resp = await fetch(path, { ...opts, headers })
+  const resp = await fetch(path, { ...opts, credentials: "same-origin", headers })
+  if (resp.status === 401) {
+    window.dispatchEvent(new Event(AUTH_REQUIRED_EVENT))
+  }
   const text = await resp.text()
   let body: unknown
   try {
@@ -102,15 +110,45 @@ export const providerApi = {
 
 export const modelCatalogApi = {
   status: () => request<ModelCatalogStatusResponse>("/admin/model-catalog/status"),
+  updateProxy: (proxy_url: string) =>
+    request<ModelCatalogSettingsResponse>("/admin/model-catalog/settings", {
+      method: "PUT",
+      body: JSON.stringify({ proxy_url }),
+    }),
   refresh: () =>
     request<ModelCatalogRefreshResponse>("/admin/model-catalog/refresh", {
       method: "POST",
     }),
+  importFile: (file: File) => {
+    const form = new FormData()
+    form.set("catalog", file)
+    return request<ModelCatalogRefreshResponse>("/admin/model-catalog/import", {
+      method: "POST",
+      body: form,
+    })
+  },
   lookup: (data: { provider_id: string; catalog_provider?: string; base_url: string; models: string[] }) =>
     request<ModelCatalogLookupResponse>("/admin/model-catalog/lookup", {
       method: "POST",
       body: JSON.stringify(data),
     }),
+}
+
+// ---- Desktop application ----
+export const desktopApi = {
+  snapshot: () => request<DesktopSnapshot>("/admin/desktop"),
+  setCloseBehavior: (close_behavior: CloseBehavior) =>
+    request<{ close_behavior: CloseBehavior }>("/admin/desktop/preferences", {
+      method: "PUT",
+      body: JSON.stringify({ close_behavior }),
+    }),
+  openDataDir: () =>
+    request<{ opened: boolean }>("/admin/desktop/open-data-dir", { method: "POST" }),
+  importConfig: () =>
+    request<{ imported: boolean; path?: string; loaded_at?: string }>(
+      "/admin/desktop/import-config",
+      { method: "POST" },
+    ),
 }
 
 export const multimodalApi = {

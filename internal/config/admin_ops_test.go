@@ -47,6 +47,48 @@ func TestSaveRawConfigRejectsInvalidRuntimeWithoutReplacingFile(t *testing.T) {
 	}
 }
 
+func TestSaveRawConfigPreservesLegacyRuntime(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	legacy := `server:
+  listen: 127.0.0.1:8080
+channels:
+  - id: legacy
+    protocol: openai_chat
+    base_url: https://legacy.example/v1
+    models:
+      vibe-chat: legacy-chat
+`
+	if err := os.WriteFile(path, []byte(legacy), 0600); err != nil {
+		t.Fatal(err)
+	}
+	compiled, err := SaveRawConfig(path, legacy)
+	if err != nil {
+		t.Fatalf("SaveRawConfig() legacy error = %v", err)
+	}
+	provider, ok := compiled.Providers["legacy"]
+	if !ok || provider.BaseURL != "https://legacy.example/v1" {
+		t.Fatalf("legacy provider was not preserved: %+v", compiled.Providers)
+	}
+	written, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(written) != legacy {
+		t.Fatalf("legacy config was unexpectedly rewritten:\n%s", written)
+	}
+}
+
+func TestSimpleConfigMutationsRejectLegacyConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	legacy := "server:\n  listen: 127.0.0.1:8080\nchannels: []\n"
+	if err := os.WriteFile(path, []byte(legacy), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := UpsertAlias(path, "vibe-chat", "legacy/model"); err == nil || !strings.Contains(err.Error(), "legacy configuration is read-only") {
+		t.Fatalf("expected legacy mutation rejection, got %v", err)
+	}
+}
+
 func TestUpsertAliasRejectsUnknownProviderWithoutReplacingFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	original := "version: vibeproxy.io/v1alpha1\nproviders: {}\nmodels:\n  allow_raw: true\n  aliases: {}\n"

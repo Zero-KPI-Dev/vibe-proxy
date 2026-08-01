@@ -36,10 +36,10 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   const location = useLocation()
 
   return (
-    <div className="flex h-screen overflow-hidden bg-background">
+    <div className="flex h-dvh min-h-0 overflow-hidden bg-background">
       <aside
         className={cn(
-          "fixed inset-y-0 left-0 z-40 w-60 border-r border-border bg-card transform transition-transform duration-200 lg:relative lg:translate-x-0",
+          "fixed inset-y-0 left-0 z-40 w-60 shrink-0 border-r border-border bg-card transform transition-transform duration-200 lg:relative lg:translate-x-0",
           sidebarOpen ? "translate-x-0" : "-translate-x-full"
         )}
       >
@@ -79,8 +79,8 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
         </div>
       </aside>
 
-      <div className="flex flex-1 flex-col min-w-0">
-        <header className="flex h-14 items-center gap-4 border-b border-border px-4 lg:px-6">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <header className="flex h-14 shrink-0 items-center gap-4 border-b border-border px-4 lg:hidden">
           <Button
             variant="ghost"
             size="icon"
@@ -92,7 +92,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
           <Separator orientation="vertical" className="h-6 lg:hidden" />
         </header>
 
-        <main className="flex-1 overflow-auto p-4 lg:p-6">
+        <main className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden p-4 lg:p-6">
           {children}
         </main>
       </div>

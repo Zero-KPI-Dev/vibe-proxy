@@ -29,6 +29,10 @@ version: vibeproxy.io/v1alpha1
 server:
   listen: 127.0.0.1:8080
 
+# Optional. Leave empty to use HTTP_PROXY / HTTPS_PROXY from the process.
+model_catalog:
+  proxy_url: http://user:password@proxy.example.com:8080
+
 providers:
   anthropic:
     type: anthropic
@@ -77,6 +81,20 @@ providers:
 selection, or authentication. Explicit local capability overrides take precedence over
 provider defaults and catalog metadata. The catalog is advisory and is never consulted
 over the network in the data-plane hot path.
+
+Desktop applications do not necessarily inherit proxy environment variables
+from a terminal. In restricted networks, configure the models.dev proxy in
+**Settings → Model capability catalog**, or set it in YAML:
+
+```yaml
+model_catalog:
+  proxy_url: http://user:password@proxy.example.com:8080
+```
+
+Only `http://` and `https://` proxy URLs are accepted. Leaving `proxy_url`
+empty restores the standard `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY`
+environment behavior. Proxy credentials are local secrets and are not echoed
+by the model-catalog status or settings endpoints.
 
 Provider-wide defaults and per-model corrections use an explicit three-state value:
 

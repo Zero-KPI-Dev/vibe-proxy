@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -185,6 +186,38 @@ func TestServiceRefreshUsesETagAndDiskCache(t *testing.T) {
 	}
 }
 
+func TestServiceRefreshUsesConfiguredProxy(t *testing.T) {
+	requestedURL := ""
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestedURL = r.URL.String()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, catalogFixture)
+	}))
+	defer proxy.Close()
+
+	service := NewService(Options{
+		SourceURL: "http://catalog.example/api.json",
+		ProxyURL:  proxy.URL,
+	})
+	if err := service.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if requestedURL != "http://catalog.example/api.json" {
+		t.Fatalf("proxy received URL %q", requestedURL)
+	}
+	if state := service.State(); state.Models != 6 || state.Stale {
+		t.Fatalf("unexpected catalog state: %#v", state)
+	}
+}
+
+func TestServiceRejectsInvalidConfiguredProxy(t *testing.T) {
+	service := NewService(Options{ProxyURL: "socks5://proxy.example:1080"})
+	err := service.Refresh(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "invalid model catalog proxy URL") {
+		t.Fatalf("expected invalid proxy error, got %v", err)
+	}
+}
+
 func TestServiceRefreshKeepsStaleCatalogOnFailure(t *testing.T) {
 	responses := 0
 	service := NewService(Options{Client: &http.Client{Transport: roundTrip(func(*http.Request) (*http.Response, error) {
@@ -205,9 +238,41 @@ func TestServiceRefreshKeepsStaleCatalogOnFailure(t *testing.T) {
 	}
 }
 
+func TestServiceImportsOfflineCatalogAndPersistsOrigin(t *testing.T) {
+	cachePath := filepath.Join(t.TempDir(), "models-dev.json")
+	service := NewService(Options{CachePath: cachePath})
+	if err := service.Import(strings.NewReader(catalogFixture)); err != nil {
+		t.Fatal(err)
+	}
+	if state := service.State(); state.Models != 6 || state.Providers != 2 || state.Origin != "upload" || state.Stale {
+		t.Fatalf("unexpected imported state: %#v", state)
+	}
+	if match := service.Lookup("openai", "", "", "gpt-vision"); match.ImageInput != SupportSupported {
+		t.Fatalf("imported catalog lookup failed: %#v", match)
+	}
+
+	reloaded := NewService(Options{CachePath: cachePath})
+	if state := reloaded.State(); state.Models != 6 || state.Origin != "upload" || !state.Stale {
+		t.Fatalf("import origin was not preserved through disk cache: %#v", state)
+	}
+}
+
+func TestServiceRejectsInvalidImportWithoutReplacingCatalog(t *testing.T) {
+	service := NewService(Options{})
+	if err := service.Import(strings.NewReader(catalogFixture)); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Import(strings.NewReader(`{"broken":`)); err == nil {
+		t.Fatal("expected invalid import error")
+	}
+	if state := service.State(); state.Models != 6 || state.Origin != "upload" {
+		t.Fatalf("invalid import replaced the usable catalog: %#v", state)
+	}
+}
+
 func TestServiceRejectsOversizedCatalog(t *testing.T) {
 	service := NewService(Options{Client: &http.Client{Transport: roundTrip(func(*http.Request) (*http.Response, error) {
-		body := io.NopCloser(io.MultiReader(bytes.NewReader([]byte(`{"provider":{"models":{}}}`)), strings.NewReader(strings.Repeat(" ", maxCatalogBytes))))
+		body := io.NopCloser(io.MultiReader(bytes.NewReader([]byte(`{"provider":{"models":{}}}`)), strings.NewReader(strings.Repeat(" ", MaxCatalogBytes))))
 		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: body, ContentLength: -1}, nil
 	})}})
 	if err := service.Refresh(context.Background()); err == nil || !strings.Contains(err.Error(), "too large") {

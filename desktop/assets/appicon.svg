@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">Vibe Proxy</title>
+  <desc id="desc">A violet gateway mark with a mint signal path.</desc>
+  <defs>
+    <linearGradient id="background" x1="100" y1="70" x2="924" y2="954" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#7048e8"/>
+      <stop offset="1" stop-color="#3b167f"/>
+    </linearGradient>
+    <linearGradient id="signal" x1="318" y1="254" x2="734" y2="776" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#98f5d2"/>
+      <stop offset="1" stop-color="#42d5b0"/>
+    </linearGradient>
+  </defs>
+  <rect width="1024" height="1024" rx="224" fill="url(#background)"/>
+  <path d="M284 390 512 258l228 132v264L512 786 284 654V390Z" fill="#fff" fill-opacity=".13"/>
+  <path d="m342 414 170 98 170-98M342 610l170 98 170-98M512 512v196" fill="none" stroke="url(#signal)" stroke-width="54" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="342" cy="414" r="46" fill="#fff"/>
+  <circle cx="682" cy="414" r="46" fill="#fff"/>
+  <circle cx="512" cy="708" r="46" fill="#fff"/>
+</svg>

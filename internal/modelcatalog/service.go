@@ -7,18 +7,21 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 )
 
-const maxCatalogBytes = 10 << 20
+const MaxCatalogBytes = 10 << 20
 
 type Options struct {
 	SourceURL string
 	CachePath string
+	ProxyURL  string
 	Client    *http.Client
 }
 
@@ -33,6 +36,7 @@ type Service struct {
 type cacheEnvelope struct {
 	ETag      string          `json:"etag,omitempty"`
 	FetchedAt time.Time       `json:"fetched_at"`
+	Origin    string          `json:"origin,omitempty"`
 	Data      json.RawMessage `json:"data"`
 }
 
@@ -41,7 +45,17 @@ func NewService(opts Options) *Service {
 		opts.SourceURL = DefaultSourceURL
 	}
 	if opts.Client == nil {
-		opts.Client = &http.Client{Timeout: 15 * time.Second}
+		client, err := clientForProxy(opts.ProxyURL)
+		if err != nil {
+			// Runtime configuration validation rejects invalid proxy URLs. Keep
+			// construction total for direct package callers and surface the
+			// problem when they attempt a refresh.
+			client = &http.Client{
+				Timeout:   15 * time.Second,
+				Transport: roundTripError{err: err},
+			}
+		}
+		opts.Client = client
 	}
 	s := &Service{sourceURL: opts.SourceURL, cachePath: opts.CachePath, client: opts.Client}
 	s.value.Store(emptySnapshot(opts.SourceURL))
@@ -51,8 +65,21 @@ func NewService(opts Options) *Service {
 
 func (s *Service) SetHTTPClient(client *http.Client) {
 	if client != nil {
+		s.refreshMu.Lock()
 		s.client = client
+		s.refreshMu.Unlock()
 	}
+}
+
+// SetProxyURL updates catalog network access without restarting the gateway.
+// Empty uses Go's normal HTTP_PROXY/HTTPS_PROXY/NO_PROXY environment handling.
+func (s *Service) SetProxyURL(raw string) error {
+	client, err := clientForProxy(raw)
+	if err != nil {
+		return err
+	}
+	s.SetHTTPClient(client)
+	return nil
 }
 
 func (s *Service) Snapshot() *Snapshot { return s.value.Load() }
@@ -61,6 +88,27 @@ func (s *Service) State() State { return s.Snapshot().State() }
 
 func (s *Service) Lookup(providerHint, vibeProviderID, baseURL, modelID string) Match {
 	return s.Snapshot().Lookup(providerHint, vibeProviderID, baseURL, modelID)
+}
+
+func clientForProxy(raw string) (*http.Client, error) {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		transport.Proxy = http.ProxyFromEnvironment
+	} else {
+		proxyURL, err := url.Parse(raw)
+		if err != nil || proxyURL.Host == "" || (proxyURL.Scheme != "http" && proxyURL.Scheme != "https") {
+			return nil, fmt.Errorf("invalid model catalog proxy URL")
+		}
+		transport.Proxy = http.ProxyURL(proxyURL)
+	}
+	return &http.Client{Timeout: 15 * time.Second, Transport: transport}, nil
+}
+
+type roundTripError struct{ err error }
+
+func (r roundTripError) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, r.err
 }
 
 func (s *Service) Ensure(ctx context.Context, maxAge time.Duration) error {
@@ -95,6 +143,7 @@ func (s *Service) Refresh(ctx context.Context) error {
 		}
 		state := current.state
 		state.FetchedAt = time.Now().UTC()
+		state.Origin = "remote"
 		state.Stale = false
 		state.Error = ""
 		next, err := parseSnapshot(current.raw, state)
@@ -108,20 +157,21 @@ func (s *Service) Refresh(ctx context.Context) error {
 		io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 		return s.markStale(fmt.Errorf("fetch models.dev catalog: HTTP %d", resp.StatusCode))
 	}
-	if resp.ContentLength > maxCatalogBytes {
+	if resp.ContentLength > MaxCatalogBytes {
 		return s.markStale(fmt.Errorf("fetch models.dev catalog: response too large"))
 	}
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxCatalogBytes+1))
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, MaxCatalogBytes+1))
 	if err != nil {
 		return s.markStale(fmt.Errorf("fetch models.dev catalog: %w", err))
 	}
-	if len(raw) > maxCatalogBytes {
+	if len(raw) > MaxCatalogBytes {
 		return s.markStale(fmt.Errorf("fetch models.dev catalog: response too large"))
 	}
 	state := State{
 		SourceURL: s.sourceURL,
 		ETag:      resp.Header.Get("ETag"),
 		FetchedAt: time.Now().UTC(),
+		Origin:    "remote",
 	}
 	next, err := parseSnapshot(raw, state)
 	if err != nil {
@@ -129,6 +179,36 @@ func (s *Service) Refresh(ctx context.Context) error {
 	}
 	s.value.Store(next)
 	return s.saveCache(next)
+}
+
+// Import replaces the in-memory and on-disk catalog with a validated models.dev
+// api.json payload. It supports fully offline environments without changing the
+// source URL used by future online refreshes.
+func (s *Service) Import(reader io.Reader) error {
+	s.refreshMu.Lock()
+	defer s.refreshMu.Unlock()
+
+	raw, err := io.ReadAll(io.LimitReader(reader, MaxCatalogBytes+1))
+	if err != nil {
+		return fmt.Errorf("read imported models.dev catalog: %w", err)
+	}
+	if len(raw) > MaxCatalogBytes {
+		return fmt.Errorf("import models.dev catalog: file too large")
+	}
+	state := State{
+		SourceURL: s.sourceURL,
+		FetchedAt: time.Now().UTC(),
+		Origin:    "upload",
+	}
+	next, err := parseSnapshot(raw, state)
+	if err != nil {
+		return err
+	}
+	if err := s.saveCache(next); err != nil {
+		return fmt.Errorf("save imported models.dev catalog: %w", err)
+	}
+	s.value.Store(next)
+	return nil
 }
 
 func (s *Service) markStale(err error) error {
@@ -153,14 +233,18 @@ func (s *Service) loadCache() error {
 		}
 		return s.markStale(fmt.Errorf("read model catalog cache: %w", err))
 	}
-	if len(raw) > maxCatalogBytes+1<<20 {
+	if len(raw) > MaxCatalogBytes+1<<20 {
 		return s.markStale(fmt.Errorf("read model catalog cache: file too large"))
 	}
 	var envelope cacheEnvelope
 	if err := json.Unmarshal(raw, &envelope); err != nil {
 		return s.markStale(fmt.Errorf("read model catalog cache: %w", err))
 	}
-	state := State{SourceURL: s.sourceURL, ETag: envelope.ETag, FetchedAt: envelope.FetchedAt, Stale: true}
+	origin := envelope.Origin
+	if origin == "" {
+		origin = "cache"
+	}
+	state := State{SourceURL: s.sourceURL, ETag: envelope.ETag, FetchedAt: envelope.FetchedAt, Origin: origin, Stale: true}
 	next, err := parseSnapshot(envelope.Data, state)
 	if err != nil {
 		return s.markStale(err)
@@ -174,7 +258,7 @@ func (s *Service) saveCache(snapshot *Snapshot) error {
 	if s.cachePath == "" || len(snapshot.raw) == 0 {
 		return nil
 	}
-	envelope := cacheEnvelope{ETag: snapshot.state.ETag, FetchedAt: snapshot.state.FetchedAt, Data: json.RawMessage(snapshot.raw)}
+	envelope := cacheEnvelope{ETag: snapshot.state.ETag, FetchedAt: snapshot.state.FetchedAt, Origin: snapshot.state.Origin, Data: json.RawMessage(snapshot.raw)}
 	var buf bytes.Buffer
 	encoder := json.NewEncoder(&buf)
 	if err := encoder.Encode(envelope); err != nil {

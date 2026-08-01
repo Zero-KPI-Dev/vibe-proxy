@@ -11,12 +11,8 @@ import (
 func DeleteProvider(path string, id string) (*RuntimeConfig, error) {
 	unlock := lockConfigMutation(path)
 	defer unlock()
-	b, err := os.ReadFile(path)
+	cfg, err := readSimpleConfig(path)
 	if err != nil {
-		return nil, err
-	}
-	var cfg SimpleConfig
-	if err := yaml.Unmarshal(b, &cfg); err != nil {
 		return nil, err
 	}
 	if _, exists := cfg.Providers[id]; !exists {
@@ -59,12 +55,8 @@ func DeleteProvider(path string, id string) (*RuntimeConfig, error) {
 func UpdateProvider(path string, input LocalProviderInput) (*RuntimeConfig, error) {
 	unlock := lockConfigMutation(path)
 	defer unlock()
-	b, err := os.ReadFile(path)
+	cfg, err := readSimpleConfig(path)
 	if err != nil {
-		return nil, err
-	}
-	var cfg SimpleConfig
-	if err := yaml.Unmarshal(b, &cfg); err != nil {
 		return nil, err
 	}
 	if cfg.Providers == nil {
@@ -104,11 +96,7 @@ func RawConfig(path string) (string, error) {
 func SaveRawConfig(path string, yamlContent string) (*RuntimeConfig, error) {
 	unlock := lockConfigMutation(path)
 	defer unlock()
-	var cfg SimpleConfig
-	if err := yaml.Unmarshal([]byte(yamlContent), &cfg); err != nil {
-		return nil, err
-	}
-	compiled, err := compileValidated(cfg)
+	compiled, err := compileRawValidated(path, []byte(yamlContent))
 	if err != nil {
 		return nil, err
 	}
@@ -121,12 +109,8 @@ func SaveRawConfig(path string, yamlContent string) (*RuntimeConfig, error) {
 func UpsertAlias(path string, alias, target string) (*RuntimeConfig, error) {
 	unlock := lockConfigMutation(path)
 	defer unlock()
-	b, err := os.ReadFile(path)
+	cfg, err := readSimpleConfig(path)
 	if err != nil {
-		return nil, err
-	}
-	var cfg SimpleConfig
-	if err := yaml.Unmarshal(b, &cfg); err != nil {
 		return nil, err
 	}
 	if cfg.Models.Aliases == nil {
@@ -150,12 +134,8 @@ func UpsertAlias(path string, alias, target string) (*RuntimeConfig, error) {
 func DeleteAlias(path string, alias string) (*RuntimeConfig, error) {
 	unlock := lockConfigMutation(path)
 	defer unlock()
-	b, err := os.ReadFile(path)
+	cfg, err := readSimpleConfig(path)
 	if err != nil {
-		return nil, err
-	}
-	var cfg SimpleConfig
-	if err := yaml.Unmarshal(b, &cfg); err != nil {
 		return nil, err
 	}
 	if cfg.Multimodal.VisionFallbackModel == alias {
@@ -185,12 +165,8 @@ func DeleteAlias(path string, alias string) (*RuntimeConfig, error) {
 func UpdateAliasDefaults(path string, defaultModel string, allowRaw bool) (*RuntimeConfig, error) {
 	unlock := lockConfigMutation(path)
 	defer unlock()
-	b, err := os.ReadFile(path)
+	cfg, err := readSimpleConfig(path)
 	if err != nil {
-		return nil, err
-	}
-	var cfg SimpleConfig
-	if err := yaml.Unmarshal(b, &cfg); err != nil {
 		return nil, err
 	}
 	cfg.Models.Default = defaultModel
@@ -224,12 +200,8 @@ type ClientKeyUpdate struct {
 func UpsertClientKey(path string, input ClientKeyInput) (*RuntimeConfig, string, error) {
 	unlock := lockConfigMutation(path)
 	defer unlock()
-	b, err := os.ReadFile(path)
+	cfg, err := readSimpleConfig(path)
 	if err != nil {
-		return nil, "", err
-	}
-	var cfg SimpleConfig
-	if err := yaml.Unmarshal(b, &cfg); err != nil {
 		return nil, "", err
 	}
 	for _, k := range cfg.ClientKeys {
@@ -278,12 +250,8 @@ func UpsertClientKey(path string, input ClientKeyInput) (*RuntimeConfig, string,
 func UpdateClientKey(path string, name string, update ClientKeyUpdate) (*RuntimeConfig, error) {
 	unlock := lockConfigMutation(path)
 	defer unlock()
-	b, err := os.ReadFile(path)
+	cfg, err := readSimpleConfig(path)
 	if err != nil {
-		return nil, err
-	}
-	var cfg SimpleConfig
-	if err := yaml.Unmarshal(b, &cfg); err != nil {
 		return nil, err
 	}
 	found := false
@@ -322,12 +290,8 @@ func UpdateClientKey(path string, name string, update ClientKeyUpdate) (*Runtime
 func DeleteClientKey(path string, name string) (*RuntimeConfig, error) {
 	unlock := lockConfigMutation(path)
 	defer unlock()
-	b, err := os.ReadFile(path)
+	cfg, err := readSimpleConfig(path)
 	if err != nil {
-		return nil, err
-	}
-	var cfg SimpleConfig
-	if err := yaml.Unmarshal(b, &cfg); err != nil {
 		return nil, err
 	}
 	filtered := make([]ClientKeyConfig, 0, len(cfg.ClientKeys))
@@ -366,6 +330,55 @@ func compileValidated(cfg SimpleConfig) (*RuntimeConfig, error) {
 		return nil, fmt.Errorf("invalid configuration: %+v", issues)
 	}
 	return compiled, nil
+}
+
+func compileRawValidated(path string, b []byte) (*RuntimeConfig, error) {
+	current, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	currentIsSimple, err := isSimpleConfigYAML(current)
+	if err != nil {
+		return nil, err
+	}
+	var compiled *RuntimeConfig
+	if currentIsSimple {
+		var cfg SimpleConfig
+		if err := yaml.Unmarshal(b, &cfg); err != nil {
+			return nil, err
+		}
+		compiled, err = compileValidated(cfg)
+	} else {
+		compiled, err = compileRuntimeYAML(b)
+		if err == nil {
+			if issues := ValidateRuntime(compiled); HasErrors(issues) {
+				err = fmt.Errorf("invalid configuration: %+v", issues)
+			}
+		}
+	}
+	if err != nil {
+		return nil, err
+	}
+	return compiled, nil
+}
+
+func readSimpleConfig(path string) (SimpleConfig, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return SimpleConfig{}, err
+	}
+	isSimple, err := isSimpleConfigYAML(b)
+	if err != nil {
+		return SimpleConfig{}, err
+	}
+	if !isSimple {
+		return SimpleConfig{}, fmt.Errorf("legacy configuration is read-only; migrate it to the current format before using this editor")
+	}
+	var cfg SimpleConfig
+	if err := yaml.Unmarshal(b, &cfg); err != nil {
+		return SimpleConfig{}, err
+	}
+	return cfg, nil
 }
 
 func splitAlias(target string) []string {

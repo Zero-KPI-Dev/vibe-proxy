@@ -25,6 +25,9 @@ func (p Provider) Capabilities() protocol.Capabilities {
 
 func (p Provider) BuildRequest(ctx context.Context, req *ir.Request, target modelresolver.Target) (*http.Request, error) {
 	out := chatRequest{Model: target.Model, Stream: req.Stream, MaxTokens: req.MaxTokens, Temperature: req.Temperature, TopP: req.TopP, Stop: req.Stop}
+	if req.Stream {
+		out.StreamOptions = &streamOptions{IncludeUsage: true}
+	}
 	for _, m := range req.Messages {
 		out.Messages = append(out.Messages, fromIRMessage(m))
 	}
@@ -74,6 +77,7 @@ func (p Provider) ParseStream(ctx context.Context, resp *http.Response) (<-chan 
 		defer close(out)
 		defer resp.Body.Close()
 		reader := bufio.NewReader(resp.Body)
+		finished := false
 		for {
 			select {
 			case <-ctx.Done():
@@ -82,6 +86,10 @@ func (p Provider) ParseStream(ctx context.Context, resp *http.Response) (<-chan 
 			}
 			line, err := reader.ReadString('\n')
 			if err != nil {
+				if err == io.EOF && finished {
+					emitStreamEvent(ctx, out, ir.StreamEvent{Type: ir.EventMessageDone, Time: time.Now()})
+					return
+				}
 				if ctx.Err() == nil {
 					emitStreamEvent(ctx, out, ir.StreamEvent{Type: ir.EventError, Time: time.Now(), Error: &ir.GatewayError{StatusCode: 502, Kind: "upstream_error", Code: "stream_interrupted", Message: "Upstream stream interrupted."}})
 				}
@@ -103,29 +111,30 @@ func (p Provider) ParseStream(ctx context.Context, resp *http.Response) (<-chan 
 			if json.Unmarshal([]byte(data), &chunk) != nil {
 				continue
 			}
-			for _, ch := range chunk.Choices {
-				if ch.Delta.ReasoningContent != "" {
-					if !emitStreamEvent(ctx, out, ir.StreamEvent{Type: ir.EventReasoningDelta, Time: time.Now(), Delta: ir.ContentBlock{Type: ir.ContentReasoning, Text: ch.Delta.ReasoningContent}, Raw: []byte(data)}) {
-						return
+			if !finished {
+				for _, ch := range chunk.Choices {
+					if ch.Delta.ReasoningContent != "" {
+						if !emitStreamEvent(ctx, out, ir.StreamEvent{Type: ir.EventReasoningDelta, Time: time.Now(), Delta: ir.ContentBlock{Type: ir.ContentReasoning, Text: ch.Delta.ReasoningContent}, Raw: []byte(data)}) {
+							return
+						}
 					}
-				}
-				if ch.Delta.Content != "" {
-					if !emitStreamEvent(ctx, out, ir.StreamEvent{Type: ir.EventContentDelta, Time: time.Now(), Delta: ir.ContentBlock{Type: ir.ContentText, Text: ch.Delta.Content}, Raw: []byte(data)}) {
-						return
+					if ch.Delta.Content != "" {
+						if !emitStreamEvent(ctx, out, ir.StreamEvent{Type: ir.EventContentDelta, Time: time.Now(), Delta: ir.ContentBlock{Type: ir.ContentText, Text: ch.Delta.Content}, Raw: []byte(data)}) {
+							return
+						}
 					}
-				}
-				for _, tc := range ch.Delta.ToolCalls {
-					eventType := ir.EventToolCallDelta
-					if tc.ID != "" || tc.Function.Name != "" {
-						eventType = ir.EventToolCallStart
+					for _, tc := range ch.Delta.ToolCalls {
+						eventType := ir.EventToolCallDelta
+						if tc.ID != "" || tc.Function.Name != "" {
+							eventType = ir.EventToolCallStart
+						}
+						if !emitStreamEvent(ctx, out, ir.StreamEvent{Type: eventType, Time: time.Now(), Index: tc.Index, ToolCall: &ir.ToolCall{ID: tc.ID, Name: tc.Function.Name, Arguments: json.RawMessage(tc.Function.Arguments)}, Raw: []byte(data)}) {
+							return
+						}
 					}
-					if !emitStreamEvent(ctx, out, ir.StreamEvent{Type: eventType, Time: time.Now(), Index: tc.Index, ToolCall: &ir.ToolCall{ID: tc.ID, Name: tc.Function.Name, Arguments: json.RawMessage(tc.Function.Arguments)}, Raw: []byte(data)}) {
-						return
+					if ch.FinishReason != "" {
+						finished = true
 					}
-				}
-				if ch.FinishReason != "" {
-					emitStreamEvent(ctx, out, ir.StreamEvent{Type: ir.EventMessageDone, Time: time.Now(), Raw: []byte(data)})
-					return
 				}
 			}
 			if chunk.Usage.TotalTokens > 0 {
@@ -226,7 +235,7 @@ func onlyText(blocks []ir.ContentBlock) bool {
 func flatten(blocks []ir.ContentBlock) string {
 	var sb strings.Builder
 	for _, b := range blocks {
-		if b.Type == ir.ContentText || b.Type == ir.ContentReasoning {
+		if b.Type == ir.ContentText {
 			sb.WriteString(b.Text)
 		}
 	}
@@ -234,16 +243,20 @@ func flatten(blocks []ir.ContentBlock) string {
 }
 
 type chatRequest struct {
-	Model          string        `json:"model"`
-	Messages       []chatMessage `json:"messages"`
-	Stream         bool          `json:"stream"`
-	MaxTokens      *int          `json:"max_tokens,omitempty"`
-	Temperature    *float64      `json:"temperature,omitempty"`
-	TopP           *float64      `json:"top_p,omitempty"`
-	Stop           []string      `json:"stop,omitempty"`
-	Tools          []chatTool    `json:"tools,omitempty"`
-	ToolChoice     any           `json:"tool_choice,omitempty"`
-	ResponseFormat any           `json:"response_format,omitempty"`
+	Model          string         `json:"model"`
+	Messages       []chatMessage  `json:"messages"`
+	Stream         bool           `json:"stream"`
+	StreamOptions  *streamOptions `json:"stream_options,omitempty"`
+	MaxTokens      *int           `json:"max_tokens,omitempty"`
+	Temperature    *float64       `json:"temperature,omitempty"`
+	TopP           *float64       `json:"top_p,omitempty"`
+	Stop           []string       `json:"stop,omitempty"`
+	Tools          []chatTool     `json:"tools,omitempty"`
+	ToolChoice     any            `json:"tool_choice,omitempty"`
+	ResponseFormat any            `json:"response_format,omitempty"`
+}
+type streamOptions struct {
+	IncludeUsage bool `json:"include_usage"`
 }
 type chatMessage struct {
 	Role             string         `json:"role"`

@@ -12,6 +12,7 @@ export interface PlaygroundMessage {
   id: string
   role: "user" | "assistant"
   content: string
+  reasoning?: string
   images?: PlaygroundImage[]
 }
 
@@ -138,11 +139,31 @@ export function buildPlaygroundBody(
 }
 
 export function streamDelta(endpoint: PlaygroundEndpoint, payload: Record<string, any>): string {
-  if (endpoint === "anthropic") return payload.delta?.text ?? ""
+  if (endpoint === "anthropic") {
+    return payload.delta?.type === "text_delta" ? payload.delta.text ?? "" : ""
+  }
   if (endpoint === "openai_responses") {
     return payload.type === "response.output_text.delta" ? payload.delta ?? "" : ""
   }
   return payload.choices?.[0]?.delta?.content ?? payload.choices?.[0]?.text ?? ""
+}
+
+export function streamReasoningDelta(
+  endpoint: PlaygroundEndpoint,
+  payload: Record<string, any>
+): string {
+  if (endpoint === "anthropic") {
+    return payload.delta?.type === "thinking_delta" ? payload.delta.thinking ?? "" : ""
+  }
+  if (endpoint === "openai_responses") {
+    return payload.type === "response.reasoning_summary_text.delta" ||
+      payload.type === "response.reasoning_text.delta"
+      ? payload.delta ?? ""
+      : ""
+  }
+  return payload.choices?.[0]?.delta?.reasoning_content ??
+    payload.choices?.[0]?.delta?.reasoning ??
+    ""
 }
 
 export function unaryText(endpoint: PlaygroundEndpoint, payload: Record<string, any>): string {
@@ -162,4 +183,26 @@ export function unaryText(endpoint: PlaygroundEndpoint, payload: Record<string, 
     return text || JSON.stringify(payload)
   }
   return payload.choices?.[0]?.message?.content ?? payload.choices?.[0]?.text ?? JSON.stringify(payload)
+}
+
+export function unaryReasoning(
+  endpoint: PlaygroundEndpoint,
+  payload: Record<string, any>
+): string {
+  if (endpoint === "anthropic") {
+    return (payload.content ?? [])
+      .filter((block: Record<string, unknown>) => block.type === "thinking")
+      .map((block: Record<string, unknown>) => String(block.thinking ?? ""))
+      .join("")
+  }
+  if (endpoint === "openai_responses") {
+    return (payload.output ?? [])
+      .filter((item: Record<string, unknown>) => item.type === "reasoning")
+      .flatMap((item: Record<string, any>) => item.summary ?? item.content ?? [])
+      .map((part: Record<string, unknown>) => String(part.text ?? part.summary_text ?? ""))
+      .join("")
+  }
+  return payload.choices?.[0]?.message?.reasoning_content ??
+    payload.choices?.[0]?.message?.reasoning ??
+    ""
 }

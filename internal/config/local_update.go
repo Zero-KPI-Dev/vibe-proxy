@@ -2,7 +2,6 @@ package config
 
 import (
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/a448582655/vibe-proxy/internal/modelcapability"
@@ -32,12 +31,8 @@ type LocalProviderInput struct {
 func UpsertLocalProvider(path string, input LocalProviderInput) (*RuntimeConfig, error) {
 	unlock := lockConfigMutation(path)
 	defer unlock()
-	b, err := os.ReadFile(path)
+	cfg, err := readSimpleConfig(path)
 	if err != nil {
-		return nil, err
-	}
-	var cfg SimpleConfig
-	if err := yaml.Unmarshal(b, &cfg); err != nil {
 		return nil, err
 	}
 	if cfg.Providers == nil {

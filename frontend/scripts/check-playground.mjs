@@ -7,7 +7,9 @@ import {
   buildPlaygroundBody,
   clipboardImageFiles,
   streamDelta,
+  streamReasoningDelta,
   unaryText,
+  unaryReasoning,
 } from "../src/lib/playground-request.ts"
 import {
   conversationForStorage,
@@ -75,6 +77,14 @@ assert.equal(storedConversation[0].images[0].dataUrl, undefined)
 assert.equal(conversationWithImage[0].images[0].dataUrl, "data:image/png;base64,secret-image-bytes")
 assert.deepEqual(conversationImageIds(conversationWithImage), ["image-1"])
 
+const conversationWithReasoning = conversationForStorage([{
+  id: "assistant-1",
+  role: "assistant",
+  content: "final answer",
+  reasoning: "private reasoning",
+}])
+assert.equal(conversationWithReasoning[0].reasoning, "private reasoning")
+
 const conversationStore = withConversation({}, "conversation-1", conversationWithImage)
 const prunedConversationStore = withoutConversation(conversationStore, "conversation-1")
 assert.deepEqual(prunedConversationStore, {})
@@ -128,10 +138,50 @@ assert.equal(
   "ok"
 )
 assert.equal(
+  streamReasoningDelta("openai_chat", {
+    choices: [{ delta: { reasoning_content: "thinking" } }],
+  }),
+  "thinking"
+)
+assert.equal(
+  streamReasoningDelta("anthropic", {
+    delta: { type: "thinking_delta", thinking: "thinking" },
+  }),
+  "thinking"
+)
+assert.equal(
+  streamReasoningDelta("openai_responses", {
+    type: "response.reasoning_summary_text.delta",
+    delta: "thinking",
+  }),
+  "thinking"
+)
+assert.equal(
   unaryText("openai_responses", {
     output: [{ content: [{ type: "output_text", text: "done" }] }],
   }),
   "done"
+)
+assert.equal(
+  unaryReasoning("openai_chat", {
+    choices: [{ message: { reasoning_content: "thinking" } }],
+  }),
+  "thinking"
+)
+assert.equal(
+  unaryReasoning("anthropic", {
+    content: [{ type: "thinking", thinking: "thinking" }],
+  }),
+  "thinking"
+)
+assert.equal(
+  unaryReasoning("openai_responses", {
+    output: [{
+      type: "reasoning",
+      summary: [{ type: "summary_text", text: "thinking" }],
+    }],
+  }),
+  "thinking"
 )
 
 console.log("playground protocol encoding OK")

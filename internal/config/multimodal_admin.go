@@ -2,7 +2,6 @@ package config
 
 import (
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/a448582655/vibe-proxy/internal/upstreamauth"
@@ -27,12 +26,8 @@ type MultimodalAdminInput struct {
 func SaveMultimodal(path string, input MultimodalAdminInput) (*RuntimeConfig, error) {
 	unlock := lockConfigMutation(path)
 	defer unlock()
-	raw, err := os.ReadFile(path)
+	cfg, err := readSimpleConfig(path)
 	if err != nil {
-		return nil, err
-	}
-	var cfg SimpleConfig
-	if err := yaml.Unmarshal(raw, &cfg); err != nil {
 		return nil, err
 	}
 	next, err := BuildMultimodal(input, &cfg.Multimodal)

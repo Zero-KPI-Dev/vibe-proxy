@@ -22,3 +22,7 @@ vibe-proxy
 frontend/node_modules/
 frontend/dist/
 frontend/tsconfig.tsbuildinfo
+
+# desktop build output
+desktop/bin/
+desktop/.task/

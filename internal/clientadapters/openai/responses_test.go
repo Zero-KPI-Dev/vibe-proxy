@@ -93,3 +93,46 @@ func TestEncodeResponsesStreamAddsFunctionCallItem(t *testing.T) {
 		t.Fatalf("function call stream was not encoded: %s", body)
 	}
 }
+
+func TestEncodeResponsesKeepsReasoningSeparateFromOutputText(t *testing.T) {
+	response := &ir.Response{Messages: []ir.Message{{
+		Role: ir.RoleAssistant,
+		Content: []ir.ContentBlock{
+			{Type: ir.ContentReasoning, Text: "private reasoning"},
+			{Type: ir.ContentText, Text: "final answer"},
+		},
+	}}}
+	recorder := httptest.NewRecorder()
+	if err := (ResponsesAdapter{}).EncodeUnary(context.Background(), recorder, response); err != nil {
+		t.Fatal(err)
+	}
+	body := recorder.Body.String()
+	if !strings.Contains(body, `"type":"reasoning"`) ||
+		!strings.Contains(body, `"type":"summary_text"`) ||
+		!strings.Contains(body, `"text":"private reasoning"`) ||
+		!strings.Contains(body, `"type":"output_text"`) ||
+		!strings.Contains(body, `"text":"final answer"`) {
+		t.Fatalf("reasoning was not encoded separately from output text: %s", body)
+	}
+}
+
+func TestEncodeResponsesStreamKeepsReasoningSeparateFromOutputText(t *testing.T) {
+	events := make(chan ir.StreamEvent, 4)
+	events <- ir.StreamEvent{Type: ir.EventReasoningDelta, Delta: ir.ContentBlock{Type: ir.ContentReasoning, Text: "private reasoning"}}
+	events <- ir.StreamEvent{Type: ir.EventContentDelta, Delta: ir.ContentBlock{Type: ir.ContentText, Text: "final answer"}}
+	events <- ir.StreamEvent{Type: ir.EventUsageDelta, Usage: &ir.Usage{PromptTokens: 2, CompletionTokens: 3, TotalTokens: 5}}
+	events <- ir.StreamEvent{Type: ir.EventMessageDone}
+	close(events)
+	recorder := httptest.NewRecorder()
+	if err := (ResponsesAdapter{}).EncodeStream(context.Background(), recorder, events); err != nil {
+		t.Fatal(err)
+	}
+	body := recorder.Body.String()
+	if !strings.Contains(body, `event: response.reasoning_summary_text.delta`) ||
+		!strings.Contains(body, `"delta":"private reasoning"`) ||
+		!strings.Contains(body, `event: response.output_text.delta`) ||
+		!strings.Contains(body, `"delta":"final answer"`) ||
+		!strings.Contains(body, `"usage":{"input_tokens":2,"output_tokens":3,"total_tokens":5}`) {
+		t.Fatalf("reasoning stream was not encoded separately from output text: %s", body)
+	}
+}

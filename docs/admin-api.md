@@ -1,6 +1,67 @@
 # Admin API
 
-Admin APIs are protected by a separate bearer token configured through `VIBE_PROXY_ADMIN_TOKEN` or the configured `security.admin_bearer_token_env`.
+In CLI/server deployments, Admin APIs are protected by a separate bearer token
+configured through `VIBE_PROXY_ADMIN_TOKEN` or the configured
+`security.admin_bearer_token_env`. The native desktop application instead uses
+a management password and same-origin browser sessions; it does not ask the
+user to discover or copy its internal admin token.
+
+## Desktop Authentication and Controls
+
+On the first desktop launch, the native window asks the user to create a
+management password. Only an Argon2id password hash is stored in `auth.json`
+under the application data directory. Provider credentials and data-plane
+client keys remain separate and are managed from their existing control-plane
+pages.
+
+The desktop process also creates a short-lived, single-use bootstrap nonce and
+navigates its native WebView to:
+
+```text
+GET /desktop/bootstrap/{nonce}
+```
+
+The response sets a process-local, same-origin, HttpOnly
+`vibe_desktop_session` cookie and redirects to `/`. The nonce cannot be reused
+and neither it nor the generated internal admin token is written to disk. This
+lets the native window authenticate automatically on each launch without
+placing a credential in a URL, browser storage, config file, or log.
+
+After first-run setup, a regular browser—including **Open in Browser** from the
+tray/menu bar—shows the management-password login screen and receives its own
+HttpOnly session after a successful login. If the native WebView fails before
+the first-run password has been created, **Open in Browser** may use one
+single-use bootstrap session so setup is still recoverable. Opening the bare
+listen address can never claim an uninitialized control plane.
+
+The password/session endpoints are:
+
+```text
+GET  /auth/status
+POST /auth/setup
+POST /auth/login
+POST /auth/logout
+```
+
+`/auth/setup` requires both a native bootstrap session and a same-origin
+request. `/auth/login` is enabled only after setup. State-changing Admin API
+requests authenticated by a desktop cookie also require a matching `Origin`
+header. CLI Bearer-token authentication remains valid and does not use these
+password routes.
+
+The following routes are available only when the native desktop controller is
+attached:
+
+```text
+GET  /admin/desktop
+PUT  /admin/desktop/preferences
+POST /admin/desktop/open-data-dir
+POST /admin/desktop/import-config
+```
+
+They expose the platform, close behavior, listen address and safe native
+actions. In CLI mode the snapshot reports desktop controls as unavailable and
+mutating routes return a conflict response.
 
 ## Validate Config
 
@@ -76,13 +137,36 @@ Provider credentials are used only for the probe and are never returned.
 
 ```text
 GET  /admin/model-catalog/status
+GET  /admin/model-catalog/settings
+PUT  /admin/model-catalog/settings
 POST /admin/model-catalog/refresh
+POST /admin/model-catalog/import
 POST /admin/model-catalog/lookup
 ```
 
 The catalog is downloaded from models.dev into a local cache. Data-plane requests never
 depend on a live models.dev request. `refresh` honors HTTP validators and keeps the last
 usable cache when the remote source is temporarily unavailable.
+
+`PUT /admin/model-catalog/settings` accepts
+`{"proxy_url":"http://user:password@proxy.example.com:8080"}` and applies it
+without restarting vibe-proxy. Send an empty `proxy_url` to clear the explicit
+proxy and return to `HTTP_PROXY` / `HTTPS_PROXY` environment handling. Status
+responses expose only whether a proxy is configured and its credential-free
+origin; usernames and passwords are never returned.
+
+For restricted or fully offline networks, download `https://models.dev/api.json` on
+another machine and import it from Settings, or upload it directly:
+
+```bash
+curl -H "Authorization: Bearer $VIBE_PROXY_ADMIN_TOKEN" \
+  -F "catalog=@api.json;type=application/json" \
+  http://127.0.0.1:8080/admin/model-catalog/import
+```
+
+The file is limited to 10 MB and is parsed before it replaces the active catalog. An
+invalid upload leaves the previous usable catalog unchanged. A later online refresh still
+uses the normal models.dev URL.
 
 Lookup accepts a provider/model pair:
 
@@ -114,9 +198,13 @@ OCR credentials.
 `GET /admin/multimodal` reports `provider: builtin|http`. Built-in OCR is the
 default; an external endpoint and its authentication fields are only used when
 the provider is `http`. `POST /admin/multimodal/ocr/test` runs the selected
-provider against an embedded deterministic Chinese and English fixture and
-returns provider, engine (for built-in), latency, result count, and aggregate
-confidence without returning recognized text.
+provider against an embedded deterministic Chinese and English fixture. Its
+response separately reports whether the submitted form enabled fallback and
+whether the current runtime is active; a successful engine test can therefore
+return `warning: multimodal_disabled|multimodal_not_active`. This avoids treating
+an isolated OCR engine test as proof that image requests currently use OCR. The
+response also returns provider, engine (for built-in), latency, result count, and
+aggregate confidence without returning recognized text.
 
 Successful OCR responses also include:
 

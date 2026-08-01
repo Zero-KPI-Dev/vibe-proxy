@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -120,6 +121,34 @@ func TestRuntimeOpenAIChatToOpenAICompatible(t *testing.T) {
 	s.Routes().ServeHTTP(w, req)
 	if w.Code != 200 || !strings.Contains(w.Body.String(), `"content":"ok"`) {
 		t.Fatalf("unexpected response code=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestRuntimeDoesNotMergeUpstreamReasoningIntoVisibleContent(t *testing.T) {
+	s := newTestServer(t, func(r *http.Request) (*http.Response, error) {
+		return jsonResponse(200, `{"id":"chatcmpl_reasoning","model":"raw-chat","choices":[{"message":{"role":"assistant","reasoning_content":"private chain of thought","content":"final answer"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":2,"total_tokens":3}}`), nil
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"vibe-fast","messages":[{"role":"user","content":"hi"}]}`))
+	req.Header.Set("Authorization", "Bearer vibe-local-dev-key")
+	w := httptest.NewRecorder()
+	s.Routes().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("unexpected response: %d %s", w.Code, w.Body.String())
+	}
+	var payload struct {
+		Choices []struct {
+			Message struct {
+				Content          string `json:"content"`
+				ReasoningContent string `json:"reasoning_content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	message := payload.Choices[0].Message
+	if message.Content != "final answer" || message.ReasoningContent != "private chain of thought" {
+		t.Fatalf("reasoning leaked into normal content: %s", w.Body.String())
 	}
 }
 
@@ -430,6 +459,18 @@ multimodal:
 	if testW.Code != http.StatusOK || !strings.Contains(testW.Body.String(), `"ok":true`) || strings.Contains(testW.Body.String(), "unsaved-secret") {
 		t.Fatalf("unexpected OCR test response: %d %s", testW.Code, testW.Body.String())
 	}
+	if !strings.Contains(testW.Body.String(), `"enabled":true`) || !strings.Contains(testW.Body.String(), `"active":false`) || !strings.Contains(testW.Body.String(), `"warning":"multimodal_not_active"`) {
+		t.Fatalf("OCR test should distinguish a successful engine test from inactive runtime configuration: %s", testW.Body.String())
+	}
+
+	disabledBody := `{"enabled":false,"provider":"http","endpoint":"http://new-ocr.local/v1/ocr","auth_type":"api_key_header","api_key_source":"literal","api_key":"unsaved-secret","header":"x-ocr-key","min_confidence":0.55,"min_text_chars":4,"max_images":4}`
+	disabledReq := httptest.NewRequest(http.MethodPost, "/admin/multimodal/ocr/test", strings.NewReader(disabledBody))
+	disabledReq.Header.Set("Authorization", "Bearer admin-token")
+	disabledW := httptest.NewRecorder()
+	s.Routes().ServeHTTP(disabledW, disabledReq)
+	if disabledW.Code != http.StatusOK || !strings.Contains(disabledW.Body.String(), `"enabled":false`) || !strings.Contains(disabledW.Body.String(), `"active":false`) || !strings.Contains(disabledW.Body.String(), `"warning":"multimodal_disabled"`) {
+		t.Fatalf("disabled OCR test should return an activation warning: %d %s", disabledW.Code, disabledW.Body.String())
+	}
 
 	saveBody := `{"enabled":true,"endpoint":"http://new-ocr.local/v1/ocr","auth_type":"bearer","api_key_source":"env","api_key_env":"OCR_TOKEN","min_confidence":0.6,"min_text_chars":5,"max_images":3}`
 	saveReq := httptest.NewRequest(http.MethodPut, "/admin/multimodal", strings.NewReader(saveBody))
@@ -537,7 +578,7 @@ func TestRuntimeAdminValidateAndProviderTest(t *testing.T) {
 	}
 }
 
-func TestRuntimeProviderTestTreats404AsFailure(t *testing.T) {
+func TestRuntimeProviderTestReportsUnsupportedModelListing(t *testing.T) {
 	t.Setenv("VIBE_PROXY_ADMIN_TOKEN", "admin-token")
 	cfg, err := config.CompileSimple(config.SimpleConfig{Security: config.SecurityConfig{AdminBearerTokenEnv: "VIBE_PROXY_ADMIN_TOKEN"}, ClientKeys: []config.ClientKeyConfig{{Name: "test", KeyHash: "$2a$10$AXRkz.6y44ygdJFk6L1/IO0aRVp9zRMfXDJoBCBsroxVac/Lovvz6", Enabled: true, AllowedModels: []string{"*"}, RPM: 1000}}, Providers: map[string]config.ProviderConfig{"mockai": {Type: "openai-compatible", BaseURL: "https://mock.openai/v1", Auth: upstreamauth.Profile{Type: "none"}, Models: []string{"raw-chat"}}}, Models: config.ModelsConfig{AllowRaw: true, Aliases: map[string]string{"vibe-fast": "mockai/raw-chat"}}})
 	if err != nil {
@@ -553,7 +594,7 @@ func TestRuntimeProviderTestTreats404AsFailure(t *testing.T) {
 	testReq.Header.Set("Authorization", "Bearer admin-token")
 	testW := httptest.NewRecorder()
 	s.Routes().ServeHTTP(testW, testReq)
-	if testW.Code != 200 || !strings.Contains(testW.Body.String(), `"ok":false`) || !strings.Contains(testW.Body.String(), `"status":404`) {
+	if testW.Code != 200 || !strings.Contains(testW.Body.String(), `"ok":true`) || !strings.Contains(testW.Body.String(), `"reachable":true`) || !strings.Contains(testW.Body.String(), `"model_listing":"unsupported"`) || !strings.Contains(testW.Body.String(), `"status":404`) {
 		t.Fatalf("unexpected provider test response: %d %s", testW.Code, testW.Body.String())
 	}
 }
@@ -701,6 +742,48 @@ func TestRuntimeAdminModelCatalogRefreshStatusAndLookup(t *testing.T) {
 	s.Routes().ServeHTTP(lookupW, lookup)
 	if lookupW.Code != http.StatusOK || !strings.Contains(lookupW.Body.String(), `"gpt-vision":{"requested_model":"gpt-vision","status":"exact_provider"`) || !strings.Contains(lookupW.Body.String(), `"private-model":{"requested_model":"private-model","status":"not_found"`) {
 		t.Fatalf("unexpected lookup response: %d %s", lookupW.Code, lookupW.Body.String())
+	}
+}
+
+func TestRuntimeAdminModelCatalogOfflineImport(t *testing.T) {
+	t.Setenv("VIBE_PROXY_ADMIN_TOKEN", "admin-token")
+	cfg, err := config.CompileSimple(config.SimpleConfig{Security: config.SecurityConfig{AdminBearerTokenEnv: "VIBE_PROXY_ADMIN_TOKEN"}, Providers: map[string]config.ProviderConfig{}, Models: config.ModelsConfig{AllowRaw: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	testPromOnce.Do(func() { testProm = metrics.New() })
+	s := New("", cfg, metrics.MultiSink{}, testProm)
+
+	var upload bytes.Buffer
+	writer := multipart.NewWriter(&upload)
+	part, err := writer.CreateFormFile("catalog", "api.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.WriteString(part, `{"offline":{"id":"offline","models":{"offline-vision":{"id":"offline-vision","modalities":{"input":["text","image"],"output":["text"]}}}}}`)
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/admin/model-catalog/import", &upload)
+	req.Header.Set("Authorization", "Bearer admin-token")
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	w := httptest.NewRecorder()
+	s.Routes().ServeHTTP(w, req)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"models":1`) || !strings.Contains(w.Body.String(), `"origin":"upload"`) {
+		t.Fatalf("unexpected catalog import response: %d %s", w.Code, w.Body.String())
+	}
+	if match := s.catalog.Lookup("offline", "", "", "offline-vision"); match.ImageInput != modelcapability.SupportSupported {
+		t.Fatalf("imported model capability unavailable: %#v", match)
+	}
+
+	invalid := adminJSONRequest(http.MethodPost, "/admin/model-catalog/import", `{"invalid":`)
+	invalidW := httptest.NewRecorder()
+	s.Routes().ServeHTTP(invalidW, invalid)
+	if invalidW.Code != http.StatusBadRequest || !strings.Contains(invalidW.Body.String(), `"catalog_import_failed"`) {
+		t.Fatalf("unexpected invalid catalog import response: %d %s", invalidW.Code, invalidW.Body.String())
+	}
+	if state := s.catalog.State(); state.Models != 1 || state.Origin != "upload" {
+		t.Fatalf("invalid import replaced usable catalog: %#v", state)
 	}
 }
 

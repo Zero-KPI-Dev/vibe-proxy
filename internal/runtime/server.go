@@ -16,6 +16,7 @@ import (
 	clientanthropic "github.com/a448582655/vibe-proxy/internal/clientadapters/anthropic"
 	clientopenai "github.com/a448582655/vibe-proxy/internal/clientadapters/openai"
 	"github.com/a448582655/vibe-proxy/internal/config"
+	"github.com/a448582655/vibe-proxy/internal/desktopbridge"
 	"github.com/a448582655/vibe-proxy/internal/ir"
 	"github.com/a448582655/vibe-proxy/internal/metrics"
 	"github.com/a448582655/vibe-proxy/internal/modelcatalog"
@@ -41,24 +42,34 @@ type Snapshot struct {
 }
 
 type Server struct {
-	cfgPath          string
-	startedAt        time.Time
-	snapshot         atomic.Value
-	authenticator    *auth.Authenticator
-	httpClient       *http.Client
-	ocrHTTPClient    *http.Client
-	builtinOCR       ocr.Provider
-	clientAdapters   []protocol.ClientAdapter
-	providerAdapters map[string]protocol.ProviderAdapter
-	metrics          *metrics.Prometheus
-	sink             telemetry.EventSink
-	recent           *telemetry.RecentStore
-	observability    telemetry.ObservabilityReader
-	catalog          *modelcatalog.Service
-	semaphore        sync.Map
+	cfgPath            string
+	startedAt          time.Time
+	snapshot           atomic.Value
+	authenticator      *auth.Authenticator
+	httpClient         *http.Client
+	ocrHTTPClient      *http.Client
+	builtinOCR         ocr.Provider
+	clientAdapters     []protocol.ClientAdapter
+	providerAdapters   map[string]protocol.ProviderAdapter
+	metrics            *metrics.Prometheus
+	sink               telemetry.EventSink
+	recent             *telemetry.RecentStore
+	observability      telemetry.ObservabilityReader
+	catalog            *modelcatalog.Service
+	semaphore          sync.Map
+	adminTokenOverride string
+	desktopSessions    *auth.DesktopSessionStore
+	passwordAuth       *auth.PasswordAuth
+	desktopController  desktopbridge.Controller
 }
 
+// New builds a runtime server with the default options.
 func New(cfgPath string, cfg *config.RuntimeConfig, sink telemetry.EventSink, prom *metrics.Prometheus) *Server {
+	return NewWithOptions(cfgPath, cfg, sink, prom, Options{})
+}
+
+// NewWithOptions builds a runtime server with optional behavior.
+func NewWithOptions(cfgPath string, cfg *config.RuntimeConfig, sink telemetry.EventSink, prom *metrics.Prometheus, options Options) *Server {
 	var recent *telemetry.RecentStore
 	if r, ok := sink.(*telemetry.RecentStore); ok {
 		recent = r
@@ -73,8 +84,8 @@ func New(cfgPath string, cfg *config.RuntimeConfig, sink telemetry.EventSink, pr
 	if provider, ok := sink.(telemetry.ObservabilityReaderProvider); ok {
 		observability = provider.ObservabilityReader()
 	}
-	s := &Server{cfgPath: cfgPath, startedAt: time.Now(), authenticator: auth.NewAuthenticator(), httpClient: &http.Client{Timeout: 0}, ocrHTTPClient: &http.Client{}, builtinOCR: ocr.NewBuiltinProvider(), metrics: prom, sink: sink, recent: recent, observability: observability, catalog: modelcatalog.NewService(modelcatalog.Options{CachePath: modelCatalogCachePath(cfgPath, cfg)}), clientAdapters: []protocol.ClientAdapter{clientopenai.ChatAdapter{}, clientopenai.ResponsesAdapter{}, clientanthropic.MessagesAdapter{}}, providerAdapters: map[string]protocol.ProviderAdapter{"anthropic": provideranthropic.Provider{}, "openai-compatible": provideropenai.Provider{}}}
-	s.snapshot.Store(s.buildSnapshot(cfg))
+	s := &Server{cfgPath: cfgPath, startedAt: time.Now(), authenticator: auth.NewAuthenticator(), httpClient: &http.Client{Timeout: 0}, ocrHTTPClient: &http.Client{}, builtinOCR: ocr.NewBuiltinProvider(), metrics: prom, sink: sink, recent: recent, observability: observability, catalog: modelcatalog.NewService(modelcatalog.Options{CachePath: modelCatalogCachePath(cfgPath, cfg)}), clientAdapters: []protocol.ClientAdapter{clientopenai.ChatAdapter{}, clientopenai.ResponsesAdapter{}, clientanthropic.MessagesAdapter{}}, providerAdapters: map[string]protocol.ProviderAdapter{"anthropic": provideranthropic.Provider{}, "openai-compatible": provideropenai.Provider{}}, adminTokenOverride: options.AdminTokenOverride, desktopSessions: options.DesktopSessions, passwordAuth: options.PasswordAuth, desktopController: options.DesktopController}
+	s.applyRuntimeConfig(cfg)
 	return s
 }
 
@@ -107,6 +118,15 @@ func modelCatalogCachePath(cfgPath string, cfg *config.RuntimeConfig) string {
 	return cfg.Storage.SQLitePath + ".models-dev.json"
 }
 
+func (s *Server) applyRuntimeConfig(cfg *config.RuntimeConfig) {
+	if s.catalog != nil {
+		// The URL has already passed configuration validation. Keep catalog
+		// networking in sync with raw-config reloads and admin mutations.
+		_ = s.catalog.SetProxyURL(cfg.ModelCatalog.ProxyURL)
+	}
+	s.snapshot.Store(s.buildSnapshot(cfg))
+}
+
 func (s *Server) buildSnapshot(cfg *config.RuntimeConfig) *Snapshot {
 	resolver := modelresolver.New(cfg.ModelResolver)
 	processor := multimodal.NewProcessor(multimodal.ProcessorOptions{
@@ -124,12 +144,16 @@ func (s *Server) buildSnapshot(cfg *config.RuntimeConfig) *Snapshot {
 			return adapter.Capabilities(), true
 		},
 	})
+	adminToken := s.adminTokenOverride
+	if adminToken == "" {
+		adminToken = os.Getenv(cfg.Security.AdminBearerTokenEnv)
+	}
 	return &Snapshot{
 		LoadedAt:      time.Now(),
 		Config:        cfg,
 		Resolver:      resolver,
 		Preprocessors: preprocess.New(processor),
-		AdminToken:    os.Getenv(cfg.Security.AdminBearerTokenEnv),
+		AdminToken:    adminToken,
 	}
 }
 
@@ -144,12 +168,20 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/v1/messages", s.handle)
 	mux.Handle("/metrics", s.metrics.Handler())
 	mux.HandleFunc("/healthz", s.healthz)
+	mux.HandleFunc("/auth/status", s.authStatus)
+	mux.HandleFunc("/auth/setup", s.authSetup)
+	mux.HandleFunc("/auth/login", s.authLogin)
+	mux.HandleFunc("/auth/logout", s.authLogout)
 
 	// Admin API endpoints
 	mux.HandleFunc("/admin/playground/v1/chat/completions", s.adminPlayground("/v1/chat/completions"))
 	mux.HandleFunc("/admin/playground/v1/responses", s.adminPlayground("/v1/responses"))
 	mux.HandleFunc("/admin/playground/anthropic/v1/messages", s.adminPlayground("/anthropic/v1/messages"))
 	mux.HandleFunc("/admin/config/reload", s.reload)
+	mux.HandleFunc("/admin/desktop", s.desktopSnapshot)
+	mux.HandleFunc("/admin/desktop/preferences", s.desktopPreferences)
+	mux.HandleFunc("/admin/desktop/open-data-dir", s.desktopOpenDataDir)
+	mux.HandleFunc("/admin/desktop/import-config", s.desktopImportConfig)
 	mux.HandleFunc("/admin/config/snapshot", s.adminSnapshot)
 	mux.HandleFunc("/admin/config/validate", s.adminValidateConfig)
 	mux.HandleFunc("/admin/config/raw", s.adminRawConfig)
@@ -157,7 +189,9 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/admin/providers/models", s.adminProviderModels)
 	mux.HandleFunc("/admin/providers/health", s.adminProviderHealth)
 	mux.HandleFunc("/admin/model-catalog/status", s.adminModelCatalogStatus)
+	mux.HandleFunc("/admin/model-catalog/settings", s.adminModelCatalogSettings)
 	mux.HandleFunc("/admin/model-catalog/refresh", s.adminModelCatalogRefresh)
+	mux.HandleFunc("/admin/model-catalog/import", s.adminModelCatalogImport)
 	mux.HandleFunc("/admin/model-catalog/lookup", s.adminModelCatalogLookup)
 	mux.HandleFunc("/admin/multimodal", s.adminMultimodal)
 	mux.HandleFunc("/admin/multimodal/ocr/test", s.adminOCRTest)
@@ -172,8 +206,12 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/admin/metrics/summary", s.adminMetricsSummary)
 	mux.HandleFunc("/admin/metrics/history", s.adminMetricsHistory)
 
+	if s.desktopSessions != nil {
+		mux.HandleFunc(desktopBootstrapPrefix, s.desktopBootstrap)
+	}
+
 	// SPA dashboard (must be last as catch-all)
-	mux.Handle("/", spaFallback(spaHandler(), "index.html"))
+	mux.Handle("/", s.spaRoutes())
 	return limitBody(recordResponse(mux), 32<<20)
 }
 
@@ -405,9 +443,7 @@ func (s *Server) handleWithClient(w http.ResponseWriter, r *http.Request, truste
 
 func (s *Server) adminPlayground(targetPath string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		snap := s.current()
-		if !auth.AuthorizeAdmin(r, snap.AdminToken) {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
+		if !s.adminAuthorize(w, r) {
 			return
 		}
 		clone := r.Clone(r.Context())
@@ -458,29 +494,34 @@ func (s *Server) reload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", 405)
 		return
 	}
-	snap := s.current()
-	if !auth.AuthorizeAdmin(r, snap.AdminToken) {
-		http.Error(w, "unauthorized", 401)
+	if !s.adminAuthorize(w, r) {
 		return
 	}
+	if !s.reloadRuntimeConfig(w) {
+		return
+	}
+	s.writeJSON(w, map[string]any{"reloaded": true, "loaded_at": s.current().LoadedAt})
+}
+
+// reloadRuntimeConfig loads, validates, and atomically replaces the runtime snapshot.
+func (s *Server) reloadRuntimeConfig(w http.ResponseWriter) bool {
 	cfg, err := config.LoadRuntime(s.cfgPath)
 	if err != nil {
 		s.writeJSONError(w, http.StatusBadRequest, err.Error())
-		return
+		return false
 	}
 	if issues := config.ValidateRuntime(cfg); config.HasErrors(issues) {
 		s.writeJSONStatus(w, http.StatusBadRequest, map[string]any{"error": "invalid configuration", "issues": issues})
-		return
+		return false
 	}
-	s.snapshot.Store(s.buildSnapshot(cfg))
-	s.writeJSON(w, map[string]any{"reloaded": true, "loaded_at": s.current().LoadedAt})
+	s.applyRuntimeConfig(cfg)
+	return true
 }
 func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
-	snap := s.current()
-	if !auth.AuthorizeAdmin(r, snap.AdminToken) {
-		http.Error(w, "unauthorized", 401)
+	if !s.adminAuthorize(w, r) {
 		return
 	}
+	snap := s.current()
 	providers := []map[string]any{}
 	providerIDs := make([]string, 0, len(snap.Config.Providers))
 	for id := range snap.Config.Providers {
@@ -522,22 +563,20 @@ func providerAuthMeta(p config.ProviderConfig) (authType string, keySource strin
 }
 
 func (s *Server) adminValidateConfig(w http.ResponseWriter, r *http.Request) {
-	snap := s.current()
-	if !auth.AuthorizeAdmin(r, snap.AdminToken) {
-		http.Error(w, "unauthorized", 401)
+	if !s.adminAuthorize(w, r) {
 		return
 	}
+	snap := s.current()
 	issues := config.ValidateRuntime(snap.Config)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{"valid": !config.HasErrors(issues), "issues": issues})
 }
 
 func (s *Server) adminProviderTest(w http.ResponseWriter, r *http.Request) {
-	snap := s.current()
-	if !auth.AuthorizeAdmin(r, snap.AdminToken) {
-		http.Error(w, "unauthorized", 401)
+	if !s.adminAuthorize(w, r) {
 		return
 	}
+	snap := s.current()
 	providerID := r.URL.Query().Get("id")
 	if providerID == "" {
 		http.Error(w, "missing provider id", 400)
@@ -572,8 +611,16 @@ func (s *Server) adminProviderTest(w http.ResponseWriter, r *http.Request) {
 	}
 	io.Copy(io.Discard, io.LimitReader(resp.Body, 1024))
 	resp.Body.Close()
+	modelListing := "supported"
+	probeOK := resp.StatusCode >= 200 && resp.StatusCode < 400
+	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed {
+		// A reachable provider may not expose a model-listing endpoint. This is
+		// not, by itself, evidence that its configured chat endpoint is unusable.
+		probeOK = true
+		modelListing = "unsupported"
+	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"ok": resp.StatusCode >= 200 && resp.StatusCode < 400, "provider": providerID, "status": resp.StatusCode, "latency_ms": latency, "target": testURL})
+	json.NewEncoder(w).Encode(map[string]any{"ok": probeOK, "reachable": true, "model_listing": modelListing, "provider": providerID, "status": resp.StatusCode, "latency_ms": latency, "target": testURL})
 }
 
 func (s *Server) adminProviderModels(w http.ResponseWriter, r *http.Request) {
@@ -581,9 +628,7 @@ func (s *Server) adminProviderModels(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	snap := s.current()
-	if !auth.AuthorizeAdmin(r, snap.AdminToken) {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+	if !s.adminAuthorize(w, r) {
 		return
 	}
 	var input config.LocalProviderInput
@@ -689,9 +734,7 @@ func (s *Server) adminLocalConfigure(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", 405)
 		return
 	}
-	snap := s.current()
-	if !auth.AuthorizeAdmin(r, snap.AdminToken) {
-		http.Error(w, "unauthorized", 401)
+	if !s.adminAuthorize(w, r) {
 		return
 	}
 	if s.cfgPath == "" {
@@ -712,15 +755,13 @@ func (s *Server) adminLocalConfigure(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 400)
 		return
 	}
-	s.snapshot.Store(s.buildSnapshot(next))
+	s.applyRuntimeConfig(next)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{"ok": true, "loaded_at": s.current().LoadedAt, "issues": config.ValidateRuntime(next)})
 }
 
 func (s *Server) adminRecentRequests(w http.ResponseWriter, r *http.Request) {
-	snap := s.current()
-	if !auth.AuthorizeAdmin(r, snap.AdminToken) {
-		http.Error(w, "unauthorized", 401)
+	if !s.adminAuthorize(w, r) {
 		return
 	}
 	limit := 50

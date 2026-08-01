@@ -192,6 +192,8 @@ export interface RawConfigResponse {
 
 export interface ProviderTestResponse {
   ok: boolean
+  reachable?: boolean
+  model_listing?: "supported" | "unsupported"
   provider: string
   status?: number
   latency_ms?: number
@@ -261,6 +263,7 @@ export interface ModelCatalogState {
   source_url: string
   etag?: string
   fetched_at?: string
+  origin?: "remote" | "upload" | "cache"
   stale: boolean
   providers: number
   models: number
@@ -269,6 +272,17 @@ export interface ModelCatalogState {
 
 export interface ModelCatalogStatusResponse {
   catalog: ModelCatalogState
+  proxy: ModelCatalogProxyState
+}
+
+export interface ModelCatalogProxyState {
+  configured: boolean
+  display_url?: string
+}
+
+export interface ModelCatalogSettingsResponse {
+  ok?: boolean
+  proxy: ModelCatalogProxyState
 }
 
 export interface ModelCatalogRefreshResponse {
@@ -280,6 +294,19 @@ export interface ModelCatalogLookupResponse {
   matches: Record<string, ModelCatalogMatch>
   catalog: ModelCatalogState
   catalog_error?: string
+}
+
+// ---- Desktop application ----
+export type CloseBehavior = "ask" | "tray" | "quit"
+
+export interface DesktopSnapshot {
+  available: boolean
+  platform?: "windows" | "darwin"
+  close_behavior?: CloseBehavior
+  listen_address?: string
+  data_dir?: string
+  log_dir?: string
+  owns_gateway?: boolean
 }
 
 // ---- Multimodal fallback ----
@@ -304,6 +331,9 @@ export interface MultimodalAdminInput extends MultimodalAdminConfig {
 
 export interface OCRTestResponse {
   ok: boolean
+  enabled: boolean
+  active: boolean
+  warning?: "multimodal_disabled" | "multimodal_not_active"
   provider?: string
   latency_ms: number
   result_count?: number
