@@ -4,11 +4,23 @@ package wailsapp
 
 import (
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/a448582655/vibe-proxy/desktop/app"
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
+
+const startupErrorDisplayLimit = 1600
+
+type nativeStartupFailure struct {
+	cause       error
+	logPath     string
+	logWriteErr error
+}
 
 // ReportStartupFailure is the last-resort error path for failures returned by
 // the native Wails runtime itself. In particular, it runs when WebView2 is
@@ -22,12 +34,12 @@ func ReportStartupFailure(startupErr error) {
 		return
 	}
 
-	logPath := ""
-	if paths, err := app.PlatformPaths(); err == nil {
-		logPath = paths.LogPath
-		app.WriteStartupErrorLog(paths, "native", "", startupErr)
+	paths, pathErr := app.PlatformPaths()
+	failure := captureNativeStartupFailure(paths, fallbackStartupLogPath(), startupErr)
+	if pathErr != nil {
+		failure.logWriteErr = errors.Join(fmt.Errorf("resolve desktop paths: %w", pathErr), failure.logWriteErr)
 	}
-	reportNativeStartupFailure(logPath)
+	reportNativeStartupFailure(failure)
 }
 
 // NativeErrorHandler returns the Wails error handler used while the native
@@ -45,11 +57,56 @@ func NativeErrorHandler(paths app.Paths) func(error) {
 
 		mu.Lock()
 		defer mu.Unlock()
-		app.WriteStartupErrorLog(paths, "native", "", err)
+		failure := captureNativeStartupFailure(paths, fallbackStartupLogPath(), err)
 
 		var fatalErr *application.FatalError
 		if errors.As(err, &fatalErr) {
-			reportNativeStartupFailure(paths.LogPath)
+			reportNativeStartupFailure(failure)
 		}
 	}
+}
+
+func captureNativeStartupFailure(paths app.Paths, fallbackLogPath string, startupErr error) nativeStartupFailure {
+	failure := nativeStartupFailure{cause: startupErr}
+	primaryErr := app.TryWriteStartupErrorLog(paths, "native", "", startupErr)
+	if primaryErr == nil {
+		failure.logPath = paths.LogPath
+		return failure
+	}
+
+	fallbackPaths := app.Paths{LogPath: fallbackLogPath}
+	fallbackErr := app.TryWriteStartupErrorLog(fallbackPaths, "native", "", startupErr)
+	if fallbackErr == nil {
+		failure.logPath = fallbackLogPath
+		failure.logWriteErr = fmt.Errorf("primary diagnostic path %q failed: %w", paths.LogPath, primaryErr)
+		return failure
+	}
+
+	failure.logWriteErr = errors.Join(
+		fmt.Errorf("primary diagnostic path %q failed: %w", paths.LogPath, primaryErr),
+		fmt.Errorf("fallback diagnostic path %q failed: %w", fallbackLogPath, fallbackErr),
+	)
+	return failure
+}
+
+func fallbackStartupLogPath() string {
+	return filepath.Join(os.TempDir(), "vibe-proxy-startup.log")
+}
+
+func displayStartupError(startupErr error) string {
+	if startupErr == nil {
+		return "Unknown native startup error."
+	}
+	var fatalErr *application.FatalError
+	if errors.As(startupErr, &fatalErr) {
+		if cause := errors.Unwrap(fatalErr); cause != nil {
+			startupErr = cause
+		}
+	}
+	message := strings.TrimSpace(strings.NewReplacer("\r\n", "\n", "\r", "\n").Replace(startupErr.Error()))
+	runes := []rune(message)
+	if len(runes) > startupErrorDisplayLimit {
+		message = string(runes[:startupErrorDisplayLimit]) + "…"
+	}
+	return message
 }

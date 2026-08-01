@@ -184,18 +184,37 @@ func (h *Host) writeStartupErrorLog(startupErr error) {
 // launcher, because an error returned by Wails itself happens before Host.Start
 // can write its usual recovery log entry.
 func WriteStartupErrorLog(paths Paths, stage, address string, startupErr error) {
-	if startupErr == nil || paths.LogPath == "" {
-		return
+	_ = TryWriteStartupErrorLog(paths, stage, address, startupErr)
+}
+
+// TryWriteStartupErrorLog is the observable variant used by the native shell.
+// Startup diagnostics must not silently claim that a file was written when the
+// directory or file could not be created.
+func TryWriteStartupErrorLog(paths Paths, stage, address string, startupErr error) error {
+	if startupErr == nil {
+		return nil
 	}
-	_ = os.MkdirAll(filepath.Dir(paths.LogPath), 0o700)
+	if paths.LogPath == "" {
+		return errors.New("startup log path is empty")
+	}
+	if err := os.MkdirAll(filepath.Dir(paths.LogPath), 0o700); err != nil {
+		return fmt.Errorf("create startup log directory: %w", err)
+	}
 	file, err := os.OpenFile(paths.LogPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
-		return
+		return fmt.Errorf("open startup log: %w", err)
 	}
-	defer file.Close()
 	// Keep one physical line per event so untrusted wrapped errors cannot forge
 	// additional structured log entries.
 	message := strings.NewReplacer("\r", " ", "\n", " ").Replace(startupErr.Error())
-	_, _ = fmt.Fprintf(file, "%s stage=%q address=%q error=%q\n",
+	_, writeErr := fmt.Fprintf(file, "%s stage=%q address=%q error=%q\n",
 		time.Now().UTC().Format(time.RFC3339Nano), stage, address, message)
+	closeErr := file.Close()
+	if writeErr != nil {
+		return fmt.Errorf("write startup log: %w", writeErr)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("close startup log: %w", closeErr)
+	}
+	return nil
 }

@@ -7,12 +7,16 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-func reportNativeStartupFailure(logPath string) {
+func reportNativeStartupFailure(failure nativeStartupFailure) {
 	message := "Vibe Proxy could not open its desktop window.\r\n\r\n"
-	if logPath != "" {
-		message += "A diagnostic was saved to:\r\n" + logPath + "\r\n\r\n"
+	message += "Actual error:\r\n" + displayStartupError(failure.cause) + "\r\n\r\n"
+	if failure.logPath != "" {
+		message += "A diagnostic was saved to:\r\n" + failure.logPath + "\r\n\r\n"
 	}
-	message += "If this is a new Windows installation, install the Microsoft Edge WebView2 Runtime and try again.\r\n\r\n"
+	if failure.logWriteErr != nil {
+		message += "Diagnostic note:\r\n" + displayStartupError(failure.logWriteErr) + "\r\n\r\n"
+	}
+	message += "Vibe Proxy requires Microsoft Edge WebView2 Runtime, but this message does not by itself mean that WebView2 is missing. Use the actual error above to diagnose the failure.\r\n\r\n"
 	message += buildinfo.String()
 
 	text, err := windows.UTF16PtrFromString(message)
