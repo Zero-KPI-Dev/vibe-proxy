@@ -5,7 +5,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"slices"
 
@@ -26,6 +25,7 @@ func main() {
 		return
 	}
 	if err := wailsapp.Run(context.Background()); err != nil {
-		log.Print(err)
+		wailsapp.ReportStartupFailure(err)
+		os.Exit(1)
 	}
 }

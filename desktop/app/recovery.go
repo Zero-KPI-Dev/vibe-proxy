@@ -176,8 +176,19 @@ func (h *Host) writeStartupErrorLog(startupErr error) {
 	if errors.As(startupErr, &webViewErr) {
 		stage, address = "webview", webViewErr.address
 	}
-	_ = os.MkdirAll(filepath.Dir(h.paths.LogPath), 0o700)
-	file, err := os.OpenFile(h.paths.LogPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	WriteStartupErrorLog(h.paths, stage, address, startupErr)
+}
+
+// WriteStartupErrorLog records a startup failure before the desktop shell has
+// necessarily finished initialising. It is also used by the top-level native
+// launcher, because an error returned by Wails itself happens before Host.Start
+// can write its usual recovery log entry.
+func WriteStartupErrorLog(paths Paths, stage, address string, startupErr error) {
+	if startupErr == nil || paths.LogPath == "" {
+		return
+	}
+	_ = os.MkdirAll(filepath.Dir(paths.LogPath), 0o700)
+	file, err := os.OpenFile(paths.LogPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		return
 	}

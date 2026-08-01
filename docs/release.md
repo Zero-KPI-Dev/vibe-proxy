@@ -77,6 +77,20 @@ Browser** or **Open Logs Folder** from the tray. Before first-run setup, that
 tray action grants a one-time setup session; later browser windows show the
 management-password login page.
 
+The desktop window requires the Microsoft Edge **WebView2 Runtime**. The setup
+installer tries to install it automatically, but that step needs network access.
+On restricted or offline networks, install the matching Evergreen Standalone
+Runtime from Microsoft's [WebView2 download page](https://developer.microsoft.com/en-us/microsoft-edge/webview2?form=MA13FL)
+before launching the app. The portable ZIP does not install WebView2 for you.
+If a double-click still produces no window, inspect:
+
+```text
+%LOCALAPPDATA%\vibe-proxy\logs\vibe-proxy.log
+```
+
+The desktop executable now writes native-shell startup failures to this file
+and shows a visible Windows error dialog instead of failing silently.
+
 Unsigned RC installers may trigger Microsoft SmartScreen. Verify the checksum
 and repository source, then use **More info → Run anyway** only when you accept
 the unsigned test build.
