@@ -40,15 +40,6 @@ func (d *nativeDialogs) AskClose(ctx context.Context) (app.DialogChoice, error) 
 		dialog.AddButton("No").OnClick(func() { choice <- app.ChoiceQuit })
 	}
 	dialog.Show()
-	if runtime.GOOS == "windows" {
-		select {
-		case result := <-choice:
-			return result, nil
-		default:
-			return app.ChoiceCancel, nil
-		}
-	}
-
 	select {
 	case result := <-choice:
 		return result, nil
@@ -76,15 +67,20 @@ func (d *nativeDialogs) ShowStartupError(ctx context.Context, presentation app.S
 	}
 	dialog.AddButton(dataLabel).OnClick(func() { choice <- app.RecoveryOpenData })
 	dialog.AddButton(exitVibeProxyButton).SetAsCancel().OnClick(func() { choice <- app.RecoveryExit })
-	dialog.Show()
 	if runtime.GOOS == "windows" {
-		select {
-		case result := <-choice:
-			return result, nil
-		default:
-			return app.RecoveryExit, nil
+		// Wails' Windows backend currently maps question dialogs to the native
+		// Yes/No MessageBox. The descriptive buttons above are retained for
+		// macOS, while these aliases make sure the Windows callback has a
+		// matching action instead of silently falling through to Exit.
+		if presentation.Address != "" {
+			dialog.AddButton("Yes").SetAsDefault().OnClick(func() { choice <- app.RecoveryOpenExisting })
+			dialog.AddButton("No").SetAsCancel().OnClick(func() { choice <- app.RecoveryExit })
+		} else {
+			dialog.AddButton("Yes").SetAsDefault().OnClick(func() { choice <- app.RecoveryOpenData })
+			dialog.AddButton("No").SetAsCancel().OnClick(func() { choice <- app.RecoveryExit })
 		}
 	}
+	dialog.Show()
 	select {
 	case result := <-choice:
 		return result, nil

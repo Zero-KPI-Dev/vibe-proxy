@@ -195,11 +195,15 @@ RequestExecutionLevel "${REQUEST_EXECUTION_LEVEL}"
 
     InitPluginsDir
     CreateDirectory "$pluginsdir\webview2bootstrapper"
-    SetOutPath "$pluginsdir\webview2bootstrapper"
-    File "MicrosoftEdgeWebview2Setup.exe"
-    ExecWait '"$pluginsdir\webview2bootstrapper\MicrosoftEdgeWebview2Setup.exe" /silent /install'
+	SetOutPath "$pluginsdir\webview2bootstrapper"
+	File "MicrosoftEdgeWebview2Setup.exe"
+	ExecWait '"$pluginsdir\webview2bootstrapper\MicrosoftEdgeWebview2Setup.exe" /silent /install' $1
+	${If} $1 != 0
+	    MessageBox MB_OK|MB_ICONSTOP "Microsoft Edge WebView2 Runtime could not be installed. Connect to the internet or install the Evergreen Standalone Runtime manually, then run this installer again."
+	    Abort
+	${EndIf}
 
-    SetDetailsPrint both
+	SetDetailsPrint both
     ok:
 !macroend
 

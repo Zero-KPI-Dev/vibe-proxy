@@ -358,7 +358,11 @@ func TestDesktopImportReloadsValidatedRuntimeAndReturnsLoadedAt(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
 		t.Fatal(err)
 	}
-	if !payload.Imported || payload.Path != "/safe/imported.yaml" || !payload.LoadedAt.After(before) {
+	// Windows can expose a coarser wall-clock resolution than the time between
+	// the initial snapshot and this immediate reload. A reload is still valid
+	// when both snapshots serialize to the same timestamp; the changed provider
+	// configuration below is the authoritative assertion that it happened.
+	if !payload.Imported || payload.Path != "/safe/imported.yaml" || payload.LoadedAt.Before(before) {
 		t.Fatalf("unexpected import response: %+v (before %s)", payload, before)
 	}
 	if got := server.current().Config.Providers["mockai"].BaseURL; got != "https://imported.openai/v1" {
