@@ -18,6 +18,30 @@ func TestAdapterMainWindowContract(t *testing.T) {
 	}
 }
 
+func TestWindowReadyStartupDoesNotRunEarlyOrMoreThanOnce(t *testing.T) {
+	var ready func()
+	starts := 0
+
+	wireWindowReadyStartup(func(callback func()) {
+		ready = callback
+	}, func() {
+		starts++
+	})
+
+	if starts != 0 {
+		t.Fatalf("starts before window ready = %d, want 0", starts)
+	}
+	if ready == nil {
+		t.Fatal("window-ready callback was not registered")
+	}
+
+	ready()
+	ready()
+	if starts != 1 {
+		t.Fatalf("starts after two window-ready events = %d, want 1", starts)
+	}
+}
+
 func TestAdapterPlatformLifecycleContract(t *testing.T) {
 	if !PlatformContract("windows").DisableQuitOnLastWindowClosed {
 		t.Fatal("Windows must disable quit on last window closed")

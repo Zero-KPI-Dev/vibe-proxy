@@ -378,6 +378,8 @@ github.com/wailsapp/task/v3 v3.40.1-patched3 h1:i6O1WNdSur9CGaiMDIYGjsmj/qS4465z
 github.com/wailsapp/task/v3 v3.40.1-patched3/go.mod h1:jIP48r8ftoSQNlxFP4+aEnkvGQqQXqCnRi/B7ROaecE=
 github.com/wailsapp/wails/v3 v3.0.0-alpha2.117 h1:udyjqPG3AIgkod5QDR/WblCkpV8R86BFPSrsWxSyt5Y=
 github.com/wailsapp/wails/v3 v3.0.0-alpha2.117/go.mod h1:74WH2FScMsgucZvHHvv7eOefDXCm/CjuIxqhhZgPhKg=
+github.com/wailsapp/wails/v3 v3.0.0-alpha2.118 h1:RFpa3tJFuQyyY8nzhrgswGkZDeYGbEGiO08CbxM7aDM=
+github.com/wailsapp/wails/v3 v3.0.0-alpha2.118/go.mod h1:74WH2FScMsgucZvHHvv7eOefDXCm/CjuIxqhhZgPhKg=
 github.com/xanzy/ssh-agent v0.3.3 h1:+/15pJfg/RsTxqYcX6fHqOXZwwMP+2VyYWJeWM2qQFM=
 github.com/xanzy/ssh-agent v0.3.3/go.mod h1:6dzNDKs0J9rVPHPhaGCukekBHKqfl+L3KghI1Bc68Uw=
 github.com/xi2/xz v0.0.0-20171230120015-48954b6210f8 h1:nIPpBwaJSVYIxUFsDv3M8ofmx9yWTog9BfvIu0q41lo=
