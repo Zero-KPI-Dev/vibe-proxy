@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -26,6 +25,7 @@ const (
 	CaptureStatusCaptured    = "captured"
 	CaptureStatusRedacted    = "redacted"
 	CaptureStatusTruncated   = "truncated"
+	CaptureStatusExpired     = "expired"
 	CaptureStatusDropped     = "dropped"
 )
 
@@ -337,7 +337,7 @@ func boundedJSONPreview(encoded []byte, limit int) []byte {
 	if len(best) > 0 {
 		return best
 	}
-	fallback := []byte(fmt.Sprintf(`{"_capture_truncated":true}`))
+	fallback := []byte(`{"_capture_truncated":true}`)
 	if len(fallback) <= limit {
 		return fallback
 	}

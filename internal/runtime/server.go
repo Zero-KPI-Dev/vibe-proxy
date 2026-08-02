@@ -227,6 +227,10 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/admin/client-keys", s.adminClientKeys)        // GET (list), POST (create)
 	mux.HandleFunc("/admin/client-keys/", s.adminClientKeysByName) // PUT (update), DELETE (delete)
 	mux.HandleFunc("/admin/requests/recent", s.adminRecentRequests)
+	mux.HandleFunc("/admin/observability/requests", s.adminObservabilityRequests)
+	mux.HandleFunc("/admin/observability/requests/", s.adminObservabilityRequest)
+	mux.HandleFunc("/admin/observability/sessions", s.adminObservabilitySessions)
+	mux.HandleFunc("/admin/observability/sessions/", s.adminObservabilitySession)
 	mux.HandleFunc("/admin/metrics/summary", s.adminMetricsSummary)
 	mux.HandleFunc("/admin/metrics/history", s.adminMetricsHistory)
 

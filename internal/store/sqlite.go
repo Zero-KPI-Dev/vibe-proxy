@@ -281,6 +281,16 @@ func (s *SQLite) PrunePayloads(now time.Time, maxBytes int64) error {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.Exec(`UPDATE request_logs SET capture_status = ?
+WHERE request_id IN (
+	SELECT request_id FROM payload_snapshots WHERE expires_at IS NOT NULL AND expires_at <= ?
+) AND NOT EXISTS (
+	SELECT 1 FROM payload_snapshots
+	WHERE payload_snapshots.request_id = request_logs.request_id
+	AND (expires_at IS NULL OR expires_at > ?)
+)`, telemetry.CaptureStatusExpired, now, now); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(`DELETE FROM payload_snapshots WHERE expires_at IS NOT NULL AND expires_at <= ?`, now); err != nil {
 		return err
 	}
@@ -314,6 +324,9 @@ FROM payload_snapshots ORDER BY created_at, request_id, stage`)
 		}
 		for _, item := range candidates {
 			if _, err := tx.Exec(`DELETE FROM payload_snapshots WHERE request_id = ? AND stage = ?`, item.requestID, item.stage); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(`UPDATE request_logs SET capture_status = ? WHERE request_id = ?`, telemetry.CaptureStatusDropped, item.requestID); err != nil {
 				return err
 			}
 		}

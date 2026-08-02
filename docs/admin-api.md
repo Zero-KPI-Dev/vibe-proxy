@@ -195,6 +195,46 @@ multimodal route, original/effective targets, capability source, image count, OC
 latency, confidence and cache hits. It never contains image bytes, image URLs, OCR text, or
 OCR credentials.
 
+## Local Observability Queries
+
+The richer local tracing API lives alongside the compatibility recent-request
+endpoint:
+
+```text
+GET    /admin/observability/requests
+GET    /admin/observability/requests/{request_id}
+GET    /admin/observability/requests/{request_id}/diff
+DELETE /admin/observability/requests/{request_id}/content
+GET    /admin/observability/sessions
+GET    /admin/observability/sessions/{session_id}
+```
+
+All responses use `Cache-Control: no-store`. Request pages are ordered by
+`(started_at, request_id)` descending and accept an opaque `cursor` returned as
+`next_cursor`; clients must not construct or modify cursor values. `limit` is
+between 1 and 200. Supported request filters are `agent_id`, `principal_name`,
+`session_id`, `project_id`, `model`, `provider`, `protocol`, `status_class`,
+`capture_status`, `q`, `from`, and `to`. Times use RFC 3339. Session pages
+support `session_id`, `agent_id`, `principal_name`, `project_id`, and `q`.
+
+Request details return the summary, ordered gateway observations, and an entry
+for every payload stage. A stage always has an explicit state—`not_captured`,
+`captured`, `redacted`, `truncated`, `expired`, `dropped`, or `missing`—instead
+of representing unavailable content as an unexplained empty body. Stored JSON
+has already passed mandatory secret, credential, reasoning, and binary-payload
+sanitization. Image and file bytes are replaced by metadata descriptors.
+
+The diff endpoint accepts an optional `base_id`. Without it, the parent request
+is preferred, followed by the immediately preceding request in the same
+Session. Comparisons report appended, removed, and rewritten messages plus
+tool, requested-model, effective-model, and provider changes. If either
+canonical request is expired, truncated, dropped, or missing, the response
+reports that state and the unavailable side rather than fabricating a diff.
+
+Deleting request content removes only payload snapshots for that exact request
+and retains its summary and trace observations. The request then reports an
+`expired` capture state; other requests in the same Session are unchanged.
+
 ## Multimodal Configuration
 
 ```text

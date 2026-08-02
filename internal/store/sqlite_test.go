@@ -646,3 +646,121 @@ func TestSQLiteExpiresAndEvictsPayloadsBeforeSummaries(t *testing.T) {
 		t.Fatalf("payload pruning removed summaries: count=%d err=%v", len(recent), err)
 	}
 }
+
+func TestSQLiteQueryRequestsUsesStableCursorAndFilters(t *testing.T) {
+	database, err := Open(filepath.Join(t.TempDir(), "query.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	started := time.Date(2026, time.August, 2, 12, 0, 0, 0, time.UTC)
+	for _, event := range []telemetry.Event{
+		{RequestID: "a", StartedAt: started, AgentID: "codex", PrincipalName: "alice", SessionID: "s1", ProjectID: "p1", VirtualModel: "vibe", ChannelID: "one", ProtocolIn: "openai_chat", StatusCode: 200, CaptureStatus: telemetry.CaptureStatusCaptured},
+		{RequestID: "b", StartedAt: started, AgentID: "codex", PrincipalName: "alice", SessionID: "s1", ProjectID: "p1", VirtualModel: "vibe", ChannelID: "one", ProtocolIn: "openai_chat", StatusCode: 500, CaptureStatus: telemetry.CaptureStatusDropped},
+		{RequestID: "c", StartedAt: started.Add(time.Second), AgentID: "other", PrincipalName: "bob", SessionID: "s2", ProjectID: "p2", VirtualModel: "other", ChannelID: "two", ProtocolIn: "anthropic_messages", StatusCode: 200, CaptureStatus: telemetry.CaptureStatusNotCaptured},
+	} {
+		database.RequestFinished(event)
+	}
+
+	first, err := database.QueryRequests(telemetry.RequestQuery{Limit: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first.Items) != 2 || first.Items[0].RequestID != "c" || first.Items[1].RequestID != "b" || first.NextCursor == "" {
+		t.Fatalf("first page = %+v", first)
+	}
+	second, err := database.QueryRequests(telemetry.RequestQuery{Limit: 2, Cursor: first.NextCursor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(second.Items) != 1 || second.Items[0].RequestID != "a" || second.NextCursor != "" {
+		t.Fatalf("second page = %+v", second)
+	}
+	filtered, err := database.QueryRequests(telemetry.RequestQuery{
+		AgentID: "codex", PrincipalName: "alice", SessionID: "s1", ProjectID: "p1",
+		Model: "vibe", Provider: "one", Protocol: "openai_chat", StatusClass: 5,
+		CaptureStatus: telemetry.CaptureStatusDropped, Query: "b", From: timePointer(started), To: timePointer(started),
+	})
+	if err != nil || len(filtered.Items) != 1 || filtered.Items[0].RequestID != "b" {
+		t.Fatalf("filtered query = %+v err=%v", filtered, err)
+	}
+	details, err := database.RequestDetails("a")
+	if err != nil || len(details.Payloads) != 4 {
+		t.Fatalf("request details = %+v err=%v", details, err)
+	}
+	for _, payload := range details.Payloads {
+		if payload.State != "missing" || len(payload.Body) != 0 {
+			t.Fatalf("missing payload returned an ambiguous body: %+v", payload)
+		}
+	}
+}
+
+func TestSQLiteQuerySessionsAggregatesAndPages(t *testing.T) {
+	database, err := Open(filepath.Join(t.TempDir(), "sessions.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	now := time.Now().UTC().Truncate(time.Second)
+	for _, event := range []telemetry.Event{
+		{RequestID: "s1-a", SessionID: "s1", SessionName: "Fix bug", SessionKind: "coding", AgentID: "codex", PrincipalName: "alice", ProjectID: "p1", StartedAt: now.Add(-time.Minute), StatusCode: 200, Usage: types.Usage{TotalTokens: 10}},
+		{RequestID: "s1-b", SessionID: "s1", SessionName: "Fix bug", SessionKind: "coding", AgentID: "codex", PrincipalName: "alice", ProjectID: "p1", StartedAt: now, StatusCode: 500, Usage: types.Usage{TotalTokens: 20}},
+		{RequestID: "s2-a", SessionID: "s2", AgentID: "other", StartedAt: now.Add(time.Second), StatusCode: 200},
+	} {
+		database.RequestFinished(event)
+	}
+	page, err := database.QuerySessions(telemetry.SessionQuery{Limit: 1, AgentID: "codex", PrincipalName: "alice", ProjectID: "p1", Query: "Fix"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Items) != 1 || page.Items[0].SessionID != "s1" || page.Items[0].RequestCount != 2 || page.Items[0].ErrorCount != 1 || page.Items[0].TotalTokens != 30 {
+		t.Fatalf("session aggregate = %+v", page)
+	}
+	timeline, err := database.SessionRequests("s1")
+	if err != nil || len(timeline) != 2 || timeline[0].RequestID != "s1-a" || timeline[1].RequestID != "s1-b" {
+		t.Fatalf("session timeline = %+v err=%v", timeline, err)
+	}
+	firstPage, err := database.QuerySessions(telemetry.SessionQuery{Limit: 1})
+	if err != nil || len(firstPage.Items) != 1 || firstPage.Items[0].SessionID != "s2" || firstPage.NextCursor == "" {
+		t.Fatalf("first session page = %+v err=%v", firstPage, err)
+	}
+	secondPage, err := database.QuerySessions(telemetry.SessionQuery{Limit: 1, Cursor: firstPage.NextCursor})
+	if err != nil || len(secondPage.Items) != 1 || secondPage.Items[0].SessionID != "s1" || secondPage.NextCursor != "" {
+		t.Fatalf("second session page = %+v err=%v", secondPage, err)
+	}
+}
+
+func TestSQLiteRequestDiffSelectsParentAndReportsExpiredContent(t *testing.T) {
+	database, err := Open(filepath.Join(t.TempDir(), "diff.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	now := time.Now().UTC().Truncate(time.Second)
+	baseEvent := telemetry.Event{RequestID: "base", SessionID: "s1", StartedAt: now, ChannelID: "one", UpstreamModel: "m1", CaptureStatus: telemetry.CaptureStatusCaptured}
+	currentEvent := telemetry.Event{RequestID: "current", SessionID: "s1", ParentRequestID: "base", StartedAt: now.Add(time.Second), ChannelID: "two", UpstreamModel: "m2", CaptureStatus: telemetry.CaptureStatusCaptured}
+	database.RequestFinished(baseEvent)
+	database.RequestFinished(currentEvent)
+	for _, payload := range []telemetry.PayloadSnapshot{
+		{RequestID: "base", Stage: telemetry.PayloadStageCanonicalRequest, CaptureMode: telemetry.CaptureModeStructured, CaptureStatus: telemetry.CaptureStatusCaptured, Body: []byte(`{"requested_model":"vibe","messages":[]}`), CreatedAt: now},
+		{RequestID: "current", Stage: telemetry.PayloadStageCanonicalRequest, CaptureMode: telemetry.CaptureModeStructured, CaptureStatus: telemetry.CaptureStatusCaptured, Body: []byte(`{"requested_model":"vibe","messages":[{"role":"user","content":[]}]}`), CreatedAt: now},
+	} {
+		if err := database.RecordPayload(payload); err != nil {
+			t.Fatal(err)
+		}
+	}
+	diff, err := database.RequestDiff("current", "")
+	if err != nil || diff.BaseRequestID != "base" || diff.BaseSelection != "parent" || !diff.AppendOnly {
+		t.Fatalf("request diff = %+v err=%v", diff, err)
+	}
+	deleted, err := database.DeleteRequestContent("base")
+	if err != nil || !deleted {
+		t.Fatalf("delete content = %v err=%v", deleted, err)
+	}
+	diff, err = database.RequestDiff("current", "base")
+	if err != nil || diff.State != telemetry.CaptureStatusExpired || diff.UnavailableSide != "base" {
+		t.Fatalf("expired diff state = %+v err=%v", diff, err)
+	}
+}
+
+func timePointer(value time.Time) *time.Time { return &value }

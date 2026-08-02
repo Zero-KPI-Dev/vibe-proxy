@@ -20,6 +20,7 @@ import (
 	"github.com/a448582655/vibe-proxy/internal/config"
 	"github.com/a448582655/vibe-proxy/internal/metrics"
 	"github.com/a448582655/vibe-proxy/internal/modelcapability"
+	"github.com/a448582655/vibe-proxy/internal/store"
 	"github.com/a448582655/vibe-proxy/internal/telemetry"
 	"github.com/a448582655/vibe-proxy/internal/upstreamauth"
 )
@@ -204,6 +205,65 @@ func TestRuntimeStreamingCaptureStoresCanonicalResponseNotSSE(t *testing.T) {
 		return
 	}
 	t.Fatalf("missing canonical stream response: %+v", sink.payloads)
+}
+
+func TestObservabilityAdminHandlersQueryDetailDiffSessionsAndDeleteContent(t *testing.T) {
+	database, err := store.Open(filepath.Join(t.TempDir(), "admin-observability.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	now := time.Now().UTC().Truncate(time.Second)
+	completed := now.Add(time.Second)
+	for _, event := range []telemetry.Event{
+		{RequestID: "request-1", SessionID: "session-1", SessionName: "Trace work", AgentID: "codex", PrincipalName: "alice", StartedAt: now, CompletedAt: &completed, StatusCode: 200, CaptureMode: "structured", CaptureStatus: telemetry.CaptureStatusCaptured},
+		{RequestID: "request-2", SessionID: "session-1", ParentRequestID: "request-1", AgentID: "codex", PrincipalName: "alice", StartedAt: now.Add(time.Second), CompletedAt: &completed, StatusCode: 200, CaptureMode: "structured", CaptureStatus: telemetry.CaptureStatusCaptured},
+	} {
+		database.RequestFinished(event)
+	}
+	for _, payload := range []telemetry.PayloadSnapshot{
+		{RequestID: "request-1", Stage: telemetry.PayloadStageCanonicalRequest, CaptureMode: telemetry.CaptureModeStructured, CaptureStatus: telemetry.CaptureStatusCaptured, Body: []byte(`{"requested_model":"vibe","messages":[]}`), CreatedAt: now},
+		{RequestID: "request-2", Stage: telemetry.PayloadStageCanonicalRequest, CaptureMode: telemetry.CaptureModeStructured, CaptureStatus: telemetry.CaptureStatusCaptured, Body: []byte(`{"requested_model":"vibe","messages":[{"role":"user","content":[]}]}`), CreatedAt: now},
+	} {
+		if err := database.RecordPayload(payload); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cfg, err := config.CompileSimple(config.SimpleConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	testPromOnce.Do(func() { testProm = metrics.New() })
+	s := NewWithOptions("", cfg, metrics.MultiSink{database}, testProm, Options{AdminTokenOverride: "admin-token"})
+
+	for _, target := range []string{
+		"/admin/observability/requests?limit=1&agent_id=codex",
+		"/admin/observability/requests/request-2",
+		"/admin/observability/requests/request-2/diff",
+		"/admin/observability/sessions?agent_id=codex",
+		"/admin/observability/sessions/session-1",
+	} {
+		response := httptest.NewRecorder()
+		s.Routes().ServeHTTP(response, adminJSONRequest(http.MethodGet, target, ""))
+		if response.Code != http.StatusOK || response.Header().Get("Cache-Control") != "no-store" || !json.Valid(response.Body.Bytes()) {
+			t.Fatalf("GET %s = %d headers=%v body=%s", target, response.Code, response.Header(), response.Body.String())
+		}
+	}
+
+	deleteResponse := httptest.NewRecorder()
+	s.Routes().ServeHTTP(deleteResponse, adminJSONRequest(http.MethodDelete, "/admin/observability/requests/request-2/content", ""))
+	if deleteResponse.Code != http.StatusOK || deleteResponse.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("delete content = %d %s", deleteResponse.Code, deleteResponse.Body.String())
+	}
+	detailResponse := httptest.NewRecorder()
+	s.Routes().ServeHTTP(detailResponse, adminJSONRequest(http.MethodGet, "/admin/observability/requests/request-2", ""))
+	if !strings.Contains(detailResponse.Body.String(), `"state":"expired"`) {
+		t.Fatalf("detail did not report expired capture: %s", detailResponse.Body.String())
+	}
+	other, err := database.PayloadSnapshots("request-1")
+	if err != nil || len(other) != 1 {
+		t.Fatalf("exact deletion removed another request: %+v err=%v", other, err)
+	}
 }
 
 func TestRuntimeModelsEndpoint(t *testing.T) {
