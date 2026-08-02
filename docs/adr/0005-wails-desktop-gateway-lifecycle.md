@@ -27,7 +27,7 @@ The desktop process embeds and owns the same reusable `internal/gatewayapp` life
 - resolve platform application-data paths and create or validate the first-run configuration;
 - create a process-local random internal admin token;
 - load the desktop management-password store;
-- bind the configured loopback listener before reporting readiness;
+- bind the configured listener before reporting readiness, using loopback in the desktop-generated first-run configuration;
 - start the gateway, SQLite, routing, OCR, telemetry, and existing HTTP control plane in-process;
 - create a short-lived, single-use bootstrap nonce and navigate the WebView to the loopback bootstrap route;
 - show the window and tray only after the gateway is ready;
@@ -93,7 +93,7 @@ The CLI/browser workflow remains supported, but it does not provide native launc
 
 ## Security and operational considerations
 
-- The management listener is bound to a configured loopback address. Loopback reduces exposure but does not replace authentication because other local processes and ordinary browsers can reach it.
+- The desktop-generated first-run configuration binds to loopback. Loopback reduces exposure but does not replace authentication because other local processes and ordinary browsers can reach it. Importing a configuration with a broader listen address also broadens the operator-managed network trust boundary.
 - Bootstrap nonces are cryptographically random, expire quickly, are consumed once, and are revoked with all desktop sessions when the process exits.
 - Browser sessions use `HttpOnly`, same-origin cookies; cookie-authenticated mutations require an origin check.
 - The desktop management password is stored only as an Argon2id hash. Deleting `auth.json` resets authentication without deleting configuration, providers, keys, or request history.
