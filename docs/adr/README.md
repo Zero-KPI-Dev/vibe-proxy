@@ -118,7 +118,6 @@ Describe trust boundaries, failure modes, maintenance, rollout, and recovery imp
 
 ## References
 
-- [Current-state or design document](../path.md)
+- [Architecture or another relevant repository document](../architecture.md)
 - Repository commit or pull request
 ```
-
