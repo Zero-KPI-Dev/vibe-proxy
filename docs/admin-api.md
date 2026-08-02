@@ -195,9 +195,46 @@ multimodal route, original/effective targets, capability source, image count, OC
 latency, confidence and cache hits. It never contains image bytes, image URLs, OCR text, or
 OCR credentials.
 
+## Multimodal Configuration
+
+```text
+GET /admin/multimodal
+PUT /admin/multimodal
+```
+
 `GET /admin/multimodal` reports `provider: builtin|http`. Built-in OCR is the
 default; an external endpoint and its authentication fields are only used when
-the provider is `http`. `POST /admin/multimodal/ocr/test` runs the selected
+the provider is `http`. Its snapshot also contains backend-resolved Vision fallback
+candidates:
+
+```json
+{
+  "enabled": true,
+  "provider": "builtin",
+  "vision_fallback_model": "gateway/kimi-k2.6",
+  "vision_fallback_models": [
+    {
+      "target": "gateway/kimi-k2.6",
+      "provider_id": "gateway",
+      "model": "kimi-k2.6",
+      "source": "models_dev"
+    }
+  ]
+}
+```
+
+The array includes only configured models whose effective `image_input` capability is
+`supported` and whose provider adapter can transport images. `source` is one of
+`model_override`, `provider_default`, or `models_dev`, following that precedence. Unknown,
+not-found, ambiguous, unsupported, and transport-incompatible models are omitted. Catalog
+results are read from the active local snapshot and are not persisted into provider YAML.
+
+`PUT /admin/multimodal` returns the same candidate array in its `multimodal` snapshot.
+Before writing the configuration, it resolves a non-empty `vision_fallback_model` through
+the same capability path used by requests. An invalid selection returns HTTP 400 with
+`error: vision_fallback_invalid` and leaves the configuration file unchanged.
+
+`POST /admin/multimodal/ocr/test` runs the selected
 provider against an embedded deterministic Chinese and English fixture. Its
 response separately reports whether the submitted form enabled fallback and
 whether the current runtime is active; a successful engine test can therefore
