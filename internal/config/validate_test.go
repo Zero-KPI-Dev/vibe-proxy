@@ -166,6 +166,101 @@ func TestValidateRuntimeRequiresExplicitVisionFallbackCapability(t *testing.T) {
 	}
 }
 
+func TestValidateRuntimeVisionFallbackCapabilityPrecedence(t *testing.T) {
+	tests := []struct {
+		name          string
+		provider      ProviderConfig
+		wantCode      string
+		wantLevel     string
+		wantHasErrors bool
+	}{
+		{
+			name: "provider default supported",
+			provider: ProviderConfig{
+				DefaultCapabilities: modelcapability.ModelCapabilities{ImageInput: modelcapability.SupportSupported},
+			},
+		},
+		{
+			name: "model override supported",
+			provider: ProviderConfig{
+				DefaultCapabilities: modelcapability.ModelCapabilities{ImageInput: modelcapability.SupportUnsupported},
+				ModelCapabilities: map[string]modelcapability.ModelCapabilities{
+					"vision-model": {ImageInput: modelcapability.SupportSupported},
+				},
+			},
+		},
+		{
+			name: "model override unsupported",
+			provider: ProviderConfig{
+				DefaultCapabilities: modelcapability.ModelCapabilities{ImageInput: modelcapability.SupportSupported},
+				ModelCapabilities: map[string]modelcapability.ModelCapabilities{
+					"vision-model": {ImageInput: modelcapability.SupportUnsupported},
+				},
+			},
+			wantCode:      "vision_fallback_invalid",
+			wantLevel:     "error",
+			wantHasErrors: true,
+		},
+		{
+			name: "model override unknown",
+			provider: ProviderConfig{
+				DefaultCapabilities: modelcapability.ModelCapabilities{ImageInput: modelcapability.SupportSupported},
+				ModelCapabilities: map[string]modelcapability.ModelCapabilities{
+					"vision-model": {ImageInput: modelcapability.SupportUnknown},
+				},
+			},
+			wantCode:      "vision_fallback_invalid",
+			wantLevel:     "error",
+			wantHasErrors: true,
+		},
+		{
+			name:          "capability absent",
+			provider:      ProviderConfig{},
+			wantCode:      "vision_fallback_unverified",
+			wantLevel:     "warning",
+			wantHasErrors: false,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			provider := test.provider
+			provider.Type = "openai-compatible"
+			provider.BaseURL = "https://vision.example/v1"
+			provider.Auth = upstreamauth.Profile{Type: "none"}
+			provider.Models = []string{"vision-model"}
+			cfg, err := CompileSimple(SimpleConfig{
+				Multimodal: MultimodalConfig{Enabled: true, VisionFallbackModel: "vibe-vision"},
+				Providers:  map[string]ProviderConfig{"vision": provider},
+				Models:     ModelsConfig{Aliases: map[string]string{"vibe-vision": "vision/vision-model"}},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			issues := ValidateRuntime(cfg)
+			if got := HasErrors(issues); got != test.wantHasErrors {
+				t.Fatalf("HasErrors() = %v, want %v; issues: %+v", got, test.wantHasErrors, issues)
+			}
+			if test.wantCode == "" {
+				if hasIssueCode(issues, "vision_fallback_invalid") || hasIssueCode(issues, "vision_fallback_unverified") {
+					t.Fatalf("unexpected Vision fallback issue: %+v", issues)
+				}
+				return
+			}
+			for _, issue := range issues {
+				if issue.Code == test.wantCode {
+					if issue.Level != test.wantLevel {
+						t.Fatalf("issue level = %q, want %q: %+v", issue.Level, test.wantLevel, issues)
+					}
+					return
+				}
+			}
+			t.Fatalf("missing %s issue: %+v", test.wantCode, issues)
+		})
+	}
+}
+
 func TestValidateRuntimeRejectsRelativeProviderURLAndUnsupportedAuth(t *testing.T) {
 	cfg, err := CompileSimple(SimpleConfig{Providers: map[string]ProviderConfig{
 		"bad": {
