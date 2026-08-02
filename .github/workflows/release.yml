@@ -76,71 +76,6 @@ jobs:
           bash scripts/release/test-packaging.sh
           bash scripts/release/test-desktop-packaging.sh
 
-  portable:
-    needs: validate
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        goos: [windows, darwin, linux]
-        goarch: [amd64, arm64]
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-
-      - name: Set up Go
-        uses: actions/setup-go@v6
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache: true
-
-      - name: Build binary
-        id: binary
-        shell: bash
-        run: |
-          extension=
-          if [[ "${{ matrix.goos }}" == windows ]]; then
-            extension=.exe
-          fi
-          binary="$RUNNER_TEMP/vibe-proxy-${{ matrix.goos }}-${{ matrix.goarch }}${extension}"
-          scripts/release/build-binary.sh \
-            "$GITHUB_REF_NAME" \
-            "${{ matrix.goos }}" \
-            "${{ matrix.goarch }}" \
-            "$binary" >/dev/null
-          echo "path=$binary" >>"$GITHUB_OUTPUT"
-
-      - name: Package portable artifact
-        id: package
-        shell: bash
-        run: |
-          mkdir -p "$RUNNER_TEMP/release-assets"
-          artifact=$(
-            scripts/release/package-portable.sh \
-              "$GITHUB_REF_NAME" \
-              "${{ matrix.goos }}" \
-              "${{ matrix.goarch }}" \
-              "${{ steps.binary.outputs.path }}" \
-              "$RUNNER_TEMP/release-assets"
-          )
-          echo "path=$artifact" >>"$GITHUB_OUTPUT"
-
-      - name: Smoke-test native Linux binary
-        if: matrix.goos == 'linux' && matrix.goarch == 'amd64'
-        run: |
-          "${{ steps.binary.outputs.path }}" --version |
-            grep -F "vibe-proxy $GITHUB_REF_NAME"
-
-      - name: Upload portable artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: portable-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: ${{ steps.package.outputs.path }}
-          if-no-files-found: error
-          retention-days: 7
-
   deb:
     needs: validate
     runs-on: ubuntu-latest
@@ -188,56 +123,7 @@ jobs:
           name: deb-${{ matrix.goarch }}
           path: ${{ steps.package.outputs.path }}
           if-no-files-found: error
-          retention-days: 7
-
-  dmg:
-    needs: validate
-    runs-on: macos-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        goarch: [amd64, arm64]
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-
-      - name: Set up Go
-        uses: actions/setup-go@v6
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache: true
-
-      - name: Build macOS binary
-        id: binary
-        run: |
-          binary="$RUNNER_TEMP/vibe-proxy-darwin-${{ matrix.goarch }}"
-          scripts/release/build-binary.sh \
-            "$GITHUB_REF_NAME" darwin "${{ matrix.goarch }}" "$binary" >/dev/null
-          echo "path=$binary" >>"$GITHUB_OUTPUT"
-
-      - name: Package DMG
-        id: package
-        run: |
-          mkdir -p "$RUNNER_TEMP/release-assets"
-          artifact=$(
-            scripts/release/package-dmg.sh \
-              "$GITHUB_REF_NAME" \
-              "${{ matrix.goarch }}" \
-              "${{ steps.binary.outputs.path }}" \
-              "$RUNNER_TEMP/release-assets"
-          )
-          hdiutil imageinfo "$artifact" >/dev/null
-          echo "path=$artifact" >>"$GITHUB_OUTPUT"
-
-      - name: Upload DMG
-        uses: actions/upload-artifact@v7
-        with:
-          name: dmg-${{ matrix.goarch }}
-          path: ${{ steps.package.outputs.path }}
-          if-no-files-found: error
-          retention-days: 7
+          retention-days: 1
 
   desktop-windows:
     needs: validate
@@ -268,12 +154,17 @@ jobs:
           }
           $nsis | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
       - name: Build desktop installer
+        id: package
         shell: bash
         run: |
           mkdir -p "$RUNNER_TEMP/release-assets"
           scripts/release/build-desktop.sh \
             "$GITHUB_REF_NAME" windows "${{ matrix.goarch }}" \
             "$RUNNER_TEMP/release-assets"
+          version_without_v=${GITHUB_REF_NAME#v}
+          artifact="$RUNNER_TEMP/release-assets/vibe-proxy-desktop_${version_without_v}_windows_${{ matrix.goarch }}-setup.exe"
+          test -f "$artifact"
+          echo "path=$artifact" >>"$GITHUB_OUTPUT"
       - name: Verify desktop binary and PE architecture
         shell: pwsh
         run: |
@@ -289,21 +180,13 @@ jobs:
         run: |
           ./scripts/release/test-windows-desktop-startup.ps1 `
             -Installer "desktop/bin/vibe-proxy-desktop-amd64-setup.exe"
-      - name: Package portable desktop app
-        shell: pwsh
-        run: |
-          ./scripts/release/package-desktop-portable.ps1 `
-            -Version $env:GITHUB_REF_NAME `
-            -Architecture "${{ matrix.goarch }}" `
-            -Binary "desktop/bin/vibe-proxy-desktop.exe" `
-            -OutputDirectory "$env:RUNNER_TEMP/release-assets"
-      - name: Upload Windows desktop packages
+      - name: Upload Windows desktop installer
         uses: actions/upload-artifact@v7
         with:
           name: desktop-windows-${{ matrix.goarch }}
-          path: ${{ runner.temp }}/release-assets/*
+          path: ${{ steps.package.outputs.path }}
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 1
 
   desktop-macos:
     needs: validate
@@ -336,6 +219,7 @@ jobs:
             "$GITHUB_REF_NAME" darwin "${{ matrix.goarch }}" \
             "$RUNNER_TEMP/release-assets"
       - name: Inspect and package desktop app
+        id: package
         shell: bash
         run: |
           app="desktop/bin/Vibe Proxy.app"
@@ -349,16 +233,17 @@ jobs:
             "$GITHUB_REF_NAME" "${{ matrix.goarch }}" "$app" \
             "$RUNNER_TEMP/release-assets")
           hdiutil imageinfo "$artifact" >/dev/null
+          echo "path=$artifact" >>"$GITHUB_OUTPUT"
       - name: Upload macOS desktop package
         uses: actions/upload-artifact@v7
         with:
           name: desktop-macos-${{ matrix.goarch }}
-          path: ${{ runner.temp }}/release-assets/*
+          path: ${{ steps.package.outputs.path }}
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 1
 
   publish:
-    needs: [portable, deb, dmg, desktop-windows, desktop-macos]
+    needs: [deb, desktop-windows, desktop-macos]
     runs-on: ubuntu-latest
     permissions:
       contents: write

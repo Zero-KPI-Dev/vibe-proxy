@@ -25,11 +25,7 @@ assert_members() {
 }
 
 tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/vibe-proxy-release-test.XXXXXX")
-mounted_dmg=
 cleanup() {
-  if [[ -n "$mounted_dmg" ]]; then
-    hdiutil detach "$mounted_dmg" -quiet >/dev/null 2>&1 || true
-  fi
   rm -rf "$tmp_dir"
 }
 trap cleanup EXIT
@@ -40,69 +36,6 @@ chmod 0755 "$fake_binary"
 
 output_dir="$tmp_dir/output"
 mkdir -p "$output_dir"
-
-test_portable() {
-  command -v zip >/dev/null 2>&1 || fail "portable test requires zip"
-  command -v unzip >/dev/null 2>&1 || fail "portable test requires unzip"
-
-  local windows_artifact
-  windows_artifact=$(
-    "$script_dir/package-portable.sh" \
-      v0.1.0-rc.1 windows amd64 "$fake_binary" "$output_dir"
-  )
-  local expected_windows="$output_dir/vibe-proxy_0.1.0-rc.1_windows_amd64.zip"
-  [[ "$windows_artifact" == "$expected_windows" ]] ||
-    fail "windows artifact path: got $windows_artifact"
-  assert_file "$expected_windows" "windows portable artifact"
-
-  local windows_root="vibe-proxy_0.1.0-rc.1_windows_amd64"
-  cat >"$tmp_dir/windows.expected" <<EOF
-$windows_root/LICENSE
-$windows_root/README.md
-$windows_root/configs/bootstrap.yaml
-$windows_root/configs/simple.yaml
-$windows_root/vibe-proxy.exe
-EOF
-  unzip -Z1 "$expected_windows" |
-    sed '/\/$/d' |
-    LC_ALL=C sort >"$tmp_dir/windows.actual"
-  assert_members "$tmp_dir/windows.actual" "$tmp_dir/windows.expected" "windows portable"
-
-  local linux_artifact
-  linux_artifact=$(
-    "$script_dir/package-portable.sh" \
-      v0.1.0-rc.1 linux arm64 "$fake_binary" "$output_dir"
-  )
-  local expected_linux="$output_dir/vibe-proxy_0.1.0-rc.1_linux_arm64.tar.gz"
-  [[ "$linux_artifact" == "$expected_linux" ]] ||
-    fail "linux artifact path: got $linux_artifact"
-  assert_file "$expected_linux" "linux portable artifact"
-
-  local linux_root="vibe-proxy_0.1.0-rc.1_linux_arm64"
-  cat >"$tmp_dir/linux.expected" <<EOF
-$linux_root/LICENSE
-$linux_root/README.md
-$linux_root/configs/bootstrap.yaml
-$linux_root/configs/simple.yaml
-$linux_root/vibe-proxy
-EOF
-  tar -tzf "$expected_linux" |
-    sed '/\/$/d' |
-    LC_ALL=C sort >"$tmp_dir/linux.actual"
-  assert_members "$tmp_dir/linux.actual" "$tmp_dir/linux.expected" "linux portable"
-
-  if "$script_dir/package-portable.sh" \
-    0.1 windows amd64 "$fake_binary" "$output_dir" >/dev/null 2>&1; then
-    fail "invalid version was accepted"
-  fi
-
-  if "$script_dir/package-portable.sh" \
-    v0.1.0-rc.1 linux 386 "$fake_binary" "$output_dir" >/dev/null 2>&1; then
-    fail "invalid architecture was accepted"
-  fi
-
-  printf 'portable packaging tests: PASS\n'
-}
 
 test_deb() {
   command -v dpkg-deb >/dev/null 2>&1 || fail "DEB test requires dpkg-deb"
@@ -158,62 +91,6 @@ EOF
   printf 'DEB packaging tests: PASS\n'
 }
 
-test_dmg() {
-  command -v hdiutil >/dev/null 2>&1 || fail "DMG test requires hdiutil"
-
-  local dmg_artifact
-  dmg_artifact=$(
-    "$script_dir/package-dmg.sh" \
-      v0.1.0-rc.1 amd64 "$fake_binary" "$output_dir"
-  )
-  local expected_dmg="$output_dir/vibe-proxy_0.1.0-rc.1_darwin_amd64.dmg"
-  [[ "$dmg_artifact" == "$expected_dmg" ]] ||
-    fail "DMG artifact path: got $dmg_artifact"
-  assert_file "$expected_dmg" "macOS DMG artifact"
-
-  mounted_dmg="$tmp_dir/dmg-mount"
-  mkdir -p "$mounted_dmg"
-  hdiutil attach \
-    -nobrowse \
-    -readonly \
-    -mountpoint "$mounted_dmg" \
-    "$expected_dmg" >/dev/null
-
-  assert_file "$mounted_dmg/vibe-proxy" "DMG binary"
-  assert_file "$mounted_dmg/README.md" "DMG README"
-  assert_file "$mounted_dmg/LICENSE" "DMG license"
-  assert_file "$mounted_dmg/INSTALL.txt" "DMG installation guide"
-  assert_file "$mounted_dmg/configs/bootstrap.yaml" "DMG bootstrap config"
-  assert_file "$mounted_dmg/configs/simple.yaml" "DMG simple config"
-  grep -Fq "release-candidate disk image" "$mounted_dmg/INSTALL.txt" ||
-    fail "release-candidate DMG is not labeled as a release candidate"
-
-  hdiutil detach "$mounted_dmg" -quiet
-  mounted_dmg=
-
-  local stable_artifact
-  stable_artifact=$(
-    "$script_dir/package-dmg.sh" \
-      v0.1.0 arm64 "$fake_binary" "$output_dir"
-  )
-  mounted_dmg="$tmp_dir/dmg-stable-mount"
-  mkdir -p "$mounted_dmg"
-  hdiutil attach \
-    -nobrowse \
-    -readonly \
-    -mountpoint "$mounted_dmg" \
-    "$stable_artifact" >/dev/null
-  if grep -Fq "release-candidate" "$mounted_dmg/INSTALL.txt"; then
-    fail "stable DMG is incorrectly labeled as a release candidate"
-  fi
-  grep -Fq "unsigned and not notarized" "$mounted_dmg/INSTALL.txt" ||
-    fail "stable DMG is missing unsigned-build guidance"
-  hdiutil detach "$mounted_dmg" -quiet
-  mounted_dmg=
-
-  printf 'DMG packaging tests: PASS\n'
-}
-
 test_asset_manifest() {
   local manifest_dir="$tmp_dir/manifest"
   mkdir -p "$manifest_dir"
@@ -227,18 +104,8 @@ test_asset_manifest() {
   for name in \
     vibe-proxy-desktop_0.1.0-rc.1_windows_amd64-setup.exe \
     vibe-proxy-desktop_0.1.0-rc.1_windows_arm64-setup.exe \
-    vibe-proxy-desktop_0.1.0-rc.1_windows_amd64-portable.zip \
-    vibe-proxy-desktop_0.1.0-rc.1_windows_arm64-portable.zip \
     vibe-proxy-desktop_0.1.0-rc.1_darwin_amd64.dmg \
     vibe-proxy-desktop_0.1.0-rc.1_darwin_arm64.dmg \
-    vibe-proxy_0.1.0-rc.1_windows_amd64.zip \
-    vibe-proxy_0.1.0-rc.1_windows_arm64.zip \
-    vibe-proxy_0.1.0-rc.1_darwin_amd64.tar.gz \
-    vibe-proxy_0.1.0-rc.1_darwin_arm64.tar.gz \
-    vibe-proxy_0.1.0-rc.1_darwin_amd64.dmg \
-    vibe-proxy_0.1.0-rc.1_darwin_arm64.dmg \
-    vibe-proxy_0.1.0-rc.1_linux_amd64.tar.gz \
-    vibe-proxy_0.1.0-rc.1_linux_arm64.tar.gz \
     vibe-proxy_0.1.0-rc.1_linux_amd64.deb \
     vibe-proxy_0.1.0-rc.1_linux_arm64.deb; do
     : >"$manifest_dir/$name"
@@ -268,27 +135,15 @@ test_asset_manifest() {
 scope=${RELEASE_TEST_SCOPE:-all}
 case "$scope" in
   all)
-    test_portable
     if command -v dpkg-deb >/dev/null 2>&1; then
       test_deb
     else
       printf 'DEB packaging tests: SKIP (dpkg-deb unavailable)\n'
     fi
-    if command -v hdiutil >/dev/null 2>&1; then
-      test_dmg
-    else
-      printf 'DMG packaging tests: SKIP (hdiutil unavailable)\n'
-    fi
     test_asset_manifest
-    ;;
-  portable)
-    test_portable
     ;;
   deb)
     test_deb
-    ;;
-  dmg)
-    test_dmg
     ;;
   assets)
     test_asset_manifest

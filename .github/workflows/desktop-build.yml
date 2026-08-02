@@ -108,11 +108,6 @@ jobs:
         run: |
           ./scripts/release/test-windows-desktop-startup.ps1 `
             -Installer "desktop/bin/vibe-proxy-desktop-amd64-setup.exe"
-      - uses: actions/upload-artifact@v7
-        with:
-          name: desktop-ci-windows-${{ matrix.goarch }}
-          path: ${{ runner.temp }}/packages/*
-
   macos:
     needs: test
     strategy:
@@ -136,7 +131,3 @@ jobs:
           desktop/bin/Vibe\ Proxy.app/Contents/MacOS/vibe-proxy-desktop --version
           scripts/release/package-desktop-dmg.sh v0.0.0-ci "${{ matrix.goarch }}" \
             "desktop/bin/Vibe Proxy.app" "$RUNNER_TEMP/packages"
-      - uses: actions/upload-artifact@v7
-        with:
-          name: desktop-ci-macos-${{ matrix.goarch }}
-          path: ${{ runner.temp }}/packages/*
