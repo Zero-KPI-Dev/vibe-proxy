@@ -333,6 +333,47 @@ func TestValidateRuntimeRejectsUnsafeAgentProfileDetectors(t *testing.T) {
 	}
 }
 
+func TestValidateRuntimeRejectsUnsafeObservabilityCapture(t *testing.T) {
+	cfg, err := CompileSimple(SimpleConfig{Observability: ObservabilityConfig{
+		Capture: ObservabilityCaptureConfig{
+			Mode:             "everything",
+			MaxSnapshotBytes: 8 << 20,
+			ImagePayloads:    "full",
+			HeaderAllowlist:  []string{"authorization", "cookie"},
+		},
+		Retention: ObservabilityRetentionConfig{SummariesDays: 2, ContentDays: 3, MaxContentStorageMB: -1},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	issues := ValidateRuntime(cfg)
+	for _, code := range []string{
+		"invalid_capture_mode",
+		"invalid_capture_size",
+		"invalid_image_payload_policy",
+		"sensitive_capture_header",
+		"invalid_content_retention",
+		"invalid_content_quota",
+	} {
+		if !hasIssueCode(issues, code) {
+			t.Fatalf("missing %s validation issue: %+v", code, issues)
+		}
+	}
+}
+
+func TestValidateRuntimeWarnsForRawObservabilityCapture(t *testing.T) {
+	cfg, err := CompileSimple(SimpleConfig{Observability: ObservabilityConfig{
+		Capture: ObservabilityCaptureConfig{Mode: "raw"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	issues := ValidateRuntime(cfg)
+	if HasErrors(issues) || !hasIssueCode(issues, "raw_capture_sensitive") {
+		t.Fatalf("raw capture warning missing: %+v", issues)
+	}
+}
+
 func hasIssueCode(issues []ValidationIssue, code string) bool {
 	for _, validationIssue := range issues {
 		if validationIssue.Code == code {

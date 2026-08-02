@@ -134,9 +134,73 @@ func ValidateRuntime(cfg *RuntimeConfig) []ValidationIssue {
 		}
 	}
 	issues = append(issues, validateAgentProfiles(cfg.AgentProfiles)...)
+	issues = append(issues, validateObservability(cfg.Observability)...)
 	issues = append(issues, validateMultimodal(cfg.Multimodal)...)
 	issues = append(issues, validateVisionFallback(cfg)...)
 	return issues
+}
+
+func validateObservability(cfg ObservabilityConfig) []ValidationIssue {
+	issues := []ValidationIssue{}
+	switch cfg.Capture.Mode {
+	case "metadata", "structured":
+	case "raw":
+		issues = append(issues, issue("warning", "observability.capture.mode", "raw_capture_sensitive", "Raw capture preserves the wire JSON shape after mandatory redaction and should be enabled only when needed."))
+	default:
+		issues = append(issues, issue("error", "observability.capture.mode", "invalid_capture_mode", "Capture mode must be metadata, structured, or raw."))
+	}
+	if cfg.Capture.MaxSnapshotBytes < 1<<10 || cfg.Capture.MaxSnapshotBytes > 4<<20 {
+		issues = append(issues, issue("error", "observability.capture.max_snapshot_bytes", "invalid_capture_size", "Snapshot size must be between 1 KiB and 4 MiB."))
+	}
+	if cfg.Capture.ImagePayloads != "metadata" {
+		issues = append(issues, issue("error", "observability.capture.image_payloads", "invalid_image_payload_policy", "Image payloads must use metadata-only capture."))
+	}
+	if len(cfg.Capture.HeaderAllowlist) > 32 {
+		issues = append(issues, issue("error", "observability.capture.header_allowlist", "invalid_capture_header", "At most 32 capture headers may be configured."))
+	}
+	for index, rawHeader := range cfg.Capture.HeaderAllowlist {
+		header := strings.ToLower(strings.TrimSpace(rawHeader))
+		headerPath := fmt.Sprintf("observability.capture.header_allowlist.%d", index)
+		if isSensitiveHeader(header) {
+			issues = append(issues, issue("error", headerPath, "sensitive_capture_header", "Credential and cookie headers can never be captured."))
+			continue
+		}
+		if !isValidHTTPHeaderName(header) || len(header) > 100 {
+			issues = append(issues, issue("error", headerPath, "invalid_capture_header", "Capture header names must be valid HTTP field names of at most 100 characters."))
+		}
+	}
+	if cfg.Retention.SummariesDays < 1 || cfg.Retention.SummariesDays > 3650 {
+		issues = append(issues, issue("error", "observability.retention.summaries_days", "invalid_summary_retention", "Summary retention must be between 1 and 3650 days."))
+	}
+	if cfg.Retention.ContentDays < 1 || cfg.Retention.ContentDays > cfg.Retention.SummariesDays {
+		issues = append(issues, issue("error", "observability.retention.content_days", "invalid_content_retention", "Content retention must be positive and no longer than summary retention."))
+	}
+	if cfg.Retention.MaxContentStorageMB < 1 || cfg.Retention.MaxContentStorageMB > 102400 {
+		issues = append(issues, issue("error", "observability.retention.max_content_storage_mb", "invalid_content_quota", "Content storage quota must be between 1 MiB and 100 GiB."))
+	}
+	return issues
+}
+
+func isSensitiveHeader(header string) bool {
+	switch strings.ToLower(strings.TrimSpace(header)) {
+	case "authorization", "proxy-authorization", "cookie", "set-cookie", "x-api-key":
+		return true
+	default:
+		return false
+	}
+}
+
+func isValidHTTPHeaderName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for _, r := range name {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || strings.ContainsRune("!#$%&'*+-.^_`|~", r) {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func validateAgentProfiles(profiles []AgentProfileConfig) []ValidationIssue {

@@ -31,12 +31,13 @@ func (d *Duration) UnmarshalYAML(value *yaml.Node) error {
 }
 
 type Config struct {
-	Server      ServerConfig      `yaml:"server"`
-	Security    SecurityConfig    `yaml:"security"`
-	Storage     StorageConfig     `yaml:"storage"`
-	ClientKeys  []ClientKeyConfig `yaml:"client_keys"`
-	ModelRoutes []ModelRoute      `yaml:"model_routes"`
-	Channels    []ChannelConfig   `yaml:"channels"`
+	Server        ServerConfig        `yaml:"server"`
+	Security      SecurityConfig      `yaml:"security"`
+	Storage       StorageConfig       `yaml:"storage"`
+	Observability ObservabilityConfig `yaml:"observability,omitempty"`
+	ClientKeys    []ClientKeyConfig   `yaml:"client_keys"`
+	ModelRoutes   []ModelRoute        `yaml:"model_routes"`
+	Channels      []ChannelConfig     `yaml:"channels"`
 }
 
 type ServerConfig struct {
@@ -54,6 +55,28 @@ type SecurityConfig struct {
 type StorageConfig struct {
 	SQLitePath    string `yaml:"sqlite_path"`
 	RetentionDays int    `yaml:"retention_days"`
+}
+
+// ObservabilityConfig controls local trace capture independently from the
+// request-summary retention used by the compatibility telemetry surface.
+type ObservabilityConfig struct {
+	Capture   ObservabilityCaptureConfig   `yaml:"capture,omitempty"`
+	Retention ObservabilityRetentionConfig `yaml:"retention,omitempty"`
+}
+
+type ObservabilityCaptureConfig struct {
+	Mode             string   `yaml:"mode,omitempty"`
+	MaxSnapshotBytes int      `yaml:"max_snapshot_bytes,omitempty"`
+	CaptureResponse  bool     `yaml:"capture_response,omitempty"`
+	CaptureReasoning bool     `yaml:"capture_reasoning,omitempty"`
+	ImagePayloads    string   `yaml:"image_payloads,omitempty"`
+	HeaderAllowlist  []string `yaml:"header_allowlist,omitempty"`
+}
+
+type ObservabilityRetentionConfig struct {
+	SummariesDays       int `yaml:"summaries_days,omitempty"`
+	ContentDays         int `yaml:"content_days,omitempty"`
+	MaxContentStorageMB int `yaml:"max_content_storage_mb,omitempty"`
 }
 
 type ClientKeyConfig struct {
@@ -104,6 +127,7 @@ func Load(path string) (*Config, error) {
 	if cfg.Storage.RetentionDays <= 0 {
 		cfg.Storage.RetentionDays = 14
 	}
+	applyObservabilityDefaults(&cfg.Observability, cfg.Storage.RetentionDays)
 	if len(cfg.Channels) == 0 {
 		return nil, errors.New("at least one channel is required")
 	}

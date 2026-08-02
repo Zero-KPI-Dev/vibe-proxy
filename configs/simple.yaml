@@ -11,6 +11,19 @@ storage:
   sqlite_path: ./vibe-proxy.db
   retention_days: 14
 
+observability:
+  capture:
+    mode: metadata
+    max_snapshot_bytes: 262144
+    capture_response: false
+    capture_reasoning: false
+    image_payloads: metadata
+    header_allowlist: [user-agent, traceparent]
+  retention:
+    summaries_days: 14
+    content_days: 3
+    max_content_storage_mb: 512
+
 client_keys:
   - name: local-dev
     key_hash: "$2a$10$AXRkz.6y44ygdJFk6L1/IO0aRVp9zRMfXDJoBCBsroxVac/Lovvz6" # vibe-local-dev-key
