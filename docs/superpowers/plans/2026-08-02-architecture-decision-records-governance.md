@@ -254,7 +254,9 @@ $adrFiles = Get-ChildItem -LiteralPath docs/adr -Filter '*.md' | Where-Object { 
 $required = @('## Status', '## Decision date', '## Recorded date', '## Context', '## Decision', '## Consequences', '## Alternatives considered', '## Security and operational considerations', '## References')
 foreach ($file in $adrFiles) { $content = Get-Content -Raw -LiteralPath $file.FullName; foreach ($heading in $required) { if (-not $content.Contains($heading)) { throw "$($file.Name) missing $heading" } } }
 if ($adrFiles.Count -ne 6) { throw "Expected 6 ADRs, found $($adrFiles.Count)" }
-rg -n "T[B]D|T[O]DO|F[I]XME|PLACEH[O]LDER" docs/adr docs/contributing-architecture.md .github/pull_request_template.md
+$placeholderMatches = rg -n "T[B]D|T[O]DO|F[I]XME|PLACEH[O]LDER" docs/adr docs/contributing-architecture.md .github/pull_request_template.md
+if ($LASTEXITCODE -eq 0) { $placeholderMatches; throw 'Placeholder text found' }
+if ($LASTEXITCODE -ne 1) { throw "Placeholder scan failed with exit code $LASTEXITCODE" }
 ```
 
 Expected: the heading script exits successfully; the placeholder search produces no matches.
@@ -264,7 +266,11 @@ Expected: the heading script exits successfully; the placeholder search produces
 Run:
 
 ```powershell
-$files = Get-ChildItem -LiteralPath docs/adr -Filter '*.md'
+$files = @(
+    Get-ChildItem -LiteralPath docs/adr -Filter '*.md'
+    Get-Item -LiteralPath docs/contributing-architecture.md
+    Get-Item -LiteralPath .github/pull_request_template.md
+)
 $linkPattern = '\[[^\]]+\]\((?!https?://|mailto:|#)([^)#]+)(?:#[^)]+)?\)'
 foreach ($file in $files) {
     $content = Get-Content -Raw -LiteralPath $file.FullName
