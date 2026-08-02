@@ -74,43 +74,6 @@ func hasWindowsDrivePrefix(path string) bool {
 	return drive >= 'A' && drive <= 'Z' || drive >= 'a' && drive <= 'z'
 }
 
-func (s *SQLite) migrate() error {
-	_, err := s.db.Exec(`CREATE TABLE IF NOT EXISTS request_logs (
-request_id TEXT PRIMARY KEY,
-client_name TEXT,
-virtual_model TEXT,
-upstream_model TEXT,
-channel_id TEXT,
-protocol_in TEXT,
-protocol_out TEXT,
-started_at DATETIME,
-first_token_at DATETIME,
-completed_at DATETIME,
-ttft_ms INTEGER,
-tpot_ms REAL,
-tps REAL,
-status_code INTEGER,
-error_code TEXT,
-prompt_tokens INTEGER,
-completion_tokens INTEGER,
-total_tokens INTEGER,
-cache_read_tokens INTEGER,
-cache_write_tokens INTEGER,
-cache_hit_ratio REAL,
-input_labels_json TEXT,
-output_labels_json TEXT,
-transformation_json TEXT
-);`)
-	if err != nil {
-		return err
-	}
-	_, alterErr := s.db.Exec(`ALTER TABLE request_logs ADD COLUMN transformation_json TEXT`)
-	if alterErr != nil && !strings.Contains(strings.ToLower(alterErr.Error()), "duplicate column") {
-		return alterErr
-	}
-	return nil
-}
-
 func (s *SQLite) RequestStarted(e telemetry.Event) {}
 func (s *SQLite) Token(e telemetry.Event)          {}
 

@@ -115,6 +115,103 @@ func TestSQLiteConfiguresWALAndBusyTimeout(t *testing.T) {
 	}
 }
 
+func TestSQLiteMigrationsCreateTraceSchema(t *testing.T) {
+	databasePath := filepath.Join(t.TempDir(), "migrations.db")
+	sqlite, err := Open(databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sqlite.Close() })
+
+	assertMigrationVersions(t, sqlite.db, []int{1, 2})
+	assertTableColumns(t, sqlite.db, "request_logs", []string{
+		"transformation_json",
+		"trace_id",
+		"span_id",
+		"parent_span_id",
+		"session_id",
+		"session_name",
+		"session_kind",
+		"session_path",
+		"parent_request_id",
+		"principal_name",
+		"agent_id",
+		"agent_name",
+		"agent_version",
+		"agent_source",
+		"agent_confidence",
+		"project_id",
+		"duration_ms",
+		"request_shape_json",
+		"capture_mode",
+		"capture_status",
+	})
+	for _, table := range []string{"trace_observations", "payload_snapshots", "session_annotations"} {
+		var name string
+		if err := sqlite.db.QueryRow(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&name); err != nil {
+			t.Fatalf("expected table %s: %v", table, err)
+		}
+	}
+	if err := sqlite.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := Open(databasePath)
+	if err != nil {
+		t.Fatalf("reopening a migrated database must be idempotent: %v", err)
+	}
+	defer reopened.Close()
+	assertMigrationVersions(t, reopened.db, []int{1, 2})
+}
+
+func assertMigrationVersions(t *testing.T, db *sql.DB, want []int) {
+	t.Helper()
+	rows, err := db.Query(`SELECT version FROM schema_migrations ORDER BY version`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	got := []int{}
+	for rows.Next() {
+		var version int
+		if err := rows.Scan(&version); err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, version)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("unexpected migration versions: got %v want %v", got, want)
+	}
+}
+
+func assertTableColumns(t *testing.T, db *sql.DB, table string, want []string) {
+	t.Helper()
+	rows, err := db.Query(`PRAGMA table_info(` + table + `)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	columns := map[string]bool{}
+	for rows.Next() {
+		var cid int
+		var name, columnType string
+		var notNull, primaryKey int
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			t.Fatal(err)
+		}
+		columns[name] = true
+	}
+	for _, column := range want {
+		if !columns[column] {
+			t.Errorf("table %s is missing column %s", table, column)
+		}
+	}
+}
+
 func TestSQLiteConfiguresBusyTimeoutOnPooledConnections(t *testing.T) {
 	sqlite, err := Open(filepath.Join(t.TempDir(), "pooled-pragmas.db"))
 	if err != nil {
