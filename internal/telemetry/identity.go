@@ -98,6 +98,36 @@ func ExtractRequestIdentity(r *http.Request, protocolMetadata map[string]string,
 	return identity
 }
 
+// EnrichRequestIdentity applies protocol-native metadata after parsing. It
+// only overrides lower-confidence profile, User-Agent, or unknown Agent data;
+// explicit HTTP headers and baggage remain authoritative.
+func EnrichRequestIdentity(identity RequestIdentity, metadata map[string]string) RequestIdentity {
+	if id, name, version, ok := metadataAgent(metadata); ok &&
+		(identity.AgentSource == "profile" || identity.AgentSource == "user_agent" || identity.AgentSource == "unknown") {
+		identity.AgentID, identity.AgentName, identity.AgentVersion = id, name, version
+		identity.AgentSource, identity.AgentConfidence = "protocol_metadata", "explicit"
+	}
+	if identity.SessionID == "" {
+		identity.SessionID = firstClean(metadata["session_id"], metadata["conversation_id"])
+	}
+	if identity.SessionName == "" {
+		identity.SessionName = cleanIdentityValue(metadata["session_name"])
+	}
+	if identity.SessionKind == "" {
+		identity.SessionKind = cleanIdentityValue(metadata["session_kind"])
+	}
+	if identity.SessionPath == "" {
+		identity.SessionPath = cleanIdentityValue(metadata["session_path"])
+	}
+	if identity.ProjectID == "" {
+		identity.ProjectID = cleanIdentityValue(metadata["project_id"])
+	}
+	if identity.ParentRequestID == "" {
+		identity.ParentRequestID = cleanIdentityValue(metadata["parent_request_id"])
+	}
+	return identity
+}
+
 func headerAgent(r *http.Request) (string, string, string, bool) {
 	id := cleanIdentityValue(r.Header.Get("X-Vibe-Agent-ID"))
 	name := cleanIdentityValue(r.Header.Get("X-Vibe-Agent-Name"))

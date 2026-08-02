@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -123,7 +124,7 @@ func TestSQLiteMigrationsCreateTraceSchema(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = sqlite.Close() })
 
-	assertMigrationVersions(t, sqlite.db, []int{1, 2})
+	assertMigrationVersions(t, sqlite.db, []int{1, 2, 3})
 	assertTableColumns(t, sqlite.db, "request_logs", []string{
 		"transformation_json",
 		"trace_id",
@@ -145,6 +146,8 @@ func TestSQLiteMigrationsCreateTraceSchema(t *testing.T) {
 		"request_shape_json",
 		"capture_mode",
 		"capture_status",
+		"http_method",
+		"http_path",
 	})
 	for _, table := range []string{"trace_observations", "payload_snapshots", "session_annotations"} {
 		var name string
@@ -161,7 +164,7 @@ func TestSQLiteMigrationsCreateTraceSchema(t *testing.T) {
 		t.Fatalf("reopening a migrated database must be idempotent: %v", err)
 	}
 	defer reopened.Close()
-	assertMigrationVersions(t, reopened.db, []int{1, 2})
+	assertMigrationVersions(t, reopened.db, []int{1, 2, 3})
 }
 
 func assertMigrationVersions(t *testing.T, db *sql.DB, want []int) {
@@ -405,6 +408,69 @@ func TestSQLitePersistsTransformationSummary(t *testing.T) {
 	}
 	if !strings.Contains(raw, `"multimodal_route":"ocr_fallback"`) || !strings.Contains(raw, `"ocr_processed":2`) {
 		t.Fatalf("unexpected transformation JSON: %s", raw)
+	}
+}
+
+func TestSQLitePersistsIdentityAndRequestShape(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "identity.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	completed := time.Now().UTC()
+	store.RequestFinished(telemetry.Event{
+		RequestID:         "identity-1",
+		TraceID:           "4bf92f3577b34da6a3ce929d0e0e4736",
+		SpanID:            "00f067aa0ba902b7",
+		ParentSpanID:      "aabbccddeeff0011",
+		SessionID:         "session-1",
+		SessionName:       "Fix observability",
+		SessionKind:       "coding",
+		SessionPath:       "/implementation/store",
+		ParentRequestID:   "identity-0",
+		PrincipalName:     "local-user",
+		ClientName:        "local-user",
+		AgentID:           "codex",
+		AgentName:         "Codex CLI",
+		AgentVersion:      "1.2.3",
+		AgentSource:       "header",
+		AgentConfidence:   "explicit",
+		ProjectID:         "vibe-proxy",
+		HTTPMethod:        http.MethodPost,
+		HTTPPath:          "/v1/chat/completions",
+		StartedAt:         completed.Add(-50 * time.Millisecond),
+		CompletedAt:       &completed,
+		DurationMillis:    50,
+		VirtualModel:      "vibe-fast",
+		InitialProvider:   "mockai",
+		InitialModel:      "raw-chat",
+		ChannelID:         "mockai",
+		UpstreamModel:     "raw-chat",
+		FinishReason:      "stop",
+		UpstreamRequestID: "chatcmpl-1",
+		RequestShape: telemetry.RequestShapeSummary{
+			InputMessageCount: 1, InputBlockCount: 2, InputToolCount: 1,
+			InputImageCount: 1, InputTextChars: 12, OutputMessageCount: 1,
+			OutputBlockCount: 2, OutputToolCallCount: 1, OutputReasoningChars: 7, OutputTextChars: 2,
+		},
+	})
+
+	recent, err := store.RecentFinished(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recent) != 1 {
+		t.Fatalf("unexpected events: %+v", recent)
+	}
+	got := recent[0]
+	if got.TraceID == "" || got.SessionID != "session-1" || got.PrincipalName != "local-user" || got.AgentID != "codex" || got.ProjectID != "vibe-proxy" {
+		t.Fatalf("identity was not persisted: %+v", got)
+	}
+	if got.HTTPMethod != http.MethodPost || got.HTTPPath != "/v1/chat/completions" || got.DurationMillis != 50 || got.InitialProvider != "mockai" || got.FinishReason != "stop" {
+		t.Fatalf("request summary was not persisted: %+v", got)
+	}
+	if got.RequestShape.InputImageCount != 1 || got.RequestShape.OutputToolCallCount != 1 || got.RequestShape.OutputReasoningChars != 7 {
+		t.Fatalf("request shape was not persisted: %+v", got.RequestShape)
 	}
 }
 

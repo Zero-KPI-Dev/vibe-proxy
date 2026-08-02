@@ -1,6 +1,11 @@
 package telemetry
 
-import "testing"
+import (
+	"testing"
+	"time"
+
+	"github.com/a448582655/vibe-proxy/internal/types"
+)
 
 func TestRecentStoreTracksActiveAndRecent(t *testing.T) {
 	s := NewRecentStore(2)
@@ -20,5 +25,14 @@ func TestRecentStoreTracksActiveAndRecent(t *testing.T) {
 	s.RequestFinished(Event{RequestID: "3"})
 	if got := s.Recent(10); len(got) != 2 || got[0].RequestID != "3" || got[1].RequestID != "2" {
 		t.Fatalf("capacity/order failed: %+v", got)
+	}
+}
+
+func TestTrackerRecordsTotalDuration(t *testing.T) {
+	started := time.Now().Add(-25 * time.Millisecond)
+	tracker := NewTracker(Event{RequestID: "duration", StartedAt: started}, nil)
+	event := tracker.Finish(200, types.Usage{}, "")
+	if event.CompletedAt == nil || event.DurationMillis < 20 {
+		t.Fatalf("total duration was not recorded: %+v", event)
 	}
 }

@@ -15,6 +15,7 @@ type migration struct {
 var sqliteMigrations = []migration{
 	{version: 1, apply: createRequestLogSchema},
 	{version: 2, apply: addTraceObservabilitySchema},
+	{version: 3, apply: addHTTPContextSchema},
 }
 
 func (s *SQLite) migrate() error {
@@ -214,6 +215,22 @@ updated_at DATETIME
 	for _, statement := range statements {
 		if _, err := tx.Exec(statement); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+func addHTTPContextSchema(tx *sql.Tx) error {
+	existing, err := tableColumns(tx, "request_logs")
+	if err != nil {
+		return err
+	}
+	for _, column := range []string{"http_method", "http_path"} {
+		if existing[column] {
+			continue
+		}
+		if _, err := tx.Exec(`ALTER TABLE request_logs ADD COLUMN ` + column + ` TEXT`); err != nil {
+			return fmt.Errorf("add request_logs.%s: %w", column, err)
 		}
 	}
 	return nil

@@ -12,6 +12,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/a448582655/vibe-proxy/internal/auth"
 	clientanthropic "github.com/a448582655/vibe-proxy/internal/clientadapters/anthropic"
 	clientopenai "github.com/a448582655/vibe-proxy/internal/clientadapters/openai"
@@ -38,6 +40,7 @@ type Snapshot struct {
 	Config        *config.RuntimeConfig
 	Resolver      *modelresolver.Resolver
 	Preprocessors *preprocess.Pipeline
+	AgentProfiles []telemetry.AgentProfile
 	AdminToken    string
 }
 
@@ -153,8 +156,17 @@ func (s *Server) buildSnapshot(cfg *config.RuntimeConfig) *Snapshot {
 		Config:        cfg,
 		Resolver:      resolver,
 		Preprocessors: preprocess.New(processor),
+		AgentProfiles: compileTelemetryAgentProfiles(cfg.AgentProfiles),
 		AdminToken:    adminToken,
 	}
+}
+
+func compileTelemetryAgentProfiles(profiles []config.AgentProfileConfig) []telemetry.AgentProfile {
+	compiled := make([]telemetry.AgentProfile, 0, len(profiles))
+	for _, profile := range profiles {
+		compiled = append(compiled, telemetry.AgentProfile{ID: profile.ID, Name: profile.Name, Detect: profile.Detect})
+	}
+	return compiled
 }
 
 func (s *Server) Routes() http.Handler {
@@ -274,8 +286,37 @@ func (s *Server) handleWithClient(w http.ResponseWriter, r *http.Request, truste
 		http.NotFound(w, r)
 		return
 	}
+	requestID := uuid.NewString()
+	identity := telemetry.ExtractRequestIdentity(r, nil, snap.AgentProfiles)
+	tracker := telemetry.NewTracker(telemetry.Event{
+		RequestID:       requestID,
+		TraceID:         identity.TraceID,
+		SpanID:          identity.SpanID,
+		ParentSpanID:    identity.ParentSpanID,
+		SessionID:       identity.SessionID,
+		SessionName:     identity.SessionName,
+		SessionKind:     identity.SessionKind,
+		SessionPath:     identity.SessionPath,
+		ParentRequestID: identity.ParentRequestID,
+		AgentID:         identity.AgentID,
+		AgentName:       identity.AgentName,
+		AgentVersion:    identity.AgentVersion,
+		AgentSource:     identity.AgentSource,
+		AgentConfidence: identity.AgentConfidence,
+		ProjectID:       identity.ProjectID,
+		HTTPMethod:      r.Method,
+		HTTPPath:        r.URL.Path,
+		ProtocolIn:      string(clientAdapter.Protocol()),
+		StartedAt:       time.Now(),
+	}, s.sink)
+	w.Header().Set("X-Vibe-Proxy-Request-ID", requestID)
+	w.Header().Set("X-Vibe-Proxy-Trace-ID", identity.TraceID)
+	finishError := func(gatewayError ir.GatewayError) {
+		tracker.Finish(gatewayError.StatusCode, types.Usage{}, gatewayError.Code)
+		_ = clientAdapter.EncodeError(r.Context(), w, gatewayError)
+	}
 	if r.Method != http.MethodPost {
-		_ = clientAdapter.EncodeError(r.Context(), w, ir.GatewayError{StatusCode: 405, Kind: "invalid_request_error", Code: "method_not_allowed", Message: "Method not allowed."})
+		finishError(ir.GatewayError{StatusCode: 405, Kind: "invalid_request_error", Code: "method_not_allowed", Message: "Method not allowed."})
 		return
 	}
 	var client auth.Client
@@ -285,39 +326,54 @@ func (s *Server) handleWithClient(w http.ResponseWriter, r *http.Request, truste
 		var gerr *types.GatewayError
 		client, gerr = s.authenticator.AuthenticateDataPlane(r, snap.Config.ClientKeys)
 		if gerr != nil {
-			_ = clientAdapter.EncodeError(r.Context(), w, toIRError(*gerr))
+			finishError(toIRError(*gerr))
 			return
 		}
 	}
+	tracker.Event.PrincipalName = client.Name
+	tracker.Event.ClientName = client.Name
 	creq, err := clientAdapter.ParseRequest(r.Context(), r)
 	if err != nil {
-		_ = clientAdapter.EncodeError(r.Context(), w, errorToIR(err))
+		finishError(errorToIR(err))
 		return
 	}
-	w.Header().Set("X-Vibe-Proxy-Request-ID", creq.ID)
+	creq.ID = requestID
+	identity = telemetry.EnrichRequestIdentity(identity, creq.Metadata)
+	applyRequestIdentity(&tracker.Event, identity)
+	creq.AgentID = identity.AgentID
+	creq.AgentName = identity.AgentName
+	creq.AgentVersion = identity.AgentVersion
+	creq.ProjectID = identity.ProjectID
+	creq.SessionID = identity.SessionID
+	tracker.Event.VirtualModel = creq.RequestedModel
+	tracker.Event.RequestShape = telemetry.SummarizeRequestShape(creq)
 	if !auth.ModelAllowed(client.AllowedModels, creq.RequestedModel) {
-		_ = clientAdapter.EncodeError(r.Context(), w, ir.GatewayError{StatusCode: 403, Kind: "permission_error", Code: "model_not_allowed", Message: "This API key is not allowed to use the requested model."})
+		finishError(ir.GatewayError{StatusCode: 403, Kind: "permission_error", Code: "model_not_allowed", Message: "This API key is not allowed to use the requested model."})
 		return
 	}
 	target, ierr := snap.Resolver.Resolve(creq)
 	if ierr != nil {
-		_ = clientAdapter.EncodeError(r.Context(), w, *ierr)
+		finishError(*ierr)
 		return
 	}
 	creq.ResolvedProvider = target.ProviderID
 	creq.ResolvedModel = target.Model
+	tracker.Event.InitialProvider = target.ProviderID
+	tracker.Event.InitialModel = target.Model
+	tracker.Event.UpstreamModel = target.Model
+	tracker.Event.ChannelID = target.ProviderID
 	providerCfg, ok := snap.Config.Providers[target.ProviderID]
 	if !ok {
-		_ = clientAdapter.EncodeError(r.Context(), w, ir.GatewayError{StatusCode: 503, Kind: "config_error", Code: "provider_not_found", Message: "Resolved provider is not configured."})
+		finishError(ir.GatewayError{StatusCode: 503, Kind: "config_error", Code: "provider_not_found", Message: "Resolved provider is not configured."})
 		return
 	}
 	providerAdapter := s.providerAdapters[target.ProviderType]
 	if providerAdapter == nil {
-		_ = clientAdapter.EncodeError(r.Context(), w, ir.GatewayError{StatusCode: 501, Kind: "config_error", Code: "provider_adapter_not_found", Message: "Provider adapter is not available."})
+		finishError(ir.GatewayError{StatusCode: 501, Kind: "config_error", Code: "provider_adapter_not_found", Message: "Provider adapter is not available."})
 		return
 	}
+	tracker.Event.ProtocolOut = string(providerAdapter.Protocol())
 	originalTarget := target
-	tracker := telemetry.NewTracker(telemetry.Event{RequestID: creq.ID, ClientName: client.Name, VirtualModel: creq.RequestedModel, UpstreamModel: target.Model, ChannelID: target.ProviderID, ProtocolIn: string(clientAdapter.Protocol()), ProtocolOut: string(providerAdapter.Protocol()), StartedAt: time.Now()}, s.sink)
 	prepared, err := snap.Preprocessors.Prepare(r.Context(), creq, preprocess.RouteContext{
 		Target:              target,
 		ProviderConfig:      providerCfg,
@@ -433,12 +489,32 @@ func (s *Server) handleWithClient(w http.ResponseWriter, r *http.Request, truste
 	if out.Model == "" {
 		out.Model = creq.RequestedModel
 	}
+	tracker.Event.UpstreamRequestID = out.ID
+	tracker.Event.FinishReason = out.StopReason
+	tracker.Event.RequestShape = telemetry.MergeResponseShape(tracker.Event.RequestShape, telemetry.SummarizeResponseShape(out))
 	if err := clientAdapter.EncodeUnary(ctx, w, out); err != nil {
 		ge := errorToIR(err)
 		tracker.Finish(ge.StatusCode, types.Usage{}, ge.Code)
 		return
 	}
 	tracker.Finish(http.StatusOK, toTelemetryUsage(out.Usage), "")
+}
+
+func applyRequestIdentity(event *telemetry.Event, identity telemetry.RequestIdentity) {
+	event.TraceID = identity.TraceID
+	event.SpanID = identity.SpanID
+	event.ParentSpanID = identity.ParentSpanID
+	event.SessionID = identity.SessionID
+	event.SessionName = identity.SessionName
+	event.SessionKind = identity.SessionKind
+	event.SessionPath = identity.SessionPath
+	event.ParentRequestID = identity.ParentRequestID
+	event.AgentID = identity.AgentID
+	event.AgentName = identity.AgentName
+	event.AgentVersion = identity.AgentVersion
+	event.AgentSource = identity.AgentSource
+	event.AgentConfidence = identity.AgentConfidence
+	event.ProjectID = identity.ProjectID
 }
 
 func (s *Server) adminPlayground(targetPath string) http.HandlerFunc {

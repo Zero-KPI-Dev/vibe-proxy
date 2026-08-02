@@ -90,16 +90,34 @@ func (s *SQLite) RequestFinished(e telemetry.Event) {
 		raw, _ := json.Marshal(e.Transformation)
 		transformation = string(raw)
 	}
-	_, _ = s.db.Exec(`INSERT OR REPLACE INTO request_logs (
-request_id,client_name,virtual_model,upstream_model,channel_id,protocol_in,protocol_out,
-started_at,first_token_at,completed_at,ttft_ms,tpot_ms,tps,status_code,error_code,
-prompt_tokens,completion_tokens,total_tokens,cache_read_tokens,cache_write_tokens,cache_hit_ratio,
-input_labels_json,output_labels_json,transformation_json
-) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+	requestShapeJSON, _ := json.Marshal(e.RequestShape)
+	columns := []string{
+		"request_id", "client_name", "virtual_model", "upstream_model", "channel_id", "protocol_in", "protocol_out",
+		"started_at", "first_token_at", "completed_at", "ttft_ms", "tpot_ms", "tps", "status_code", "error_code",
+		"prompt_tokens", "completion_tokens", "total_tokens", "cache_read_tokens", "cache_write_tokens", "cache_hit_ratio",
+		"input_labels_json", "output_labels_json", "transformation_json",
+		"trace_id", "span_id", "parent_span_id", "session_id", "session_name", "session_kind", "session_path",
+		"parent_request_id", "principal_name", "agent_id", "agent_name", "agent_version", "agent_source", "agent_confidence",
+		"project_id", "duration_ms", "initial_provider", "initial_model", "finish_reason", "upstream_request_id", "retry_count",
+		"input_message_count", "input_block_count", "input_tool_count", "input_image_count", "input_text_chars",
+		"output_message_count", "output_block_count", "output_tool_call_count", "output_reasoning_chars", "output_text_chars",
+		"request_shape_json", "http_method", "http_path",
+	}
+	values := []any{
 		e.RequestID, e.ClientName, e.VirtualModel, e.UpstreamModel, e.ChannelID, e.ProtocolIn, e.ProtocolOut,
 		e.StartedAt, first, completed, e.TTFTMillis, e.TPOTMillis, e.TPS, e.StatusCode, e.ErrorCode,
 		e.Usage.PromptTokens, e.Usage.CompletionTokens, e.Usage.TotalTokens, e.Usage.CacheReadTokens,
-		e.Usage.CacheWriteTokens, e.Usage.CacheHitRatio, e.InputLabelsJSON, e.OutputLabelsJSON, transformation)
+		e.Usage.CacheWriteTokens, e.Usage.CacheHitRatio, e.InputLabelsJSON, e.OutputLabelsJSON, transformation,
+		e.TraceID, e.SpanID, e.ParentSpanID, e.SessionID, e.SessionName, e.SessionKind, e.SessionPath,
+		e.ParentRequestID, e.PrincipalName, e.AgentID, e.AgentName, e.AgentVersion, e.AgentSource, e.AgentConfidence,
+		e.ProjectID, e.DurationMillis, e.InitialProvider, e.InitialModel, e.FinishReason, e.UpstreamRequestID, e.RetryCount,
+		e.RequestShape.InputMessageCount, e.RequestShape.InputBlockCount, e.RequestShape.InputToolCount,
+		e.RequestShape.InputImageCount, e.RequestShape.InputTextChars, e.RequestShape.OutputMessageCount,
+		e.RequestShape.OutputBlockCount, e.RequestShape.OutputToolCallCount, e.RequestShape.OutputReasoningChars,
+		e.RequestShape.OutputTextChars, string(requestShapeJSON), e.HTTPMethod, e.HTTPPath,
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(columns)), ",")
+	_, _ = s.db.Exec(`INSERT OR REPLACE INTO request_logs (`+strings.Join(columns, ",")+`) VALUES (`+placeholders+`)`, values...)
 }
 
 func (s *SQLite) Retain(days int) error {
@@ -245,10 +263,21 @@ func (s *SQLite) RecentFinished(limit int) ([]telemetry.Event, error) {
 	}
 	rows, err := s.db.Query(`
 SELECT
-	request_id, client_name, virtual_model, upstream_model, channel_id, protocol_in, protocol_out,
+	COALESCE(request_id, ''), COALESCE(client_name, ''), COALESCE(virtual_model, ''), COALESCE(upstream_model, ''),
+	COALESCE(channel_id, ''), COALESCE(protocol_in, ''), COALESCE(protocol_out, ''),
 	started_at, first_token_at, completed_at, ttft_ms, tpot_ms, tps, status_code, error_code,
 	prompt_tokens, completion_tokens, total_tokens, cache_read_tokens, cache_write_tokens,
-	cache_hit_ratio, input_labels_json, output_labels_json, transformation_json
+	cache_hit_ratio, COALESCE(input_labels_json, ''), COALESCE(output_labels_json, ''), transformation_json,
+	COALESCE(trace_id, ''), COALESCE(span_id, ''), COALESCE(parent_span_id, ''),
+	COALESCE(session_id, ''), COALESCE(session_name, ''), COALESCE(session_kind, ''), COALESCE(session_path, ''),
+	COALESCE(parent_request_id, ''), COALESCE(principal_name, ''), COALESCE(agent_id, ''),
+	COALESCE(agent_name, ''), COALESCE(agent_version, ''), COALESCE(agent_source, ''), COALESCE(agent_confidence, ''),
+	COALESCE(project_id, ''), COALESCE(duration_ms, 0), COALESCE(initial_provider, ''), COALESCE(initial_model, ''),
+	COALESCE(finish_reason, ''), COALESCE(upstream_request_id, ''), COALESCE(retry_count, 0),
+	COALESCE(input_message_count, 0), COALESCE(input_block_count, 0), COALESCE(input_tool_count, 0),
+	COALESCE(input_image_count, 0), COALESCE(input_text_chars, 0), COALESCE(output_message_count, 0),
+	COALESCE(output_block_count, 0), COALESCE(output_tool_call_count, 0), COALESCE(output_reasoning_chars, 0),
+	COALESCE(output_text_chars, 0), COALESCE(http_method, ''), COALESCE(http_path, '')
 FROM request_logs
 ORDER BY started_at DESC
 LIMIT ?
@@ -291,6 +320,39 @@ LIMIT ?
 			&event.InputLabelsJSON,
 			&event.OutputLabelsJSON,
 			&transformationJSON,
+			&event.TraceID,
+			&event.SpanID,
+			&event.ParentSpanID,
+			&event.SessionID,
+			&event.SessionName,
+			&event.SessionKind,
+			&event.SessionPath,
+			&event.ParentRequestID,
+			&event.PrincipalName,
+			&event.AgentID,
+			&event.AgentName,
+			&event.AgentVersion,
+			&event.AgentSource,
+			&event.AgentConfidence,
+			&event.ProjectID,
+			&event.DurationMillis,
+			&event.InitialProvider,
+			&event.InitialModel,
+			&event.FinishReason,
+			&event.UpstreamRequestID,
+			&event.RetryCount,
+			&event.RequestShape.InputMessageCount,
+			&event.RequestShape.InputBlockCount,
+			&event.RequestShape.InputToolCount,
+			&event.RequestShape.InputImageCount,
+			&event.RequestShape.InputTextChars,
+			&event.RequestShape.OutputMessageCount,
+			&event.RequestShape.OutputBlockCount,
+			&event.RequestShape.OutputToolCallCount,
+			&event.RequestShape.OutputReasoningChars,
+			&event.RequestShape.OutputTextChars,
+			&event.HTTPMethod,
+			&event.HTTPPath,
 		); err != nil {
 			return nil, err
 		}

@@ -86,25 +86,62 @@ export interface Usage {
   cache_hit_ratio?: number
 }
 
-export interface RequestEvent {
-  request_id: string
-  client_name: string
-  virtual_model: string
-  upstream_model: string
-  channel_id: string
+  export interface RequestEvent {
+    request_id: string
+    trace_id: string
+    span_id: string
+    parent_span_id?: string
+    session_id?: string
+    session_name?: string
+    session_kind?: string
+    session_path?: string
+    parent_request_id?: string
+    principal_name?: string
+    client_name: string
+    agent_id: string
+    agent_name?: string
+    agent_version?: string
+    agent_source: string
+    agent_confidence: string
+    project_id?: string
+    http_method?: string
+    http_path?: string
+    virtual_model: string
+    initial_provider?: string
+    initial_model?: string
+    upstream_model: string
+    channel_id: string
   protocol_in: string
   protocol_out: string
   started_at: string
   first_token_at?: string
-  completed_at?: string
-  ttft_ms?: number
+    completed_at?: string
+    duration_ms?: number
+    ttft_ms?: number
   tpot_ms?: number
   tps?: number
   status_code: number
-  error_code?: string
-  usage: Usage
-  transformation?: TransformationSummary
-}
+    error_code?: string
+    finish_reason?: string
+    upstream_request_id?: string
+    retry_count?: number
+    usage: Usage
+    request_shape: RequestShapeSummary
+    transformation?: TransformationSummary
+  }
+
+  export interface RequestShapeSummary {
+    input_message_count: number
+    input_block_count: number
+    input_tool_count: number
+    input_image_count: number
+    input_text_chars: number
+    output_message_count: number
+    output_block_count: number
+    output_tool_call_count: number
+    output_reasoning_chars: number
+    output_text_chars: number
+  }
 
 export interface TransformationSummary {
   multimodal_route?: string

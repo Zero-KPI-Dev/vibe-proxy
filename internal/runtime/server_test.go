@@ -124,6 +124,110 @@ func TestRuntimeOpenAIChatToOpenAICompatible(t *testing.T) {
 	}
 }
 
+func TestRuntimeTracksIdentityAndRequestShape(t *testing.T) {
+	recent := telemetry.NewRecentStore(10)
+	s := newTestServer(t, func(r *http.Request) (*http.Response, error) {
+		return jsonResponse(200, `{"id":"chatcmpl_identity","model":"raw-chat","choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}}`), nil
+	})
+	s.sink = recent
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"vibe-fast","messages":[{"role":"user","content":[{"type":"text","text":"read"},{"type":"image_url","image_url":{"url":"data:image/png;base64,AA=="}}]}],"tools":[{"type":"function","function":{"name":"lookup","parameters":{"type":"object"}}}]}`))
+	req.Header.Set("Authorization", "Bearer vibe-local-dev-key")
+	req.Header.Set("Traceparent", "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
+	req.Header.Set("X-Vibe-Agent-ID", "codex")
+	req.Header.Set("X-Vibe-Agent-Name", "Codex CLI")
+	req.Header.Set("X-Vibe-Session-ID", "session-42")
+	req.Header.Set("X-Vibe-Project-ID", "vibe-proxy")
+	w := httptest.NewRecorder()
+	s.Routes().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("unexpected response: %d %s", w.Code, w.Body.String())
+	}
+	events := recent.Recent(10)
+	if len(events) != 1 {
+		t.Fatalf("request was not tracked: %+v", events)
+	}
+	event := events[0]
+	if event.RequestID == "" || event.RequestID != w.Header().Get("X-Vibe-Proxy-Request-ID") || event.TraceID != "4bf92f3577b34da6a3ce929d0e0e4736" {
+		t.Fatalf("request and trace identity missing: %+v", event)
+	}
+	if event.PrincipalName != "test" || event.ClientName != "test" || event.AgentID != "codex" || event.SessionID != "session-42" || event.ProjectID != "vibe-proxy" {
+		t.Fatalf("principal or caller identity missing: %+v", event)
+	}
+	if event.InitialProvider != "mockai" || event.InitialModel != "raw-chat" || event.ChannelID != "mockai" || event.UpstreamModel != "raw-chat" {
+		t.Fatalf("route summary missing: %+v", event)
+	}
+	if event.RequestShape.InputMessageCount != 1 || event.RequestShape.InputBlockCount != 2 || event.RequestShape.InputImageCount != 1 || event.RequestShape.InputToolCount != 1 || event.RequestShape.InputTextChars != 4 {
+		t.Fatalf("input shape missing: %+v", event.RequestShape)
+	}
+	if event.RequestShape.OutputMessageCount != 1 || event.RequestShape.OutputTextChars != 2 || event.FinishReason != "stop" || event.UpstreamRequestID != "chatcmpl_identity" {
+		t.Fatalf("output summary missing: %+v", event)
+	}
+}
+
+func TestRuntimeTracksEarlyFailuresWithoutRequestContent(t *testing.T) {
+	tests := []struct {
+		name          string
+		authorization string
+		body          string
+		wantStatus    int
+		wantCode      string
+	}{
+		{name: "authentication", authorization: "Bearer wrong", body: `{"secret":"must-not-appear"}`, wantStatus: http.StatusUnauthorized, wantCode: "invalid_api_key"},
+		{name: "parse", authorization: "Bearer vibe-local-dev-key", body: `{"secret":"must-not-appear"`, wantStatus: http.StatusBadRequest, wantCode: "invalid_json"},
+		{name: "resolution", authorization: "Bearer vibe-local-dev-key", body: `{"model":"missing-model","messages":[]}`, wantStatus: http.StatusNotFound, wantCode: "model_not_found:missing-model"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			recent := telemetry.NewRecentStore(10)
+			s := newTestServer(t, func(r *http.Request) (*http.Response, error) {
+				t.Fatal("early failure reached upstream")
+				return nil, nil
+			})
+			s.sink = recent
+			req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(test.body))
+			req.Header.Set("Authorization", test.authorization)
+			w := httptest.NewRecorder()
+			s.Routes().ServeHTTP(w, req)
+			if w.Code != test.wantStatus {
+				t.Fatalf("unexpected status: %d %s", w.Code, w.Body.String())
+			}
+			events := recent.Recent(10)
+			if len(events) != 1 || events[0].CompletedAt == nil || events[0].StatusCode != test.wantStatus || events[0].ErrorCode != test.wantCode {
+				t.Fatalf("early failure was not finished: %+v", events)
+			}
+			if events[0].RequestID == "" || events[0].RequestID != w.Header().Get("X-Vibe-Proxy-Request-ID") {
+				t.Fatalf("early failure has no stable request id: %+v headers=%v", events[0], w.Header())
+			}
+			raw, _ := json.Marshal(events[0])
+			if strings.Contains(string(raw), "must-not-appear") || strings.Contains(string(raw), test.authorization) {
+				t.Fatalf("request content or credential leaked into telemetry: %s", raw)
+			}
+		})
+	}
+}
+
+func TestRuntimeTracksEarlyFailureDuringModelAuthorization(t *testing.T) {
+	recent := telemetry.NewRecentStore(10)
+	s := newTestServer(t, func(r *http.Request) (*http.Response, error) {
+		t.Fatal("authorization failure reached upstream")
+		return nil, nil
+	})
+	s.sink = recent
+	s.current().Config.ClientKeys[0].AllowedModels = []string{"vibe-coder"}
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"vibe-fast","messages":[]}`))
+	req.Header.Set("Authorization", "Bearer vibe-local-dev-key")
+	w := httptest.NewRecorder()
+	s.Routes().ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("unexpected status: %d %s", w.Code, w.Body.String())
+	}
+	events := recent.Recent(10)
+	if len(events) != 1 || events[0].StatusCode != http.StatusForbidden || events[0].ErrorCode != "model_not_allowed" || events[0].PrincipalName != "test" {
+		t.Fatalf("authorization failure was not tracked: %+v", events)
+	}
+}
+
 func TestRuntimeDoesNotMergeUpstreamReasoningIntoVisibleContent(t *testing.T) {
 	s := newTestServer(t, func(r *http.Request) (*http.Response, error) {
 		return jsonResponse(200, `{"id":"chatcmpl_reasoning","model":"raw-chat","choices":[{"message":{"role":"assistant","reasoning_content":"private chain of thought","content":"final answer"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":2,"total_tokens":3}}`), nil
@@ -216,15 +320,22 @@ func TestRuntimeAdminPlaygroundUsesFullPipelineWithoutDataPlaneKey(t *testing.T)
 		requestIDs[requestID] = true
 	}
 	events := recent.Recent(10)
-	if len(events) != len(requests) {
+	if len(events) != len(requests)+1 {
 		t.Fatalf("admin playground requests were not all tracked: %+v", events)
 	}
+	adminEvents := 0
+	sawRejectedPublicRequest := false
 	for _, event := range events {
+		if event.ErrorCode == "invalid_api_key" {
+			sawRejectedPublicRequest = true
+			continue
+		}
 		if event.ClientName != "admin-playground" || !requestIDs[event.RequestID] {
 			t.Fatalf("admin playground request was not tracked correctly: %+v", events)
 		}
+		adminEvents++
 	}
-	if len(requestIDs) != len(requests) {
+	if adminEvents != len(requests) || !sawRejectedPublicRequest || len(requestIDs) != len(requests) {
 		t.Fatalf("admin playground request was not tracked correctly: %+v", events)
 	}
 }
