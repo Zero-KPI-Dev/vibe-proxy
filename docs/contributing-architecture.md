@@ -121,3 +121,13 @@ Every new advanced feature should answer:
 - Can a local user ignore this safely?
 - Does the UI hide it unless needed?
 - Is there a short-form config for common usage?
+
+## Architecture Decision Records
+
+Read the [ADR guide and index](adr/README.md) before changing a durable architectural constraint.
+
+A new ADR is required when a change materially alters module ownership, a public protocol or compatibility contract, persisted data, a security or trust boundary, cross-cutting routing or fallback policy, deployment topology, or the supported release artifact matrix.
+
+A bug fix that restores an accepted decision should cite the governing ADR instead of creating another record. A material change to an accepted decision requires a new ADR that explicitly supersedes it.
+
+ADRs explain why a decision exists. They do not replace current-state documentation, so update the relevant architecture, API, configuration, release, or user documentation whenever observable behavior changes.
