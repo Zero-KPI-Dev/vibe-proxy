@@ -209,11 +209,16 @@ func validateVisionFallback(cfg *RuntimeConfig) []ValidationIssue {
 		return []ValidationIssue{issue("error", "multimodal.vision_fallback_model", "vision_fallback_invalid", "Vision fallback provider is not configured.")}
 	}
 	support := provider.DefaultCapabilities.ImageInput
+	explicit := support != ""
 	if model, exists := provider.ModelCapabilities[target.Model]; exists && model.ImageInput != "" {
 		support = model.ImageInput
+		explicit = true
+	}
+	if !explicit {
+		return []ValidationIssue{issue("warning", "multimodal.vision_fallback_model", "vision_fallback_unverified", "Vision fallback image support will be verified from models.dev at runtime.")}
 	}
 	if support != modelcapability.SupportSupported {
-		return []ValidationIssue{issue("error", "multimodal.vision_fallback_model", "vision_fallback_invalid", "Vision fallback model must be explicitly marked image_input: supported.")}
+		return []ValidationIssue{issue("error", "multimodal.vision_fallback_model", "vision_fallback_invalid", "Vision fallback model is explicitly marked as not supporting image input.")}
 	}
 	return nil
 }

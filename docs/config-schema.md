@@ -78,9 +78,15 @@ providers:
 ```
 
 `catalog_provider` is metadata only. It does not change request routing, protocol
-selection, or authentication. Explicit local capability overrides take precedence over
-provider defaults and catalog metadata. The catalog is advisory and is never consulted
-over the network in the data-plane hot path.
+selection, or authentication. Effective image capability uses the fixed precedence
+`model_override > provider_default > models_dev > unknown`. An explicit local value,
+including `unknown`, is authoritative; models.dev fills only an otherwise absent value.
+Not-found and ambiguous catalog matches remain `unknown`. Catalog data comes from the
+local snapshot and is never fetched over the network in the data-plane hot path or
+copied into provider configuration.
+
+The rationale for this precedence is recorded in
+[ADR-0002 in PR #13](https://github.com/a448582655/vibe-proxy/pull/13/files#diff-24c00a4894285b400b47b8d2bd412d20362e55a5278ead64044e6db68dd5d6a3).
 
 Desktop applications do not necessarily inherit proxy environment variables
 from a terminal. In restricted networks, configure the models.dev proxy in
@@ -275,10 +281,17 @@ LLM providers.
 
 If `vision_fallback_model` is configured, OCR errors, empty text, or confidence below the
 threshold switch to that target while preserving the original image request. The target
-must resolve to a different provider/model and must be explicitly marked
-`image_input: supported`; catalog inference alone is not accepted for this safety-critical
-fallback. The client key is still authorized against the originally requested public
-model.
+must resolve to a different provider/model, its effective capability must be
+`image_input: supported`, and its provider adapter must be able to transport images.
+Effective support may come from a model override, a provider default, or an unambiguous
+models.dev match, in that order. Explicit `unknown` and `unsupported`, as well as absent,
+ambiguous, or not-found catalog data, are rejected.
+
+Static file validation cannot require a loaded catalog. When no explicit capability is
+present it reports the warning `vision_fallback_unverified`; the runtime validates the
+resolved target against the active catalog before saving or using it. An explicit
+`unknown` or `unsupported` remains the error `vision_fallback_invalid`. The client key is
+still authorized against the originally requested public model.
 
 ## Agent Profiles
 

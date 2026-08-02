@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { Image, Loader2, Save, TestTube2 } from "lucide-react"
 import { toast } from "sonner"
@@ -9,8 +9,8 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
-import { multimodalApi, providerApi } from "@/lib/api"
-import type { MultimodalAdminInput, ProviderConfig } from "@/lib/types"
+import { multimodalApi } from "@/lib/api"
+import type { MultimodalAdminConfig, MultimodalAdminInput, VisionFallbackModelOption } from "@/lib/types"
 
 const defaultConfig: MultimodalAdminInput = {
   enabled: false,
@@ -28,6 +28,30 @@ const defaultConfig: MultimodalAdminInput = {
   max_images: 4,
 }
 
+const visionSourceTranslationKeys: Record<VisionFallbackModelOption["source"], string> = {
+  model_override: "settings.visionFallbackSourceModelOverride",
+  provider_default: "settings.visionFallbackSourceProviderDefault",
+  models_dev: "settings.visionFallbackSourceModelsDev",
+}
+
+function snapshotInput(response: MultimodalAdminConfig): MultimodalAdminInput {
+  return {
+    enabled: response.enabled,
+    strategy: response.strategy,
+    provider: response.provider,
+    endpoint: response.endpoint,
+    auth_type: response.auth_type,
+    api_key_source: response.api_key_source,
+    api_key_env: response.api_key_env,
+    api_key: "",
+    header: response.header,
+    vision_fallback_model: response.vision_fallback_model,
+    min_confidence: response.min_confidence,
+    min_text_chars: response.min_text_chars,
+    max_images: response.max_images,
+  }
+}
+
 interface OCRFallbackSettingsProps {
   authVersion: number
 }
@@ -35,7 +59,7 @@ interface OCRFallbackSettingsProps {
 export function OCRFallbackSettings({ authVersion }: OCRFallbackSettingsProps) {
   const { t } = useTranslation()
   const [config, setConfig] = useState<MultimodalAdminInput>(defaultConfig)
-  const [providers, setProviders] = useState<ProviderConfig[]>([])
+  const [visionModels, setVisionModels] = useState<VisionFallbackModelOption[]>([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState(false)
@@ -43,31 +67,22 @@ export function OCRFallbackSettings({ authVersion }: OCRFallbackSettingsProps) {
   useEffect(() => {
     let active = true
     setLoading(true)
-    void Promise.allSettled([multimodalApi.get(), providerApi.list()]).then(([multimodal, snapshot]) => {
+    void Promise.allSettled([multimodalApi.get()]).then(([multimodal]) => {
       if (!active) return
       if (multimodal.status === "fulfilled") {
-        setConfig({ ...defaultConfig, ...multimodal.value, api_key: "" })
+        const response = multimodal.value
+        setConfig(snapshotInput(response))
+        setVisionModels(response.vision_fallback_models ?? [])
       }
-      if (snapshot.status === "fulfilled") setProviders(snapshot.value.providers ?? [])
       setLoading(false)
     })
     return () => { active = false }
   }, [authVersion])
 
-  const visionModels = useMemo(() => {
-    const result: string[] = []
-    for (const provider of providers) {
-      for (const model of provider.models ?? []) {
-        const modelState = provider.model_capabilities?.[model]?.image_input
-        const state = modelState || provider.default_capabilities?.image_input
-        if (state === "supported") result.push(`${provider.id}/${model}`)
-      }
-    }
-    if (config.vision_fallback_model && !result.includes(config.vision_fallback_model)) {
-      result.unshift(config.vision_fallback_model)
-    }
-    return result
-  }, [config.vision_fallback_model, providers])
+  const unavailableSelection = config.vision_fallback_model
+    && !visionModels.some((option) => option.target === config.vision_fallback_model)
+    ? config.vision_fallback_model
+    : ""
 
   const update = <K extends keyof MultimodalAdminInput>(key: K, value: MultimodalAdminInput[K]) => {
     setConfig((current) => ({ ...current, [key]: value }))
@@ -77,7 +92,9 @@ export function OCRFallbackSettings({ authVersion }: OCRFallbackSettingsProps) {
     setSaving(true)
     try {
       const result = await multimodalApi.save(config)
-      setConfig({ ...defaultConfig, ...result.multimodal, api_key: "" })
+      const response = result.multimodal
+      setConfig(snapshotInput(response))
+      setVisionModels(response.vision_fallback_models ?? [])
       toast.success(t("settings.ocrSaved"))
     } catch (error) {
       toast.error(t("settings.ocrSaveFailed", {
@@ -273,7 +290,21 @@ export function OCRFallbackSettings({ authVersion }: OCRFallbackSettingsProps) {
             <SelectTrigger><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectItem value="none">{t("settings.visionFallbackNone")}</SelectItem>
-              {visionModels.map((model) => <SelectItem key={model} value={model}>{model}</SelectItem>)}
+              {unavailableSelection && (
+                <SelectItem value={unavailableSelection}>
+                  {unavailableSelection} ({t("settings.visionFallbackUnavailable")})
+                </SelectItem>
+              )}
+              {visionModels.map((option) => (
+                <SelectItem key={option.target} value={option.target}>
+                  <span className="flex w-full items-center justify-between gap-3">
+                    <span>{option.target}</span>
+                    <span className="text-xs text-muted-foreground">
+                      {t(visionSourceTranslationKeys[option.source])}
+                    </span>
+                  </span>
+                </SelectItem>
+              ))}
             </SelectContent>
           </Select>
           <p className="text-xs text-muted-foreground">

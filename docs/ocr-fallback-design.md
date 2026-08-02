@@ -423,7 +423,10 @@ flowchart TD
 使用时必须：
 
 - 成功解析到不同的 target；
-- 目标显式标记 `image_input: supported`；
+- 目标的有效能力为 `image_input: supported`；能力来源优先级固定为
+  `model_override > provider_default > models_dev > unknown`；
+- 显式 `unknown` 或 `unsupported` 不允许被 models.dev 覆盖；models.dev 未加载、
+  未找到或匹配歧义时保持 `unknown`，不能进入 fallback；
 - 对应 Provider Adapter 能编码图片；
 - 不再递归进入 OCR 或二次 fallback；
 - 保留原始 Canonical IR 图片，而不是使用失败后的 OCR 请求；
@@ -782,7 +785,9 @@ multimodal:
 - OCR auth secret 只能以 SecretRef 形式存在；
 - limit 必须大于 0 且不能超过内部硬上限；
 - `vision_fallback_model` 必须可解析；
-- Vision fallback target 必须显式支持图片；
+- Vision fallback target 的有效能力必须支持图片；静态校验在没有显式能力时返回
+  `vision_fallback_unverified` warning，由运行时结合 models.dev 再验证；
+- 显式 `unknown` 或 `unsupported` 仍返回 `vision_fallback_invalid`；
 - Provider 默认能力和模型 override 必须是合法三态；
 - `catalog_provider` 必须存在于当前 models.dev cache；没有 cache 时只产生 warning；
 - Catalog 本地覆盖优先级必须高于外部元数据；
@@ -882,6 +887,11 @@ Warning: 299 vibe-proxy "Image input was degraded to OCR text"
 4. `测试 OCR 服务`；
 5. 可选 `Vision fallback 模型` 下拉框。
 
+下拉框只消费 `GET /admin/multimodal` 返回的 `vision_fallback_models`，不在浏览器中
+读取 Provider 原始配置并重复推导能力。选项展示 `models.dev`、`模型人工修正`或
+`服务商默认设置`来源；已经配置但当前不再有效的值保留显示为“当前不可用”，用户
+切换离开后不能重新选择它。
+
 图片数量、字节数、confidence、cache 等放入折叠的“高级设置”。
 
 ### 16.2 Provider：模型图片能力
@@ -965,7 +975,7 @@ Settings 或 Provider 页面提供轻量状态：
 - Provider 默认高于 unknown；
 - unknown 不自动变成 unsupported；
 - Adapter 不支持图片时不能 direct vision；
-- Vision fallback 必须显式 supported；
+- Vision fallback 必须按有效能力解析为 supported；
 - hot reload 使用新 capability snapshot。
 
 ### 18.3 IR 检测与转换测试

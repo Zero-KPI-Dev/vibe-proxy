@@ -310,7 +310,7 @@ export interface DesktopSnapshot {
 }
 
 // ---- Multimodal fallback ----
-export interface MultimodalAdminConfig {
+interface MultimodalAdminFields {
   enabled: boolean
   strategy: "ocr_then_vision"
   provider: "builtin" | "http"
@@ -325,7 +325,18 @@ export interface MultimodalAdminConfig {
   max_images: number
 }
 
-export interface MultimodalAdminInput extends MultimodalAdminConfig {
+export interface VisionFallbackModelOption {
+  target: string
+  provider_id: string
+  model: string
+  source: "model_override" | "provider_default" | "models_dev"
+}
+
+export interface MultimodalAdminConfig extends MultimodalAdminFields {
+  vision_fallback_models: VisionFallbackModelOption[]
+}
+
+export interface MultimodalAdminInput extends MultimodalAdminFields {
   api_key?: string
 }
 
