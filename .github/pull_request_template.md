@@ -15,4 +15,3 @@
 Consider module boundaries, public protocols and compatibility contracts, persisted data, security and trust boundaries, cross-cutting runtime policy, deployment topology, and release artifacts. See the [ADR guide](../docs/adr/README.md).
 
 - [ ] Observable API, configuration, or operational behavior is unchanged, or the affected current-state documentation is updated.
-

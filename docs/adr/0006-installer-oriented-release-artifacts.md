@@ -108,4 +108,3 @@ This eliminates hosted release artifacts but conflicts with the goal of making t
 - [`e8971df` — design the slim installer release target](https://github.com/a448582655/vibe-proxy/blob/e8971df/docs/superpowers/specs/2026-08-02-slim-release-installers-design.md)
 - [`733038c` — plan the installer-only release implementation](https://github.com/a448582655/vibe-proxy/commit/733038c)
 - [`e138814` — implement installer-only release workflows](https://github.com/a448582655/vibe-proxy/commit/e138814)
-

@@ -99,4 +99,3 @@ This was rejected because upgrading an existing configuration with no capability
 - [OCR Image Fallback Design](../ocr-fallback-design.md)
 - [`788e74b` — add the multimodal capability pipeline](https://github.com/a448582655/vibe-proxy/commit/788e74b)
 - [`277a31a` — design catalog-backed Vision fallback remediation](https://github.com/a448582655/vibe-proxy/blob/277a31a/docs/superpowers/specs/2026-08-02-models-dev-vision-fallback-design.md)
-

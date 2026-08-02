@@ -114,4 +114,3 @@ The CLI/browser workflow remains supported, but it does not provide native launc
 - [`c62553d` — add desktop management-password login](https://github.com/a448582655/vibe-proxy/commit/c62553d)
 - [`a71b380` — surface Windows desktop startup failures](https://github.com/a448582655/vibe-proxy/commit/a71b380)
 - [`d0d9036` — make the desktop startup guard portable](https://github.com/a448582655/vibe-proxy/commit/d0d9036)
-

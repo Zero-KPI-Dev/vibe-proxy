@@ -196,4 +196,3 @@ The documentation backfill is complete when:
 - local Markdown links resolve;
 - the change contains no runtime or configuration modification;
 - the models.dev and installer-only branches have an explicit follow-up path to their governing ADRs.
-

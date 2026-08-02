@@ -87,4 +87,3 @@ This was rejected because vibe-proxy is designed to work as a self-contained loc
 - [Cross-Platform Release Design](../superpowers/specs/2026-07-30-cross-platform-release-design.md)
 - [`d35ffd1` — design the pure-Go SQLite migration](https://github.com/a448582655/vibe-proxy/commit/d35ffd1)
 - [`9a4caf7` — migrate SQLite storage to pure Go](https://github.com/a448582655/vibe-proxy/commit/9a4caf7)
-

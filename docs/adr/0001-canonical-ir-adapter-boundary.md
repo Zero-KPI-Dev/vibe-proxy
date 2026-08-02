@@ -82,4 +82,3 @@ Passing bytes through with minimal parsing would reduce normalization code. This
 - [`ebca59b` — introduce the canonical adapter runtime pipeline](https://github.com/a448582655/vibe-proxy/commit/ebca59b)
 - [`6d157af` — add Responses and Anthropic client adapters](https://github.com/a448582655/vibe-proxy/commit/6d157af)
 - [`386d8cc` — introduce the canonical stream engine](https://github.com/a448582655/vibe-proxy/commit/386d8cc)
-

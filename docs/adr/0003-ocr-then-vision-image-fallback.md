@@ -106,4 +106,3 @@ This was rejected for the initial design because a secure downloader requires ho
 - [`73ef6c1` — add embedded built-in OCR](https://github.com/a448582655/vibe-proxy/commit/73ef6c1)
 - [ADR-0001: Canonical IR adapter boundary](0001-canonical-ir-adapter-boundary.md)
 - [ADR-0002: Model capability resolution precedence](0002-model-capability-resolution-precedence.md)
-
