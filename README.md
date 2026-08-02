@@ -103,15 +103,13 @@ models:
 Windows and macOS users can choose the **Vibe Proxy Desktop** application. It
 starts the gateway, opens the embedded control plane in a native window, remains
 available from the system tray/menu bar, and stores its state in the normal
-per-user application-data directory. CLI packages remain available for
-automation and terminal-first workflows.
+per-user application-data directory.
 
-Linux continues to use the lightweight CLI binary or DEB plus the browser-based
-control plane at `http://127.0.0.1:8080/`; Docker and a native GUI are not
-required.
+Linux uses the CLI installed from a DEB plus the browser-based control plane at
+`http://127.0.0.1:8080/`; a native Linux GUI is not required.
 
-Download the matching desktop installer/portable ZIP, desktop DMG, or CLI
-artifact from [GitHub Releases](https://github.com/a448582655/vibe-proxy/releases).
+Download the matching Windows setup EXE, macOS desktop DMG, or Linux DEB from
+[GitHub Releases](https://github.com/a448582655/vibe-proxy/releases).
 Desktop builds are initially published as unsigned release candidates for
 cross-platform acceptance rather than as stable releases.
 

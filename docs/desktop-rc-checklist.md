@@ -13,7 +13,7 @@ maintainer exception.
 - Artifact and SHA-256:
 - Result / issue links:
 - [ ] Setup EXE installs, creates Start Menu and uninstall entries
-- [ ] Portable ZIP launches `vibe-proxy-desktop.exe`
+- [ ] Installed `vibe-proxy-desktop.exe` launches from the Start Menu
 - [ ] Production app opens without a console window
 - [ ] First close offers tray, exit and cancel behavior
 - [ ] Tray restores the window and preference persists after restart
@@ -30,7 +30,7 @@ maintainer exception.
 - Artifact and SHA-256:
 - Result / issue links:
 - [ ] PE architecture is ARM64
-- [ ] Setup and portable launch succeed
+- [ ] Setup and installed application launch succeed
 - [ ] Tray restore and graceful exit succeed
 - [ ] Text and image request smoke tests pass
 

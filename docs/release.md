@@ -14,21 +14,12 @@ and download the artifact matching the operating system and CPU:
 
 | Platform | CPU shown by the OS | Artifact suffix |
 | --- | --- | --- |
-| Windows desktop | x64 | `vibe-proxy-desktop_0.1.0-rc.1_windows_amd64-setup.exe` or `vibe-proxy-desktop_0.1.0-rc.1_windows_amd64-portable.zip` |
-| Windows desktop | ARM64 | `vibe-proxy-desktop_0.1.0-rc.1_windows_arm64-setup.exe` or `vibe-proxy-desktop_0.1.0-rc.1_windows_arm64-portable.zip` |
+| Windows desktop | x64 | `vibe-proxy-desktop_0.1.0-rc.1_windows_amd64-setup.exe` |
+| Windows desktop | ARM64 | `vibe-proxy-desktop_0.1.0-rc.1_windows_arm64-setup.exe` |
 | macOS desktop | Intel | `vibe-proxy-desktop_0.1.0-rc.1_darwin_amd64.dmg` |
 | macOS desktop | Apple Silicon | `vibe-proxy-desktop_0.1.0-rc.1_darwin_arm64.dmg` |
-| Windows CLI | x64 / ARM64 | `windows_amd64.zip` / `windows_arm64.zip` |
-| macOS CLI | Intel / Apple Silicon | `darwin_amd64.tar.gz` / `darwin_arm64.tar.gz` |
-| Linux | x86_64 | `linux_amd64.tar.gz` or `linux_amd64.deb` |
-| Linux | aarch64/arm64 | `linux_arm64.tar.gz` or `linux_arm64.deb` |
-
-The portable archives contain one versioned directory with:
-
-- the `vibe-proxy` executable
-- `README.md` and `LICENSE`
-- `configs/bootstrap.yaml`
-- `configs/simple.yaml`
+| Linux CLI | x86_64 | `vibe-proxy_0.1.0-rc.1_linux_amd64.deb` |
+| Linux CLI | aarch64/arm64 | `vibe-proxy_0.1.0-rc.1_linux_arm64.deb` |
 
 ## Verify the Download
 
@@ -38,34 +29,33 @@ running an unsigned release candidate.
 Linux:
 
 ```bash
-sha256sum vibe-proxy_0.1.0-rc.1_linux_amd64.tar.gz
-grep 'linux_amd64.tar.gz' SHA256SUMS
+sha256sum vibe-proxy_0.1.0-rc.1_linux_amd64.deb
+grep 'linux_amd64.deb' SHA256SUMS
 ```
 
 macOS:
 
 ```bash
-shasum -a 256 vibe-proxy_0.1.0-rc.1_darwin_arm64.dmg
-grep 'darwin_arm64.dmg' SHA256SUMS
+shasum -a 256 vibe-proxy-desktop_0.1.0-rc.1_darwin_arm64.dmg
+grep 'desktop_0.1.0-rc.1_darwin_arm64.dmg' SHA256SUMS
 ```
 
 Windows PowerShell:
 
 ```powershell
-Get-FileHash .\vibe-proxy_0.1.0-rc.1_windows_amd64.zip -Algorithm SHA256
-Select-String -Path .\SHA256SUMS -Pattern 'windows_amd64.zip'
+Get-FileHash .\vibe-proxy-desktop_0.1.0-rc.1_windows_amd64-setup.exe -Algorithm SHA256
+Select-String -Path .\SHA256SUMS -Pattern 'windows_amd64-setup.exe'
 ```
 
 ## Windows
 
-Run the desktop setup EXE or extract the desktop portable ZIP and launch
-`vibe-proxy-desktop.exe`. The first launch asks you to create a management
-password for browser access to the local control plane; the native window signs
-in automatically. This is not a provider API key or the client key used by
-agents. On the first window close, choose whether future closes should exit or
-minimise to the tray. Reset the choice from **Settings → Desktop Application**
-or the tray menu. Provider configuration, SQLite data, password hash,
-preferences and logs live under:
+Run the desktop setup EXE, then launch **Vibe Proxy** from the Start Menu. The
+first launch asks you to create a management password for browser access to the
+local control plane; the native window signs in automatically. This is not a
+provider API key or the client key used by agents. On the first window close,
+choose whether future closes should exit or minimise to the tray. Reset the
+choice from **Settings → Desktop Application** or the tray menu. Provider
+configuration, SQLite data, password hash, preferences and logs live under:
 
 ```text
 %LOCALAPPDATA%\vibe-proxy
@@ -81,8 +71,7 @@ The desktop window requires the Microsoft Edge **WebView2 Runtime**. The setup
 installer tries to install it automatically, but that step needs network access.
 On restricted or offline networks, install the matching Evergreen Standalone
 Runtime from Microsoft's [WebView2 download page](https://developer.microsoft.com/en-us/microsoft-edge/webview2?form=MA13FL)
-before launching the app. The portable ZIP does not install WebView2 for you.
-If a double-click still produces no window, inspect:
+before launching the app. If a double-click still produces no window, inspect:
 
 ```text
 %LOCALAPPDATA%\vibe-proxy\logs\vibe-proxy.log
@@ -94,16 +83,6 @@ and shows a visible Windows error dialog instead of failing silently.
 Unsigned RC installers may trigger Microsoft SmartScreen. Verify the checksum
 and repository source, then use **More info → Run anyway** only when you accept
 the unsigned test build.
-
-For the CLI ZIP, open PowerShell in the extracted directory and run:
-
-```powershell
-$env:VIBE_PROXY_ADMIN_TOKEN = 'choose-a-local-admin-token'
-.\vibe-proxy.exe -config .\configs\bootstrap.yaml
-```
-
-Open `http://127.0.0.1:8080/`. Keep the PowerShell window open while using the
-proxy. Stop it with `Ctrl+C`.
 
 ## Runtime Endpoints
 
@@ -147,48 +126,7 @@ copied app:
 xattr -dr com.apple.quarantine "/Applications/Vibe Proxy.app"
 ```
 
-The CLI tarball and CLI DMG remain available for terminal use.
-
-For the tarball:
-
-```bash
-tar -xzf vibe-proxy_0.1.0-rc.1_darwin_arm64.tar.gz
-cd vibe-proxy_0.1.0-rc.1_darwin_arm64
-export VIBE_PROXY_ADMIN_TOKEN='choose-a-local-admin-token'
-./vibe-proxy -config configs/bootstrap.yaml
-```
-
-For the DMG, copy all files from the mounted image to a writable directory
-before starting the server. This release candidate is not code-signed or
-notarized. After verifying the checksum and repository source, macOS may require
-removing the downloaded-file quarantine attribute:
-
-```bash
-xattr -d com.apple.quarantine ./vibe-proxy
-```
-
-Then use the same `export` and start command shown above. Open
-`http://127.0.0.1:8080/` and stop the server with `Ctrl+C`.
-
-## Linux Portable Archive
-
-```bash
-tar -xzf vibe-proxy_0.1.0-rc.1_linux_amd64.tar.gz
-cd vibe-proxy_0.1.0-rc.1_linux_amd64
-export VIBE_PROXY_ADMIN_TOKEN='choose-a-local-admin-token'
-./vibe-proxy -config configs/bootstrap.yaml
-```
-
-Open `http://127.0.0.1:8080/` in a browser on the same machine. A headless Linux
-host can expose the control plane through an SSH tunnel:
-
-```bash
-ssh -L 8080:127.0.0.1:8080 user@linux-host
-```
-
-Then open `http://127.0.0.1:8080/` on the local computer.
-
-## Debian Package
+## Linux
 
 Install the package:
 
@@ -209,6 +147,16 @@ cd ~/.config/vibe-proxy
 export VIBE_PROXY_ADMIN_TOKEN='choose-a-local-admin-token'
 /usr/bin/vibe-proxy -config ./bootstrap.yaml
 ```
+
+Open `http://127.0.0.1:8080/` in a browser on the same machine. A headless Linux
+host can expose the control plane through an SSH tunnel:
+
+```bash
+ssh -L 8080:127.0.0.1:8080 user@linux-host
+```
+
+Then open `http://127.0.0.1:8080/` on the local computer. Stop the CLI service
+with `Ctrl+C`.
 
 ## First-Run Security
 
