@@ -160,7 +160,7 @@ Alternatives must include rejecting incompatible requests, always using a vision
 Run:
 
 ```powershell
-rg -n "Canonical IR|manual correction|provider-level default|models.dev|unknown|original images|remote URL|Security and operational" docs/adr/0001-*.md docs/adr/0002-*.md docs/adr/0003-*.md
+rg -n -g '000[1-3]-*.md' "Canonical IR|manual correction|provider-level default|models.dev|unknown|original images|remote URL|Security and operational" docs/adr
 git show --no-patch --oneline ebca59b 6d157af 386d8cc 788e74b 277a31a 0326666 68b781f 052207e 6f188b2 73ef6c1
 ```
 
@@ -216,7 +216,7 @@ Alternatives must include retaining the broad portable/native matrix, publishing
 Run:
 
 ```powershell
-rg -n "CGO|Wails|loopback|session|Windows|macOS|Linux|portable|Security and operational" docs/adr/0004-*.md docs/adr/0005-*.md docs/adr/0006-*.md
+rg -n -g '000[4-6]-*.md' "CGO|Wails|loopback|session|Windows|macOS|Linux|portable|Security and operational" docs/adr
 git show --no-patch --oneline d35ffd1 9a4caf7 baceb95 15ec5be a652ab0 dfd982a c62553d a71b380 d0d9036 e8971df 733038c e138814
 ```
 
