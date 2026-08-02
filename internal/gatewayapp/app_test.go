@@ -11,6 +11,9 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/a448582655/vibe-proxy/internal/store"
+	"github.com/a448582655/vibe-proxy/internal/telemetry"
 )
 
 func TestStartServesHealthAndShutdownIsIdempotent(t *testing.T) {
@@ -142,6 +145,46 @@ func TestStartReportsListenerFailure(t *testing.T) {
 	}
 	if startupErr.Stage != "listen" {
 		t.Fatalf("stage = %q, want listen", startupErr.Stage)
+	}
+}
+
+func TestPayloadRecorderClosesGracefullyWithGateway(t *testing.T) {
+	directory := t.TempDir()
+	databasePath := filepath.Join(directory, "observability.db")
+	configPath := filepath.Join(directory, "config.yaml")
+	config := "version: vibeproxy.io/v1alpha1\n" +
+		"server:\n  listen: 127.0.0.1:0\n" +
+		"storage:\n  sqlite_path: " + filepath.ToSlash(databasePath) + "\n" +
+		"observability:\n  capture:\n    mode: structured\n  retention:\n    content_days: 1\n    max_content_storage_mb: 1\n" +
+		"models:\n  allow_raw: true\nproviders: {}\n"
+	if err := os.WriteFile(configPath, []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	app, err := Start(context.Background(), Options{ConfigPath: configPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := app.database.RecordPayload(telemetry.PayloadSnapshot{
+		RequestID: "request-1", Stage: telemetry.PayloadStageClientRequest, SchemaVersion: 1,
+		CaptureMode: telemetry.CaptureModeStructured, CaptureStatus: telemetry.CaptureStatusCaptured,
+		Body: []byte(`{"prompt":"hello"}`), StoredBytes: 18, CreatedAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := app.Shutdown(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := store.Open(databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	payloads, err := reopened.PayloadSnapshots("request-1")
+	if err != nil || len(payloads) != 1 {
+		t.Fatalf("payload was not flushed before close: %+v err=%v", payloads, err)
 	}
 }
 

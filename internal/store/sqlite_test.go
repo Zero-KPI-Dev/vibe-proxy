@@ -124,7 +124,7 @@ func TestSQLiteMigrationsCreateTraceSchema(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = sqlite.Close() })
 
-	assertMigrationVersions(t, sqlite.db, []int{1, 2, 3})
+	assertMigrationVersions(t, sqlite.db, []int{1, 2, 3, 4})
 	assertTableColumns(t, sqlite.db, "request_logs", []string{
 		"transformation_json",
 		"trace_id",
@@ -155,6 +155,7 @@ func TestSQLiteMigrationsCreateTraceSchema(t *testing.T) {
 			t.Fatalf("expected table %s: %v", table, err)
 		}
 	}
+	assertTableColumns(t, sqlite.db, "payload_snapshots", []string{"capture_status", "headers_json", "capture_error"})
 	if err := sqlite.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +165,7 @@ func TestSQLiteMigrationsCreateTraceSchema(t *testing.T) {
 		t.Fatalf("reopening a migrated database must be idempotent: %v", err)
 	}
 	defer reopened.Close()
-	assertMigrationVersions(t, reopened.db, []int{1, 2, 3})
+	assertMigrationVersions(t, reopened.db, []int{1, 2, 3, 4})
 }
 
 func assertMigrationVersions(t *testing.T, db *sql.DB, want []int) {
@@ -448,6 +449,10 @@ func TestSQLitePersistsIdentityAndRequestShape(t *testing.T) {
 		UpstreamModel:     "raw-chat",
 		FinishReason:      "stop",
 		UpstreamRequestID: "chatcmpl-1",
+		CaptureMode:       "structured",
+		CaptureStatus:     telemetry.CaptureStatusTruncated,
+		CaptureTruncated:  true,
+		RedactionCount:    2,
 		RequestShape: telemetry.RequestShapeSummary{
 			InputMessageCount: 1, InputBlockCount: 2, InputToolCount: 1,
 			InputImageCount: 1, InputTextChars: 12, OutputMessageCount: 1,
@@ -471,6 +476,9 @@ func TestSQLitePersistsIdentityAndRequestShape(t *testing.T) {
 	}
 	if got.RequestShape.InputImageCount != 1 || got.RequestShape.OutputToolCallCount != 1 || got.RequestShape.OutputReasoningChars != 7 {
 		t.Fatalf("request shape was not persisted: %+v", got.RequestShape)
+	}
+	if got.CaptureMode != "structured" || got.CaptureStatus != telemetry.CaptureStatusTruncated || !got.CaptureTruncated || got.RedactionCount != 2 {
+		t.Fatalf("capture summary was not persisted: %+v", got)
 	}
 }
 
@@ -544,5 +552,97 @@ func TestSQLiteProvidesPersistedObservability(t *testing.T) {
 	}
 	if recent[0].Transformation == nil || recent[0].Transformation.MultimodalRoute != "vision_fallback" {
 		t.Fatalf("missing persisted transformation: %+v", recent[0])
+	}
+}
+
+func TestSQLiteRecordsPayloadSnapshotsAndObservations(t *testing.T) {
+	database, err := Open(filepath.Join(t.TempDir(), "payloads.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	snapshot := telemetry.PayloadSnapshot{
+		RequestID:      "request-1",
+		Stage:          telemetry.PayloadStageCanonicalRequest,
+		SchemaVersion:  1,
+		CaptureMode:    telemetry.CaptureModeStructured,
+		CaptureStatus:  telemetry.CaptureStatusRedacted,
+		MediaType:      "application/json",
+		Body:           []byte(`{"api_key":"[REDACTED]"}`),
+		OriginalBytes:  42,
+		StoredBytes:    28,
+		RedactionCount: 1,
+		SHA256:         "digest",
+		Headers:        http.Header{"User-Agent": []string{"codex/1"}},
+		CreatedAt:      now,
+		ExpiresAt:      now.Add(24 * time.Hour),
+	}
+	if err := database.RecordPayload(snapshot); err != nil {
+		t.Fatal(err)
+	}
+	observation := telemetry.NewObservation("observation-1", "request-1", "trace-1", "span-1", "transform", "canonicalize", now)
+	observation.Attributes = map[string]any{"provider": "mockai"}
+	observation.Finish(now.Add(10*time.Millisecond), "ok", "")
+	if err := database.RecordObservation(observation); err != nil {
+		t.Fatal(err)
+	}
+
+	payloads, err := database.PayloadSnapshots("request-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(payloads) != 1 || payloads[0].CaptureStatus != telemetry.CaptureStatusRedacted || payloads[0].Headers.Get("User-Agent") != "codex/1" || string(payloads[0].Body) != string(snapshot.Body) {
+		t.Fatalf("payload snapshots = %+v", payloads)
+	}
+	observations, err := database.TraceObservations("request-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(observations) != 1 || observations[0].DurationMillis != 10 || observations[0].Attributes["provider"] != "mockai" {
+		t.Fatalf("observations = %+v", observations)
+	}
+}
+
+func TestSQLiteExpiresAndEvictsPayloadsBeforeSummaries(t *testing.T) {
+	database, err := Open(filepath.Join(t.TempDir(), "quota.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	now := time.Now().UTC().Truncate(time.Second)
+	for index, requestID := range []string{"expired", "old", "new"} {
+		started := now.Add(time.Duration(index) * time.Second)
+		database.RequestFinished(telemetry.Event{RequestID: requestID, StartedAt: started, StatusCode: 200})
+		expires := now.Add(time.Hour)
+		if requestID == "expired" {
+			expires = now.Add(-time.Second)
+		}
+		if err := database.RecordPayload(telemetry.PayloadSnapshot{
+			RequestID: requestID, Stage: telemetry.PayloadStageClientRequest, SchemaVersion: 1,
+			CaptureMode: telemetry.CaptureModeStructured, CaptureStatus: telemetry.CaptureStatusCaptured,
+			Body: []byte(strings.Repeat(requestID, 10)), StoredBytes: len(requestID) * 10,
+			CreatedAt: started, ExpiresAt: expires,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := database.PrunePayloads(now, 40); err != nil {
+		t.Fatal(err)
+	}
+	if payloads, err := database.PayloadSnapshots("expired"); err != nil || len(payloads) != 0 {
+		t.Fatalf("expired payload remains: %+v err=%v", payloads, err)
+	}
+	if payloads, err := database.PayloadSnapshots("old"); err != nil || len(payloads) != 0 {
+		t.Fatalf("oldest payload was not quota-evicted: %+v err=%v", payloads, err)
+	}
+	if payloads, err := database.PayloadSnapshots("new"); err != nil || len(payloads) != 1 {
+		t.Fatalf("newest payload missing: %+v err=%v", payloads, err)
+	}
+	recent, err := database.RecentFinished(10)
+	if err != nil || len(recent) != 3 {
+		t.Fatalf("payload pruning removed summaries: count=%d err=%v", len(recent), err)
 	}
 }

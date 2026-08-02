@@ -67,6 +67,13 @@ func Start(_ context.Context, options Options) (*App, error) {
 		_ = db.Close()
 		return nil, startupError("database", cfg.Server.Listen, err)
 	}
+	if err := db.ConfigurePayloadStorage(
+		time.Duration(cfg.Observability.Retention.ContentDays)*24*time.Hour,
+		int64(cfg.Observability.Retention.MaxContentStorageMB)<<20,
+	); err != nil {
+		_ = db.Close()
+		return nil, startupError("database", cfg.Server.Listen, err)
+	}
 
 	prom := sharedPrometheus()
 	recent := telemetry.NewRecentStore(200)

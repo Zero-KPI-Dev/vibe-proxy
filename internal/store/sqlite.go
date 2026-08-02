@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -16,7 +17,13 @@ import (
 	"github.com/a448582655/vibe-proxy/internal/telemetry"
 )
 
-type SQLite struct{ db *sql.DB }
+type SQLite struct {
+	db *sql.DB
+
+	payloadMu        sync.RWMutex
+	payloadRetention time.Duration
+	payloadQuota     int64
+}
 
 func Open(path string) (*SQLite, error) {
 	dsn, err := sqliteDSN(path)
@@ -102,6 +109,7 @@ func (s *SQLite) RequestFinished(e telemetry.Event) {
 		"input_message_count", "input_block_count", "input_tool_count", "input_image_count", "input_text_chars",
 		"output_message_count", "output_block_count", "output_tool_call_count", "output_reasoning_chars", "output_text_chars",
 		"request_shape_json", "http_method", "http_path",
+		"capture_mode", "capture_status", "capture_truncated", "redaction_count",
 	}
 	values := []any{
 		e.RequestID, e.ClientName, e.VirtualModel, e.UpstreamModel, e.ChannelID, e.ProtocolIn, e.ProtocolOut,
@@ -115,9 +123,202 @@ func (s *SQLite) RequestFinished(e telemetry.Event) {
 		e.RequestShape.InputImageCount, e.RequestShape.InputTextChars, e.RequestShape.OutputMessageCount,
 		e.RequestShape.OutputBlockCount, e.RequestShape.OutputToolCallCount, e.RequestShape.OutputReasoningChars,
 		e.RequestShape.OutputTextChars, string(requestShapeJSON), e.HTTPMethod, e.HTTPPath,
+		e.CaptureMode, e.CaptureStatus, e.CaptureTruncated, e.RedactionCount,
 	}
 	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(columns)), ",")
 	_, _ = s.db.Exec(`INSERT OR REPLACE INTO request_logs (`+strings.Join(columns, ",")+`) VALUES (`+placeholders+`)`, values...)
+}
+
+func (s *SQLite) ConfigurePayloadStorage(retention time.Duration, maxBytes int64) error {
+	if retention <= 0 {
+		retention = 3 * 24 * time.Hour
+	}
+	s.payloadMu.Lock()
+	s.payloadRetention = retention
+	s.payloadQuota = maxBytes
+	s.payloadMu.Unlock()
+	return s.PrunePayloads(time.Now().UTC(), maxBytes)
+}
+
+func (s *SQLite) RecordPayload(snapshot telemetry.PayloadSnapshot) error {
+	now := time.Now().UTC()
+	if snapshot.CreatedAt.IsZero() {
+		snapshot.CreatedAt = now
+	}
+	s.payloadMu.RLock()
+	retention := s.payloadRetention
+	quota := s.payloadQuota
+	s.payloadMu.RUnlock()
+	if retention <= 0 {
+		retention = 3 * 24 * time.Hour
+	}
+	if snapshot.ExpiresAt.IsZero() {
+		snapshot.ExpiresAt = snapshot.CreatedAt.Add(retention)
+	}
+	if snapshot.SchemaVersion <= 0 {
+		snapshot.SchemaVersion = 1
+	}
+	if snapshot.StoredBytes == 0 && len(snapshot.Body) > 0 {
+		snapshot.StoredBytes = len(snapshot.Body)
+	}
+	headersJSON, err := json.Marshal(snapshot.Headers)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.Exec(`INSERT OR REPLACE INTO payload_snapshots (
+request_id, stage, schema_version, capture_mode, capture_status, media_type, content_encoding,
+body_blob, original_bytes, stored_bytes, truncated, truncation_reason, redaction_count, sha256,
+headers_json, capture_error, created_at, expires_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		snapshot.RequestID, snapshot.Stage, snapshot.SchemaVersion, snapshot.CaptureMode, snapshot.CaptureStatus,
+		snapshot.MediaType, snapshot.ContentEncoding, snapshot.Body, snapshot.OriginalBytes, snapshot.StoredBytes,
+		snapshot.Truncated, snapshot.TruncationReason, snapshot.RedactionCount, snapshot.SHA256,
+		string(headersJSON), snapshot.Error, snapshot.CreatedAt, snapshot.ExpiresAt,
+	)
+	if err != nil {
+		return err
+	}
+	if quota > 0 {
+		return s.PrunePayloads(now, quota)
+	}
+	return nil
+}
+
+func (s *SQLite) RecordObservation(observation telemetry.TraceObservation) error {
+	attributesJSON, err := json.Marshal(observation.Attributes)
+	if err != nil {
+		return err
+	}
+	var completedAt any
+	if observation.CompletedAt != nil {
+		completedAt = *observation.CompletedAt
+	}
+	_, err = s.db.Exec(`INSERT OR REPLACE INTO trace_observations (
+observation_id, request_id, trace_id, span_id, parent_span_id, type, name,
+started_at, completed_at, status, error_code, attributes_json
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		observation.ObservationID, observation.RequestID, observation.TraceID, observation.SpanID,
+		observation.ParentSpanID, observation.Type, observation.Name, observation.StartedAt, completedAt,
+		observation.Status, observation.ErrorCode, string(attributesJSON),
+	)
+	return err
+}
+
+func (s *SQLite) PayloadSnapshots(requestID string) ([]telemetry.PayloadSnapshot, error) {
+	rows, err := s.db.Query(`SELECT
+request_id, stage, schema_version, capture_mode, COALESCE(capture_status, ''), COALESCE(media_type, ''),
+COALESCE(content_encoding, ''), body_blob, COALESCE(original_bytes, 0), COALESCE(stored_bytes, 0),
+COALESCE(truncated, 0), COALESCE(truncation_reason, ''), COALESCE(redaction_count, 0), COALESCE(sha256, ''),
+COALESCE(headers_json, ''), COALESCE(capture_error, ''), created_at, expires_at
+FROM payload_snapshots WHERE request_id = ? ORDER BY created_at, stage`, requestID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []telemetry.PayloadSnapshot{}
+	for rows.Next() {
+		var snapshot telemetry.PayloadSnapshot
+		var headersJSON string
+		var expiresAt sql.NullTime
+		if err := rows.Scan(
+			&snapshot.RequestID, &snapshot.Stage, &snapshot.SchemaVersion, &snapshot.CaptureMode,
+			&snapshot.CaptureStatus, &snapshot.MediaType, &snapshot.ContentEncoding, &snapshot.Body,
+			&snapshot.OriginalBytes, &snapshot.StoredBytes, &snapshot.Truncated, &snapshot.TruncationReason,
+			&snapshot.RedactionCount, &snapshot.SHA256, &headersJSON, &snapshot.Error,
+			&snapshot.CreatedAt, &expiresAt,
+		); err != nil {
+			return nil, err
+		}
+		if headersJSON != "" {
+			_ = json.Unmarshal([]byte(headersJSON), &snapshot.Headers)
+		}
+		if expiresAt.Valid {
+			snapshot.ExpiresAt = expiresAt.Time
+		}
+		result = append(result, snapshot)
+	}
+	return result, rows.Err()
+}
+
+func (s *SQLite) TraceObservations(requestID string) ([]telemetry.TraceObservation, error) {
+	rows, err := s.db.Query(`SELECT
+observation_id, request_id, COALESCE(trace_id, ''), COALESCE(span_id, ''), COALESCE(parent_span_id, ''),
+COALESCE(type, ''), COALESCE(name, ''), started_at, completed_at, COALESCE(status, ''),
+COALESCE(error_code, ''), COALESCE(attributes_json, '')
+FROM trace_observations WHERE request_id = ? ORDER BY started_at, observation_id`, requestID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []telemetry.TraceObservation{}
+	for rows.Next() {
+		var observation telemetry.TraceObservation
+		var completedAt sql.NullTime
+		var attributesJSON string
+		if err := rows.Scan(
+			&observation.ObservationID, &observation.RequestID, &observation.TraceID, &observation.SpanID,
+			&observation.ParentSpanID, &observation.Type, &observation.Name, &observation.StartedAt,
+			&completedAt, &observation.Status, &observation.ErrorCode, &attributesJSON,
+		); err != nil {
+			return nil, err
+		}
+		if completedAt.Valid {
+			completed := completedAt.Time
+			observation.CompletedAt = &completed
+			observation.DurationMillis = completed.Sub(observation.StartedAt).Milliseconds()
+		}
+		if attributesJSON != "" {
+			_ = json.Unmarshal([]byte(attributesJSON), &observation.Attributes)
+		}
+		result = append(result, observation)
+	}
+	return result, rows.Err()
+}
+
+func (s *SQLite) PrunePayloads(now time.Time, maxBytes int64) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.Exec(`DELETE FROM payload_snapshots WHERE expires_at IS NOT NULL AND expires_at <= ?`, now); err != nil {
+		return err
+	}
+	var total int64
+	if err := tx.QueryRow(`SELECT COALESCE(SUM(CASE WHEN stored_bytes > 0 THEN stored_bytes ELSE length(body_blob) END), 0) FROM payload_snapshots`).Scan(&total); err != nil {
+		return err
+	}
+	if maxBytes >= 0 && total > maxBytes {
+		rows, err := tx.Query(`SELECT request_id, stage, COALESCE(CASE WHEN stored_bytes > 0 THEN stored_bytes ELSE length(body_blob) END, 0)
+FROM payload_snapshots ORDER BY created_at, request_id, stage`)
+		if err != nil {
+			return err
+		}
+		type candidate struct {
+			requestID string
+			stage     string
+			bytes     int64
+		}
+		candidates := []candidate{}
+		for rows.Next() && total > maxBytes {
+			var item candidate
+			if err := rows.Scan(&item.requestID, &item.stage, &item.bytes); err != nil {
+				rows.Close()
+				return err
+			}
+			candidates = append(candidates, item)
+			total -= item.bytes
+		}
+		if err := rows.Close(); err != nil {
+			return err
+		}
+		for _, item := range candidates {
+			if _, err := tx.Exec(`DELETE FROM payload_snapshots WHERE request_id = ? AND stage = ?`, item.requestID, item.stage); err != nil {
+				return err
+			}
+		}
+	}
+	return tx.Commit()
 }
 
 func (s *SQLite) Retain(days int) error {
@@ -125,8 +326,21 @@ func (s *SQLite) Retain(days int) error {
 		days = 14
 	}
 	cutoff := time.Now().AddDate(0, 0, -days)
-	_, err := s.db.Exec(`DELETE FROM request_logs WHERE started_at < ?`, cutoff)
-	return err
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	for _, statement := range []string{
+		`DELETE FROM payload_snapshots WHERE request_id IN (SELECT request_id FROM request_logs WHERE started_at < ?)`,
+		`DELETE FROM trace_observations WHERE request_id IN (SELECT request_id FROM request_logs WHERE started_at < ?)`,
+		`DELETE FROM request_logs WHERE started_at < ?`,
+	} {
+		if _, err := tx.Exec(statement, cutoff); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func (s *SQLite) MetricsSummary(todayStart time.Time) (telemetry.MetricsSummary, error) {
@@ -277,7 +491,8 @@ SELECT
 	COALESCE(input_message_count, 0), COALESCE(input_block_count, 0), COALESCE(input_tool_count, 0),
 	COALESCE(input_image_count, 0), COALESCE(input_text_chars, 0), COALESCE(output_message_count, 0),
 	COALESCE(output_block_count, 0), COALESCE(output_tool_call_count, 0), COALESCE(output_reasoning_chars, 0),
-	COALESCE(output_text_chars, 0), COALESCE(http_method, ''), COALESCE(http_path, '')
+	COALESCE(output_text_chars, 0), COALESCE(http_method, ''), COALESCE(http_path, ''),
+	COALESCE(capture_mode, ''), COALESCE(capture_status, ''), COALESCE(capture_truncated, 0), COALESCE(redaction_count, 0)
 FROM request_logs
 ORDER BY started_at DESC
 LIMIT ?
@@ -353,6 +568,10 @@ LIMIT ?
 			&event.RequestShape.OutputTextChars,
 			&event.HTTPMethod,
 			&event.HTTPPath,
+			&event.CaptureMode,
+			&event.CaptureStatus,
+			&event.CaptureTruncated,
+			&event.RedactionCount,
 		); err != nil {
 			return nil, err
 		}

@@ -82,7 +82,7 @@ func CapturePayload(body []byte, headers http.Header, policy CapturePolicy, requ
 		return result
 	}
 
-	sanitized, redactions := sanitizeCapturedValue(decoded, "", false)
+	sanitized, redactions := sanitizeCapturedValue(decoded, "", false, policy.CaptureReasoning)
 	encoded, err := json.Marshal(sanitized)
 	if err != nil {
 		result.Status = CaptureStatusDropped
@@ -128,6 +128,10 @@ func resolveCaptureMode(configured CaptureMode, requested string) CaptureMode {
 	return configured
 }
 
+func EffectiveCaptureMode(configured CaptureMode, requested string) CaptureMode {
+	return resolveCaptureMode(configured, requested)
+}
+
 func captureHeaders(source http.Header, allowlist []string) http.Header {
 	result := make(http.Header)
 	for _, allowed := range allowlist {
@@ -158,22 +162,31 @@ func sensitiveCaptureHeader(name string) bool {
 	}
 }
 
-func sanitizeCapturedValue(value any, key string, binaryContainer bool) (any, int) {
+func sanitizeCapturedValue(value any, key string, binaryContainer, captureReasoning bool) (any, int) {
 	if sensitiveCaptureKey(key) {
 		return "[REDACTED]", 1
+	}
+	if !captureReasoning && reasoningCaptureKey(key) {
+		return "[REASONING_OMITTED]", 1
 	}
 	switch typed := value.(type) {
 	case map[string]any:
 		isBinary := binaryContainer || describesBinaryPayload(typed)
+		isReasoning := !captureReasoning && describesReasoningPayload(typed)
 		result := make(map[string]any, len(typed))
 		redactions := 0
 		for childKey, childValue := range typed {
-			if isBinary && strings.EqualFold(childKey, "data") {
+			if isBinary && (strings.EqualFold(childKey, "data") || strings.EqualFold(childKey, "base64")) {
 				result[childKey] = binaryDescriptor(childValue, mediaTypeFromMap(typed))
 				redactions++
 				continue
 			}
-			clean, count := sanitizeCapturedValue(childValue, childKey, isBinary)
+			if isReasoning && (strings.EqualFold(childKey, "text") || strings.EqualFold(childKey, "content")) {
+				result[childKey] = "[REASONING_OMITTED]"
+				redactions++
+				continue
+			}
+			clean, count := sanitizeCapturedValue(childValue, childKey, isBinary, captureReasoning)
 			result[childKey] = clean
 			redactions += count
 		}
@@ -182,7 +195,7 @@ func sanitizeCapturedValue(value any, key string, binaryContainer bool) (any, in
 		result := make([]any, len(typed))
 		redactions := 0
 		for index, child := range typed {
-			clean, count := sanitizeCapturedValue(child, key, binaryContainer)
+			clean, count := sanitizeCapturedValue(child, key, binaryContainer, captureReasoning)
 			result[index] = clean
 			redactions += count
 		}
@@ -194,6 +207,16 @@ func sanitizeCapturedValue(value any, key string, binaryContainer bool) (any, in
 		return typed, 0
 	default:
 		return value, 0
+	}
+}
+
+func reasoningCaptureKey(key string) bool {
+	normalized := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(key), "-", "_"))
+	switch normalized {
+	case "reasoning", "reasoning_content", "thinking", "thinking_content", "chain_of_thought":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -222,6 +245,16 @@ func describesBinaryPayload(value map[string]any) bool {
 	return false
 }
 
+func describesReasoningPayload(value map[string]any) bool {
+	raw, _ := value["type"].(string)
+	switch strings.ToLower(raw) {
+	case "reasoning", "thinking", "analysis":
+		return true
+	default:
+		return false
+	}
+}
+
 func mediaTypeFromMap(value map[string]any) string {
 	for _, key := range []string{"media_type", "mime_type"} {
 		if mediaType, _ := value[key].(string); mediaType != "" {
@@ -233,10 +266,12 @@ func mediaTypeFromMap(value map[string]any) string {
 
 func binaryDescriptor(value any, mediaType string) map[string]any {
 	raw, _ := value.(string)
+	bytes := decodedBase64(raw)
 	return map[string]any{
 		"_capture":   "IMAGE_DATA_OMITTED",
 		"media_type": mediaType,
-		"bytes":      estimatedBase64Bytes(raw),
+		"bytes":      len(bytes),
+		"sha256":     digestBytes(bytes),
 	}
 }
 
@@ -252,19 +287,27 @@ func dataURLDescriptor(value string) (map[string]any, bool) {
 	if mediaType == "" {
 		mediaType = "application/octet-stream"
 	}
-	bytes := len(data)
+	payload := []byte(data)
 	if strings.Contains(strings.ToLower(header), ";base64") {
-		bytes = estimatedBase64Bytes(data)
+		payload = decodedBase64(data)
 	}
-	return map[string]any{"_capture": "IMAGE_DATA_OMITTED", "media_type": mediaType, "bytes": bytes}, true
+	return map[string]any{"_capture": "IMAGE_DATA_OMITTED", "media_type": mediaType, "bytes": len(payload), "sha256": digestBytes(payload)}, true
 }
 
-func estimatedBase64Bytes(value string) int {
+func decodedBase64(value string) []byte {
 	value = strings.TrimSpace(value)
 	if decoded, err := base64.StdEncoding.DecodeString(value); err == nil {
-		return len(decoded)
+		return decoded
 	}
-	return len(value) * 3 / 4
+	if decoded, err := base64.RawStdEncoding.DecodeString(value); err == nil {
+		return decoded
+	}
+	return []byte(value)
+}
+
+func digestBytes(value []byte) string {
+	digest := sha256.Sum256(value)
+	return hex.EncodeToString(digest[:])
 }
 
 func boundedJSONPreview(encoded []byte, limit int) []byte {

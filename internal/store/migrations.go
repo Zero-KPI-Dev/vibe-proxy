@@ -16,6 +16,7 @@ var sqliteMigrations = []migration{
 	{version: 1, apply: createRequestLogSchema},
 	{version: 2, apply: addTraceObservabilitySchema},
 	{version: 3, apply: addHTTPContextSchema},
+	{version: 4, apply: addPayloadCaptureMetadataSchema},
 }
 
 func (s *SQLite) migrate() error {
@@ -236,11 +237,35 @@ func addHTTPContextSchema(tx *sql.Tx) error {
 	return nil
 }
 
+func addPayloadCaptureMetadataSchema(tx *sql.Tx) error {
+	existing, err := tableColumns(tx, "payload_snapshots")
+	if err != nil {
+		return err
+	}
+	columns := []struct {
+		name       string
+		definition string
+	}{
+		{name: "capture_status", definition: "TEXT"},
+		{name: "headers_json", definition: "TEXT"},
+		{name: "capture_error", definition: "TEXT"},
+	}
+	for _, column := range columns {
+		if existing[column.name] {
+			continue
+		}
+		if _, err := tx.Exec(`ALTER TABLE payload_snapshots ADD COLUMN ` + column.name + ` ` + column.definition); err != nil {
+			return fmt.Errorf("add payload_snapshots.%s: %w", column.name, err)
+		}
+	}
+	return nil
+}
+
 func tableColumns(tx *sql.Tx, table string) (map[string]bool, error) {
-	if table != "request_logs" {
+	if table != "request_logs" && table != "payload_snapshots" {
 		return nil, fmt.Errorf("unsupported migration table %q", table)
 	}
-	rows, err := tx.Query(`PRAGMA table_info(request_logs)`)
+	rows, err := tx.Query(`PRAGMA table_info(` + table + `)`)
 	if err != nil {
 		return nil, err
 	}

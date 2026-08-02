@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -29,6 +30,33 @@ var testProm *metrics.Prometheus
 type roundTrip func(*http.Request) (*http.Response, error)
 
 func (f roundTrip) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+type observabilityRecordingSink struct {
+	finished     []telemetry.Event
+	payloads     []telemetry.PayloadSnapshot
+	observations []telemetry.TraceObservation
+	failWrites   bool
+}
+
+func (s *observabilityRecordingSink) RequestStarted(telemetry.Event) {}
+func (s *observabilityRecordingSink) Token(telemetry.Event)          {}
+func (s *observabilityRecordingSink) RequestFinished(event telemetry.Event) {
+	s.finished = append(s.finished, event)
+}
+func (s *observabilityRecordingSink) RecordPayload(snapshot telemetry.PayloadSnapshot) error {
+	if s.failWrites {
+		return errors.New("payload store unavailable")
+	}
+	s.payloads = append(s.payloads, snapshot)
+	return nil
+}
+func (s *observabilityRecordingSink) RecordObservation(observation telemetry.TraceObservation) error {
+	if s.failWrites {
+		return errors.New("observation store unavailable")
+	}
+	s.observations = append(s.observations, observation)
+	return nil
+}
 
 func TestMetricsRange(t *testing.T) {
 	tests := []struct {
@@ -91,6 +119,91 @@ func TestRuntimeHealthzReportsStableServerStartTime(t *testing.T) {
 	if !second.StartedAt.Equal(startedAt) || second.LoadedAt.Before(first.LoadedAt) {
 		t.Fatalf("server start time changed with the config snapshot: first=%+v second=%+v", first, second)
 	}
+}
+
+func TestRuntimeRecordsPayloadStagesAndIgnoresRecorderFailure(t *testing.T) {
+	tests := []struct {
+		name       string
+		failWrites bool
+	}{
+		{name: "records stages"},
+		{name: "telemetry failure does not change response", failWrites: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			sink := &observabilityRecordingSink{failWrites: test.failWrites}
+			s := newObservabilityTestServer(t, sink, func(r *http.Request) (*http.Response, error) {
+				if got := r.Header.Get("Authorization"); got != "" {
+					t.Fatalf("unexpected upstream authorization in auth:none test: %q", got)
+				}
+				return jsonResponse(http.StatusOK, `{"id":"chatcmpl-1","model":"raw-chat","choices":[{"message":{"role":"assistant","content":"world"},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}}`), nil
+			})
+			request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"vibe-fast","messages":[{"role":"user","content":"hello"}],"api_key":"body-secret"}`))
+			request.Header.Set("Authorization", "Bearer vibe-local-dev-key")
+			request.Header.Set("User-Agent", "codex/1")
+			response := httptest.NewRecorder()
+			s.Routes().ServeHTTP(response, request)
+			if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "world") {
+				t.Fatalf("response changed by telemetry: %d %s", response.Code, response.Body.String())
+			}
+			if test.failWrites {
+				return
+			}
+			stages := map[telemetry.PayloadStage]telemetry.PayloadSnapshot{}
+			for _, payload := range sink.payloads {
+				stages[payload.Stage] = payload
+				if strings.Contains(string(payload.Body), "body-secret") || payload.Headers.Get("Authorization") != "" {
+					t.Fatalf("payload leaked a secret: %+v", payload)
+				}
+			}
+			for _, stage := range []telemetry.PayloadStage{
+				telemetry.PayloadStageClientRequest,
+				telemetry.PayloadStageCanonicalRequest,
+				telemetry.PayloadStageUpstreamRequest,
+				telemetry.PayloadStageCanonicalResponse,
+			} {
+				if _, ok := stages[stage]; !ok {
+					t.Fatalf("missing payload stage %q: %+v", stage, sink.payloads)
+				}
+			}
+			if len(sink.observations) == 0 || len(sink.finished) != 1 || sink.finished[0].CaptureStatus == telemetry.CaptureStatusNotCaptured {
+				t.Fatalf("missing observation/capture summary: observations=%+v finished=%+v", sink.observations, sink.finished)
+			}
+		})
+	}
+}
+
+func TestRuntimeStreamingCaptureStoresCanonicalResponseNotSSE(t *testing.T) {
+	sink := &observabilityRecordingSink{}
+	s := newObservabilityTestServer(t, sink, func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body: io.NopCloser(strings.NewReader(
+				"data: {\"id\":\"chatcmpl-stream\",\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\n" +
+					"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" +
+					"data: [DONE]\n\n",
+			)),
+		}, nil
+	})
+	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"vibe-fast","stream":true,"messages":[{"role":"user","content":"hi"}]}`))
+	request.Header.Set("Authorization", "Bearer vibe-local-dev-key")
+	response := httptest.NewRecorder()
+	s.Routes().ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("stream response: %d %s", response.Code, response.Body.String())
+	}
+	for _, payload := range sink.payloads {
+		if payload.Stage != telemetry.PayloadStageCanonicalResponse {
+			continue
+		}
+		body := string(payload.Body)
+		if !strings.Contains(body, "hello") || strings.Contains(body, "data:") || strings.Contains(body, "chat.completion.chunk") {
+			t.Fatalf("stream capture is not canonical: %s", body)
+		}
+		return
+	}
+	t.Fatalf("missing canonical stream response: %+v", sink.payloads)
 }
 
 func TestRuntimeModelsEndpoint(t *testing.T) {
@@ -1118,6 +1231,30 @@ func newTestServer(t *testing.T, rt roundTrip) *Server {
 	}
 	testPromOnce.Do(func() { testProm = metrics.New() })
 	s := New("", cfg, nil, testProm)
+	s.SetHTTPClient(&http.Client{Transport: rt})
+	return s
+}
+
+func newObservabilityTestServer(t *testing.T, sink telemetry.EventSink, rt roundTrip) *Server {
+	t.Helper()
+	cfg, err := config.CompileSimple(config.SimpleConfig{
+		Observability: config.ObservabilityConfig{
+			Capture: config.ObservabilityCaptureConfig{
+				Mode:             "structured",
+				MaxSnapshotBytes: 256 << 10,
+				CaptureResponse:  true,
+				HeaderAllowlist:  []string{"user-agent", "authorization"},
+			},
+		},
+		ClientKeys: []config.ClientKeyConfig{{Name: "test", KeyHash: "$2a$10$AXRkz.6y44ygdJFk6L1/IO0aRVp9zRMfXDJoBCBsroxVac/Lovvz6", Enabled: true, AllowedModels: []string{"*"}, RPM: 1000}},
+		Providers:  map[string]config.ProviderConfig{"mockai": {Type: "openai-compatible", BaseURL: "https://mock.openai/v1", Auth: upstreamauth.Profile{Type: "none"}, Models: []string{"raw-chat"}}},
+		Models:     config.ModelsConfig{AllowRaw: true, Aliases: map[string]string{"vibe-fast": "mockai/raw-chat"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	testPromOnce.Do(func() { testProm = metrics.New() })
+	s := New("", cfg, sink, testProm)
 	s.SetHTTPClient(&http.Client{Transport: rt})
 	return s
 }

@@ -55,6 +55,10 @@ type Event struct {
 	RetryCount        int                    `json:"retry_count"`
 	Usage             types.Usage            `json:"usage"`
 	RequestShape      RequestShapeSummary    `json:"request_shape"`
+	CaptureMode       string                 `json:"capture_mode"`
+	CaptureStatus     string                 `json:"capture_status"`
+	CaptureTruncated  bool                   `json:"capture_truncated"`
+	RedactionCount    int                    `json:"redaction_count"`
 	InputLabelsJSON   string                 `json:"input_labels_json,omitempty"`
 	OutputLabelsJSON  string                 `json:"output_labels_json,omitempty"`
 	Transformation    *TransformationSummary `json:"transformation,omitempty"`

@@ -57,7 +57,7 @@ func TestCaptureStructuredRedactsSecretsHeadersAndImageData(t *testing.T) {
 			t.Fatalf("capture leaked %q: %s", secret, got)
 		}
 	}
-	if !strings.Contains(got, "keep me") || !strings.Contains(got, "REDACTED") || !strings.Contains(got, "IMAGE_DATA_OMITTED") {
+	if !strings.Contains(got, "keep me") || !strings.Contains(got, "REDACTED") || !strings.Contains(got, "IMAGE_DATA_OMITTED") || !strings.Contains(got, "sha256") {
 		t.Fatalf("capture lost safe content or descriptors: %s", got)
 	}
 	if result.Headers.Get("User-Agent") != "codex/1.0" || result.Headers.Get("Traceparent") == "" {

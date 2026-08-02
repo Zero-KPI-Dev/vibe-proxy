@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -36,12 +37,14 @@ import (
 )
 
 type Snapshot struct {
-	LoadedAt      time.Time
-	Config        *config.RuntimeConfig
-	Resolver      *modelresolver.Resolver
-	Preprocessors *preprocess.Pipeline
-	AgentProfiles []telemetry.AgentProfile
-	AdminToken    string
+	LoadedAt         time.Time
+	Config           *config.RuntimeConfig
+	Resolver         *modelresolver.Resolver
+	Preprocessors    *preprocess.Pipeline
+	AgentProfiles    []telemetry.AgentProfile
+	CapturePolicy    telemetry.CapturePolicy
+	ContentRetention time.Duration
+	AdminToken       string
 }
 
 type Server struct {
@@ -157,7 +160,16 @@ func (s *Server) buildSnapshot(cfg *config.RuntimeConfig) *Snapshot {
 		Resolver:      resolver,
 		Preprocessors: preprocess.New(processor),
 		AgentProfiles: compileTelemetryAgentProfiles(cfg.AgentProfiles),
-		AdminToken:    adminToken,
+		CapturePolicy: telemetry.CapturePolicy{
+			Mode:             telemetry.CaptureMode(cfg.Observability.Capture.Mode),
+			MaxSnapshotBytes: cfg.Observability.Capture.MaxSnapshotBytes,
+			CaptureResponse:  cfg.Observability.Capture.CaptureResponse,
+			CaptureReasoning: cfg.Observability.Capture.CaptureReasoning,
+			ImagePayloads:    cfg.Observability.Capture.ImagePayloads,
+			HeaderAllowlist:  append([]string(nil), cfg.Observability.Capture.HeaderAllowlist...),
+		},
+		ContentRetention: time.Duration(cfg.Observability.Retention.ContentDays) * 24 * time.Hour,
+		AdminToken:       adminToken,
 	}
 }
 
@@ -309,6 +321,30 @@ func (s *Server) handleWithClient(w http.ResponseWriter, r *http.Request, truste
 		ProtocolIn:      string(clientAdapter.Protocol()),
 		StartedAt:       time.Now(),
 	}, s.sink)
+	captureOverride := r.Header.Get("X-Vibe-Capture")
+	effectiveCaptureMode := telemetry.EffectiveCaptureMode(snap.CapturePolicy.Mode, captureOverride)
+	tracker.Event.CaptureMode = string(effectiveCaptureMode)
+	tracker.Event.CaptureStatus = telemetry.CaptureStatusNotCaptured
+	captureBudget := telemetry.NewCaptureBudget(snap.CapturePolicy.MaxSnapshotBytes)
+	recordCaptureResult := func(stage telemetry.PayloadStage, result telemetry.CaptureResult, mediaType string) {
+		mergeCaptureResult(&tracker.Event, result)
+		if result.Mode != telemetry.CaptureModeStructured && result.Mode != telemetry.CaptureModeRaw {
+			return
+		}
+		now := time.Now().UTC()
+		snapshot := telemetry.NewPayloadSnapshot(requestID, stage, result, mediaType, now, now.Add(snap.ContentRetention))
+		if err := telemetry.RecordPayload(s.sink, snapshot); err != nil {
+			tracker.Event.CaptureStatus = telemetry.CaptureStatusDropped
+		}
+	}
+	recordCaptureBytes := func(stage telemetry.PayloadStage, body []byte, headers http.Header, mediaType string) {
+		result := captureBudget.Capture(body, headers, snap.CapturePolicy, captureOverride)
+		recordCaptureResult(stage, result, mediaType)
+	}
+	recordCaptureValue := func(stage telemetry.PayloadStage, value any) {
+		result := captureBudget.CaptureValue(value, nil, snap.CapturePolicy, captureOverride)
+		recordCaptureResult(stage, result, "application/json")
+	}
 	w.Header().Set("X-Vibe-Proxy-Request-ID", requestID)
 	w.Header().Set("X-Vibe-Proxy-Trace-ID", identity.TraceID)
 	finishError := func(gatewayError ir.GatewayError) {
@@ -332,6 +368,16 @@ func (s *Server) handleWithClient(w http.ResponseWriter, r *http.Request, truste
 	}
 	tracker.Event.PrincipalName = client.Name
 	tracker.Event.ClientName = client.Name
+	if effectiveCaptureMode == telemetry.CaptureModeStructured || effectiveCaptureMode == telemetry.CaptureModeRaw {
+		body, readErr := io.ReadAll(io.LimitReader(r.Body, (32<<20)+1))
+		if readErr != nil {
+			finishError(ir.GatewayError{StatusCode: 400, Kind: "invalid_request_error", Code: "body_read_failed", Message: "Could not read request body."})
+			return
+		}
+		_ = r.Body.Close()
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		recordCaptureBytes(telemetry.PayloadStageClientRequest, body, r.Header, r.Header.Get("Content-Type"))
+	}
 	creq, err := clientAdapter.ParseRequest(r.Context(), r)
 	if err != nil {
 		finishError(errorToIR(err))
@@ -347,6 +393,7 @@ func (s *Server) handleWithClient(w http.ResponseWriter, r *http.Request, truste
 	creq.SessionID = identity.SessionID
 	tracker.Event.VirtualModel = creq.RequestedModel
 	tracker.Event.RequestShape = telemetry.SummarizeRequestShape(creq)
+	recordCaptureValue(telemetry.PayloadStageCanonicalRequest, creq)
 	if !auth.ModelAllowed(client.AllowedModels, creq.RequestedModel) {
 		finishError(ir.GatewayError{StatusCode: 403, Kind: "permission_error", Code: "model_not_allowed", Message: "This API key is not allowed to use the requested model."})
 		return
@@ -429,14 +476,31 @@ func (s *Server) handleWithClient(w http.ResponseWriter, r *http.Request, truste
 		_ = clientAdapter.EncodeError(ctx, w, ge)
 		return
 	}
+	if effectiveCaptureMode == telemetry.CaptureModeStructured || effectiveCaptureMode == telemetry.CaptureModeRaw {
+		if upstreamBody, bodyErr := requestBodyCopy(upReq); bodyErr == nil {
+			recordCaptureBytes(telemetry.PayloadStageUpstreamRequest, upstreamBody, upReq.Header, upReq.Header.Get("Content-Type"))
+		}
+	}
 	if authErr := providerCfg.Auth.Apply(upReq); authErr != nil {
 		tracker.Finish(authErr.StatusCode, types.Usage{}, authErr.Code)
 		_ = clientAdapter.EncodeError(ctx, w, *authErr)
 		return
 	}
+	upstreamObservation := telemetry.NewObservation(uuid.NewString(), requestID, identity.TraceID, identity.SpanID, "upstream", "provider.http", time.Now().UTC())
+	upstreamObservation.Attributes = map[string]any{"provider": target.ProviderID, "model": target.Model, "protocol": providerAdapter.Protocol()}
+	observationFinished := false
+	finishUpstreamObservation := func(status, errorCode string) {
+		if observationFinished {
+			return
+		}
+		observationFinished = true
+		upstreamObservation.Finish(time.Now().UTC(), status, errorCode)
+		_ = telemetry.RecordObservation(s.sink, upstreamObservation)
+	}
 	resp, err := s.httpClient.Do(upReq)
 	if err != nil {
 		ge := ir.GatewayError{StatusCode: 502, Kind: "upstream_error", Code: "upstream_connection_failed", Message: "Could not connect to upstream provider."}
+		finishUpstreamObservation("error", ge.Code)
 		tracker.Finish(ge.StatusCode, types.Usage{}, ge.Code)
 		_ = clientAdapter.EncodeError(ctx, w, ge)
 		return
@@ -445,6 +509,7 @@ func (s *Server) handleWithClient(w http.ResponseWriter, r *http.Request, truste
 		events, err := providerAdapter.ParseStream(ctx, resp)
 		if err != nil {
 			ge := errorToIR(err)
+			finishUpstreamObservation("error", ge.Code)
 			tracker.Finish(ge.StatusCode, types.Usage{}, ge.Code)
 			_ = clientAdapter.EncodeError(ctx, w, ge)
 			return
@@ -456,8 +521,11 @@ func (s *Server) handleWithClient(w http.ResponseWriter, r *http.Request, truste
 			streamStats = stats
 			streamStatsMu.Unlock()
 		})
-		if err := clientAdapter.EncodeStream(ctx, w, tracked); err != nil {
+		streamAccumulator := telemetry.NewStreamAccumulator(target.Model, snap.CapturePolicy.CaptureReasoning)
+		canonicalEvents := streamAccumulator.Wrap(ctx, tracked)
+		if err := clientAdapter.EncodeStream(ctx, w, canonicalEvents); err != nil {
 			ge := errorToIR(err)
+			finishUpstreamObservation("error", ge.Code)
 			tracker.Finish(ge.StatusCode, types.Usage{}, ge.Code)
 			if !headersWritten(w) {
 				_ = clientAdapter.EncodeError(ctx, w, ge)
@@ -467,6 +535,11 @@ func (s *Server) handleWithClient(w http.ResponseWriter, r *http.Request, truste
 		streamStatsMu.Lock()
 		finalStreamStats := streamStats
 		streamStatsMu.Unlock()
+		canonicalResponse := streamAccumulator.Response()
+		tracker.Event.RequestShape = telemetry.MergeResponseShape(tracker.Event.RequestShape, telemetry.SummarizeResponseShape(canonicalResponse))
+		if snap.CapturePolicy.CaptureResponse {
+			recordCaptureValue(telemetry.PayloadStageCanonicalResponse, canonicalResponse)
+		}
 		tracker.Event.Usage = toTelemetryUsage(finalStreamStats.Usage)
 		if !finalStreamStats.FirstTokenAt.IsZero() {
 			firstTokenAt := finalStreamStats.FirstTokenAt
@@ -476,12 +549,14 @@ func (s *Server) handleWithClient(w http.ResponseWriter, r *http.Request, truste
 		if finalStreamStats.OutputTokenCount > 1 && !finalStreamStats.FirstTokenAt.IsZero() && !finalStreamStats.CompletedAt.IsZero() {
 			tracker.Event.TPOTMillis = float64(finalStreamStats.CompletedAt.Sub(finalStreamStats.FirstTokenAt).Milliseconds()) / float64(finalStreamStats.OutputTokenCount-1)
 		}
+		finishUpstreamObservation("ok", "")
 		tracker.Finish(http.StatusOK, toTelemetryUsage(finalStreamStats.Usage), "")
 		return
 	}
 	out, err := providerAdapter.ParseUnary(ctx, resp)
 	if err != nil {
 		ge := errorToIR(err)
+		finishUpstreamObservation("error", ge.Code)
 		tracker.Finish(ge.StatusCode, types.Usage{}, ge.Code)
 		_ = clientAdapter.EncodeError(ctx, w, ge)
 		return
@@ -492,12 +567,57 @@ func (s *Server) handleWithClient(w http.ResponseWriter, r *http.Request, truste
 	tracker.Event.UpstreamRequestID = out.ID
 	tracker.Event.FinishReason = out.StopReason
 	tracker.Event.RequestShape = telemetry.MergeResponseShape(tracker.Event.RequestShape, telemetry.SummarizeResponseShape(out))
+	if snap.CapturePolicy.CaptureResponse {
+		recordCaptureValue(telemetry.PayloadStageCanonicalResponse, out)
+	}
 	if err := clientAdapter.EncodeUnary(ctx, w, out); err != nil {
 		ge := errorToIR(err)
+		finishUpstreamObservation("error", ge.Code)
 		tracker.Finish(ge.StatusCode, types.Usage{}, ge.Code)
 		return
 	}
+	finishUpstreamObservation("ok", "")
 	tracker.Finish(http.StatusOK, toTelemetryUsage(out.Usage), "")
+}
+
+func requestBodyCopy(request *http.Request) ([]byte, error) {
+	if request == nil || request.Body == nil {
+		return nil, nil
+	}
+	if request.GetBody != nil {
+		body, err := request.GetBody()
+		if err != nil {
+			return nil, err
+		}
+		defer body.Close()
+		return io.ReadAll(io.LimitReader(body, (32<<20)+1))
+	}
+	body, err := io.ReadAll(io.LimitReader(request.Body, (32<<20)+1))
+	if err != nil {
+		return nil, err
+	}
+	_ = request.Body.Close()
+	request.Body = io.NopCloser(bytes.NewReader(body))
+	return body, nil
+}
+
+func mergeCaptureResult(event *telemetry.Event, result telemetry.CaptureResult) {
+	if event == nil {
+		return
+	}
+	event.CaptureMode = string(result.Mode)
+	event.CaptureTruncated = event.CaptureTruncated || result.Truncated
+	event.RedactionCount += result.RedactionCount
+	priority := map[string]int{
+		telemetry.CaptureStatusNotCaptured: 1,
+		telemetry.CaptureStatusCaptured:    2,
+		telemetry.CaptureStatusRedacted:    3,
+		telemetry.CaptureStatusTruncated:   4,
+		telemetry.CaptureStatusDropped:     5,
+	}
+	if priority[result.Status] >= priority[event.CaptureStatus] {
+		event.CaptureStatus = result.Status
+	}
 }
 
 func applyRequestIdentity(event *telemetry.Event, identity telemetry.RequestIdentity) {
