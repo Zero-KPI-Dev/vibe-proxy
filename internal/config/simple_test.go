@@ -20,3 +20,22 @@ func TestCompileSimpleConfig(t *testing.T) {
 		t.Fatalf("alias not compiled: %+v", cfg.ModelResolver.Aliases)
 	}
 }
+
+func TestCompileSimpleRetainsAgentProfilesInDeterministicOrder(t *testing.T) {
+	cfg, err := CompileSimple(SimpleConfig{AgentProfiles: map[string]AgentProfileConfig{
+		"cursor": {Detect: map[string]string{"user_agent": "*cursor*"}, DefaultModel: "fast"},
+		"aider":  {Detect: map[string]string{"user_agent": "*aider*"}, DefaultModel: "smart"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.AgentProfiles) != 2 {
+		t.Fatalf("agent profiles = %+v, want 2", cfg.AgentProfiles)
+	}
+	if cfg.AgentProfiles[0].ID != "aider" || cfg.AgentProfiles[1].ID != "cursor" {
+		t.Fatalf("agent profiles are not deterministic: %+v", cfg.AgentProfiles)
+	}
+	if cfg.AgentProfiles[0].DefaultModel != "smart" {
+		t.Fatalf("profile fields were not retained: %+v", cfg.AgentProfiles[0])
+	}
+}

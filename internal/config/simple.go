@@ -55,6 +55,8 @@ type ModelsConfig struct {
 }
 
 type AgentProfileConfig struct {
+	ID           string            `yaml:"-"`
+	Name         string            `yaml:"name,omitempty"`
 	Detect       map[string]string `yaml:"detect"`
 	DefaultModel string            `yaml:"default_model"`
 }
@@ -79,6 +81,7 @@ type RuntimeConfig struct {
 	ClientKeys    []ClientKeyConfig
 	ModelResolver modelresolver.Config
 	Providers     map[string]ProviderConfig
+	AgentProfiles []AgentProfileConfig
 }
 
 func LoadRuntime(path string) (*RuntimeConfig, error) {
@@ -164,7 +167,30 @@ func CompileSimple(cfg SimpleConfig) (*RuntimeConfig, error) {
 		}
 		aliases[name] = alias
 	}
-	return &RuntimeConfig{Server: cfg.Server, Security: cfg.Security, Storage: cfg.Storage, ModelCatalog: cfg.ModelCatalog, Multimodal: cfg.Multimodal, ClientKeys: cfg.ClientKeys, Providers: providers, ModelResolver: modelresolver.Config{DefaultModel: cfg.Models.Default, AllowRaw: cfg.Models.AllowRaw, Aliases: aliases, Providers: resolverProviders}}, nil
+	agentProfiles := make([]AgentProfileConfig, 0, len(cfg.AgentProfiles))
+	profileIDs := make([]string, 0, len(cfg.AgentProfiles))
+	for id := range cfg.AgentProfiles {
+		profileIDs = append(profileIDs, id)
+	}
+	sort.Strings(profileIDs)
+	for _, id := range profileIDs {
+		profile := cfg.AgentProfiles[id]
+		profile.ID = id
+		profile.Detect = cloneStringMap(profile.Detect)
+		agentProfiles = append(agentProfiles, profile)
+	}
+	return &RuntimeConfig{Server: cfg.Server, Security: cfg.Security, Storage: cfg.Storage, ModelCatalog: cfg.ModelCatalog, Multimodal: cfg.Multimodal, ClientKeys: cfg.ClientKeys, Providers: providers, AgentProfiles: agentProfiles, ModelResolver: modelresolver.Config{DefaultModel: cfg.Models.Default, AllowRaw: cfg.Models.AllowRaw, Aliases: aliases, Providers: resolverProviders}}, nil
+}
+
+func cloneStringMap(source map[string]string) map[string]string {
+	if source == nil {
+		return nil
+	}
+	result := make(map[string]string, len(source))
+	for key, value := range source {
+		result[key] = value
+	}
+	return result
 }
 
 func CompileLegacy(cfg *Config) *RuntimeConfig {

@@ -316,6 +316,23 @@ func TestValidateRuntimeRejectsInvalidAndDuplicateClientKeys(t *testing.T) {
 	}
 }
 
+func TestValidateRuntimeRejectsUnsafeAgentProfileDetectors(t *testing.T) {
+	cfg, err := CompileSimple(SimpleConfig{AgentProfiles: map[string]AgentProfileConfig{
+		"empty":  {},
+		"secret": {Detect: map[string]string{"header.authorization": "Bearer *"}},
+		"broken": {Detect: map[string]string{"user_agent": "["}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	issues := ValidateRuntime(cfg)
+	for _, code := range []string{"missing_agent_detector", "sensitive_agent_detector", "invalid_agent_detector_pattern"} {
+		if !hasIssueCode(issues, code) {
+			t.Fatalf("missing %s validation issue: %+v", code, issues)
+		}
+	}
+}
+
 func hasIssueCode(issues []ValidationIssue, code string) bool {
 	for _, validationIssue := range issues {
 		if validationIssue.Code == code {

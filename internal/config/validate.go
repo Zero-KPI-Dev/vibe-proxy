@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"net/url"
+	"path"
 	"strings"
 	"time"
 
@@ -132,8 +133,45 @@ func ValidateRuntime(cfg *RuntimeConfig) []ValidationIssue {
 			issues = append(issues, issue("error", path+".rpm", "invalid_client_key_rpm", "Client key RPM must be greater than zero."))
 		}
 	}
+	issues = append(issues, validateAgentProfiles(cfg.AgentProfiles)...)
 	issues = append(issues, validateMultimodal(cfg.Multimodal)...)
 	issues = append(issues, validateVisionFallback(cfg)...)
+	return issues
+}
+
+func validateAgentProfiles(profiles []AgentProfileConfig) []ValidationIssue {
+	issues := []ValidationIssue{}
+	for index, profile := range profiles {
+		basePath := fmt.Sprintf("agent_profiles.%s", profile.ID)
+		if strings.TrimSpace(profile.ID) == "" || len(profile.ID) > 100 {
+			issues = append(issues, issue("error", fmt.Sprintf("agent_profiles.%d", index), "invalid_agent_profile_id", "Agent profile id must contain 1 to 100 characters."))
+		}
+		if len(profile.Detect) == 0 {
+			issues = append(issues, issue("error", basePath+".detect", "missing_agent_detector", "Agent profile requires at least one detector."))
+			continue
+		}
+		for detector, pattern := range profile.Detect {
+			detectorPath := basePath + ".detect." + detector
+			if detector != "user_agent" && !strings.HasPrefix(detector, "header.") {
+				issues = append(issues, issue("error", detectorPath, "unsupported_agent_detector", "Agent detector must be user_agent or an allowlisted header."))
+				continue
+			}
+			if strings.HasPrefix(detector, "header.") {
+				header := strings.ToLower(strings.TrimPrefix(detector, "header."))
+				switch header {
+				case "authorization", "proxy-authorization", "cookie", "set-cookie", "x-api-key":
+					issues = append(issues, issue("error", detectorPath, "sensitive_agent_detector", "Sensitive credential headers cannot classify an Agent."))
+				}
+			}
+			if strings.TrimSpace(pattern) == "" || len(pattern) > 200 {
+				issues = append(issues, issue("error", detectorPath, "invalid_agent_detector_pattern", "Agent detector pattern must contain 1 to 200 characters."))
+				continue
+			}
+			if _, err := path.Match(strings.ToLower(pattern), "validation-value"); err != nil {
+				issues = append(issues, issue("error", detectorPath, "invalid_agent_detector_pattern", "Agent detector pattern is not a valid glob."))
+			}
+		}
+	}
 	return issues
 }
 
