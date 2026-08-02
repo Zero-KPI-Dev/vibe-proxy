@@ -6,7 +6,7 @@
 
 **Architecture:** The runtime server will expose catalog-aware Vision candidates and validate saves through the existing `multimodal.ResolveCapabilities` source of truth. Static config validation will distinguish an absent capability, which may be supplied by models.dev at runtime, from an explicit `unknown` or `unsupported` override. The frontend will render backend candidates instead of rebuilding capability logic.
 
-**Tech Stack:** Go 1.24, `net/http`, existing model catalog and multimodal packages, React 19, TypeScript, Radix Select, Node static contract tests.
+**Tech Stack:** Go 1.25, `net/http`, existing model catalog and multimodal packages, React 19, TypeScript, Radix Select, Node static contract tests.
 
 ## Global Constraints
 
@@ -15,7 +15,7 @@
 - Missing, not-found, ambiguous, and unknown catalog results never enter Vision fallback.
 - Catalog results are not persisted to `config.yaml`.
 - Rejected Admin API updates must not modify the config file or active runtime snapshot.
-- The implementation adds ADR 0001 and updates all affected public documentation.
+- The implementation follows ADR-0002 from documentation PR #13, does not create a duplicate ADR, and updates all affected public documentation.
 - No new runtime or frontend dependency is introduced.
 
 ---
@@ -457,45 +457,29 @@ git commit -m "fix: list catalog vision fallback models"
 
 ---
 
-### Task 4: Record the ADR and public contracts
+### Task 4: Reference ADR-0002 and update public contracts
 
 **Files:**
-- Create: `docs/adr/README.md`
-- Create: `docs/adr/0001-model-capability-resolution-precedence.md`
 - Modify: `docs/config-schema.md:276-280`
 - Modify: `docs/admin-api.md:198-217`
 - Modify: `docs/ocr-fallback-design.md:421-431,784-790`
 
 **Interfaces:**
-- Consumes: implemented precedence, API response, and error behavior.
-- Produces: a durable ADR convention and updated public contract.
+- Consumes: ADR-0002 from PR #13, implemented precedence, API response, and error behavior.
+- Produces: updated public contracts that reference the governing decision without duplicating it.
 
-- [ ] **Step 1: Create the ADR convention and ADR 0001**
+- [ ] **Step 1: Reference the governing ADR**
 
-`docs/adr/README.md` states that ADRs cover cross-cutting architecture,
-persisted data, public contracts, security boundaries, and long-term operating
-decisions, but not ordinary local fixes.
-
-ADR 0001 uses this decision:
+Add a short architecture-decision reference to the affected documentation:
 
 ```markdown
-# ADR 0001: Resolve model capabilities through manual overrides and models.dev
-
-- Status: Accepted
-- Date: 2026-08-02
-
-## Context
-
-Provider configuration, models.dev, OCR settings, and request routing previously disagreed about whether catalog-derived image support was sufficient.
-
-## Decision
-
-Effective precedence is per-model manual override, provider manual default, unambiguous models.dev result, then unknown. Only effective supported models are eligible. Static validation defers absent capabilities to runtime; explicit unknown or unsupported values remain authoritative. Runtime owns candidate generation and pre-write validation.
-
-## Consequences
-
-Catalog-supported models need no redundant config entry; manual corrections remain possible; unknown models are never sent images; request-time validation remains mandatory.
+This behavior follows ADR-0002, Model capability resolution precedence,
+introduced by documentation PR #13.
 ```
+
+After PR #13 is merged and this branch is rebased, use a relative link to
+`adr/0002-model-capability-resolution-precedence.md`. Until then, use the PR URL
+so this branch contains no broken local link.
 
 - [ ] **Step 2: Update schema, Admin API, and OCR design references**
 
@@ -517,8 +501,8 @@ and precedence have matches; `git diff --check` exits 0.
 - [ ] **Step 4: Commit ADR and contract documentation**
 
 ```powershell
-git add docs/adr docs/config-schema.md docs/admin-api.md docs/ocr-fallback-design.md docs/superpowers/specs/2026-08-02-models-dev-vision-fallback-design.md
-git commit -m "docs: record model capability precedence"
+git add docs/config-schema.md docs/admin-api.md docs/ocr-fallback-design.md
+git commit -m "docs: align vision fallback contracts"
 ```
 
 ---

@@ -37,16 +37,15 @@ images by models.dev while remaining unavailable in the OCR fallback selector.
 
 ## Documentation Decision
 
-This repository does not currently have an ADR convention. This change will
-introduce `docs/adr/0001-model-capability-resolution-precedence.md` as the
-first Architecture Decision Record because the capability precedence and the
-static-versus-runtime validation boundary are durable architectural rules.
+The ADR governance and retrospective decision log are tracked separately in
+[PR #13](https://github.com/a448582655/vibe-proxy/pull/13). This change is
+governed by ADR-0002, `docs/adr/0002-model-capability-resolution-precedence.md`,
+which records the shared effective-capability precedence and requires runtime,
+validation, Admin API, and UI consumers to use it consistently.
 
-Not every future code change requires an ADR. New ADRs are reserved for
-cross-cutting decisions that materially change architecture, persisted data,
-public contracts, security boundaries, or long-term operational behavior.
-Ordinary bug fixes and local UI changes should update their existing user or
-developer documentation instead.
+This fix restores conformance to that accepted decision, so it does not create
+a second ADR. It still updates the affected current-state configuration, Admin
+API, and OCR design documentation.
 
 ## Effective Capability Rules
 
@@ -170,5 +169,5 @@ Frontend contract tests will cover:
 Final verification includes the focused Go tests, the full Go test suite,
 frontend contract tests, TypeScript build, and production frontend build.
 
-Documentation updates include the new ADR plus the affected configuration,
-Admin API, and OCR fallback references.
+Documentation updates reference ADR-0002 and update the affected configuration,
+Admin API, and OCR fallback contracts.
