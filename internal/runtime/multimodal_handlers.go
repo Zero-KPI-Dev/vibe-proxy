@@ -20,7 +20,7 @@ func (s *Server) adminMultimodal(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
-		s.writeJSON(w, multimodalAdminSnapshot(s.current().Config.Multimodal))
+		s.writeJSON(w, s.multimodalAdminSnapshot(s.current().Config))
 	case http.MethodPut:
 		if s.cfgPath == "" {
 			http.Error(w, `{"error":"config path not writable"}`, http.StatusBadRequest)
@@ -31,6 +31,12 @@ func (s *Server) adminMultimodal(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
 			return
 		}
+		if err := s.validateVisionFallbackSelection(s.current().Config, input.VisionFallbackModel); err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]any{"error": "vision_fallback_invalid", "message": err.Error()})
+			return
+		}
 		next, err := config.SaveMultimodal(s.cfgPath, input)
 		if err != nil {
 			w.Header().Set("Content-Type", "application/json")
@@ -39,7 +45,7 @@ func (s *Server) adminMultimodal(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.applyRuntimeConfig(next)
-		s.writeJSON(w, map[string]any{"ok": true, "multimodal": multimodalAdminSnapshot(next.Multimodal), "loaded_at": s.current().LoadedAt})
+		s.writeJSON(w, map[string]any{"ok": true, "multimodal": s.multimodalAdminSnapshot(next), "loaded_at": s.current().LoadedAt})
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
@@ -140,21 +146,23 @@ func (s *Server) adminOCRTest(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, response)
 }
 
-func multimodalAdminSnapshot(cfg config.MultimodalConfig) map[string]any {
-	authType, keySource, keyEnv, header := authProfileMeta(cfg.OCR.Auth)
+func (s *Server) multimodalAdminSnapshot(cfg *config.RuntimeConfig) map[string]any {
+	multimodalCfg := cfg.Multimodal
+	authType, keySource, keyEnv, header := authProfileMeta(multimodalCfg.OCR.Auth)
 	return map[string]any{
-		"enabled":               cfg.Enabled,
-		"strategy":              cfg.Strategy,
-		"provider":              cfg.OCR.Provider,
-		"endpoint":              cfg.OCR.Endpoint,
-		"auth_type":             authType,
-		"api_key_source":        keySource,
-		"api_key_env":           keyEnv,
-		"header":                header,
-		"vision_fallback_model": cfg.VisionFallbackModel,
-		"min_confidence":        cfg.OCR.MinConfidence,
-		"min_text_chars":        cfg.OCR.MinTextChars,
-		"max_images":            cfg.OCR.MaxImages,
+		"enabled":                multimodalCfg.Enabled,
+		"strategy":               multimodalCfg.Strategy,
+		"provider":               multimodalCfg.OCR.Provider,
+		"endpoint":               multimodalCfg.OCR.Endpoint,
+		"auth_type":              authType,
+		"api_key_source":         keySource,
+		"api_key_env":            keyEnv,
+		"header":                 header,
+		"vision_fallback_model":  multimodalCfg.VisionFallbackModel,
+		"vision_fallback_models": s.visionFallbackModels(cfg),
+		"min_confidence":         multimodalCfg.OCR.MinConfidence,
+		"min_text_chars":         multimodalCfg.OCR.MinTextChars,
+		"max_images":             multimodalCfg.OCR.MaxImages,
 	}
 }
 
