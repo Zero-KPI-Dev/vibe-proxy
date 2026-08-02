@@ -35,6 +35,19 @@ images by models.dev while remaining unavailable in the OCR fallback selector.
 - Removing manual capability controls.
 - Changing OCR thresholds, OCR providers, or image transport formats.
 
+## Documentation Decision
+
+This repository does not currently have an ADR convention. This change will
+introduce `docs/adr/0001-model-capability-resolution-precedence.md` as the
+first Architecture Decision Record because the capability precedence and the
+static-versus-runtime validation boundary are durable architectural rules.
+
+Not every future code change requires an ADR. New ADRs are reserved for
+cross-cutting decisions that materially change architecture, persisted data,
+public contracts, security boundaries, or long-term operational behavior.
+Ordinary bug fixes and local UI changes should update their existing user or
+developer documentation instead.
+
 ## Effective Capability Rules
 
 The existing `multimodal.ResolveCapabilities` precedence remains the source of
@@ -156,3 +169,6 @@ Frontend contract tests will cover:
 
 Final verification includes the focused Go tests, the full Go test suite,
 frontend contract tests, TypeScript build, and production frontend build.
+
+Documentation updates include the new ADR plus the affected configuration,
+Admin API, and OCR fallback references.
