@@ -62,6 +62,9 @@ func TestBuildMultimodalDefaultsToBuiltinAndExternalOverridesIt(t *testing.T) {
 	if builtin.OCR.Provider != "builtin" || builtin.OCR.Endpoint != "" || builtin.OCR.Auth.Type != "" {
 		t.Fatalf("unexpected built-in config: %+v", builtin.OCR)
 	}
+	if builtin.VisionFallbackStrategy != "assist" {
+		t.Fatalf("new configurations must default to Vision assist: %+v", builtin)
+	}
 
 	external, err := BuildMultimodal(MultimodalAdminInput{
 		Enabled:  true,
@@ -74,6 +77,20 @@ func TestBuildMultimodalDefaultsToBuiltinAndExternalOverridesIt(t *testing.T) {
 	}
 	if external.OCR.Provider != "http" || external.OCR.Endpoint != "http://ocr.local/v1/ocr" || external.OCR.Auth.Type != "none" {
 		t.Fatalf("unexpected external config: %+v", external.OCR)
+	}
+}
+
+func TestBuildMultimodalAcceptsExplicitVisionTakeoverAndRejectsUnknownStrategy(t *testing.T) {
+	got, err := BuildMultimodal(MultimodalAdminInput{Enabled: true, VisionFallbackStrategy: "takeover"}, nil)
+	if err != nil || got.VisionFallbackStrategy != "takeover" {
+		t.Fatalf("unexpected takeover config: %+v %v", got, err)
+	}
+	if _, err := BuildMultimodal(MultimodalAdminInput{Enabled: true, VisionFallbackStrategy: "surprise"}, nil); err == nil {
+		t.Fatal("expected unknown Vision strategy to be rejected")
+	}
+	preserved, err := BuildMultimodal(MultimodalAdminInput{Enabled: true}, &MultimodalConfig{VisionFallbackStrategy: "takeover"})
+	if err != nil || preserved.VisionFallbackStrategy != "takeover" {
+		t.Fatalf("older admin clients must preserve an explicit strategy: %+v %v", preserved, err)
 	}
 }
 

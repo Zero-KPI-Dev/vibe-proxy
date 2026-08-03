@@ -153,7 +153,14 @@
     "cacheHits": "OCR 缓存命中",
     "reportedConfidence": "OCR 引擎报告置信度",
     "routeReason": "路由原因",
-    "errorCode": "错误代码"
+    "errorCode": "错误代码",
+    "visionAssist": "Vision 提取证据，原模型回答",
+    "visionTakeover": "Vision 模型接管回答",
+    "cacheHit": "证据缓存命中",
+    "visionStrategy": "Vision 策略",
+    "visionTarget": "辅助 Vision 目标",
+    "visionLatency": "Vision 分析耗时",
+    "visionEvidenceChars": "视觉证据字符数"
   },
   "providers": {
     "title": "服务商",
@@ -543,7 +550,8 @@
         "request": "请求",
         "response": "响应",
         "changes": "变化",
-        "metadata": "元数据"
+        "metadata": "元数据",
+        "processing": "处理链路"
       },
       "duration": "总耗时",
       "route": "最终路由",
@@ -565,9 +573,14 @@
     },
     "payloadStages": {
       "client_request": "客户端请求",
-      "canonical_request": "Canonical 请求",
+      "canonical_request": "Canonical IR（协议无关内部请求）",
       "upstream_request": "上游请求",
-      "canonical_response": "Canonical 响应"
+      "canonical_response": "Canonical 响应",
+      "ocr_request": "OCR 调用输入",
+      "ocr_response": "OCR 识别结果",
+      "vision_request": "Vision 分析请求",
+      "vision_response": "Vision 分析结果",
+      "effective_canonical_request": "转换后的 Canonical IR（最终内部请求）"
     },
     "timeline": {
       "empty": "这条请求没有记录网关阶段观测。",
@@ -675,7 +688,7 @@
     "ocrAuthType": "OCR 鉴权方式",
     "visionFallbackModel": "可选的视觉兜底模型",
     "visionFallbackNone": "不使用视觉模型兜底",
-    "visionFallbackHelp": "当 OCR 不可用或置信度过低时，保留原始图片并转发给当前有效支持图片的模型。",
+    "visionFallbackHelp": "OCR 不可用或结果不可用时，按上方策略使用这个已验证支持图片的模型。",
     "visionFallbackEmpty": "当前没有已验证支持图片的已配置模型。",
     "visionFallbackSourceModelsDev": "models.dev",
     "visionFallbackSourceModelOverride": "模型人工修正",
@@ -710,6 +723,15 @@
     "languageHelp": "首次访问时跟随浏览器语言，手动选择后保存在本地。",
     "chinese": "简体中文",
     "english": "English",
-    "languageChanged": "显示语言已切换"
+    "languageChanged": "显示语言已切换",
+    "visionFallbackStrategy": "OCR 失败后的 Vision 策略",
+    "visionFallbackAssist": "辅助分析（推荐）",
+    "visionFallbackTakeover": "接管回答",
+    "visionFallbackReject": "拒绝请求",
+    "visionFallbackStrategyHelp": {
+      "assist": "Vision 只分析图片并生成证据，完整上下文仍由原始模型回答。",
+      "takeover": "整条请求改发给 Vision 模型；其上下文上限可能小于原始模型。",
+      "reject": "OCR 无法提供有效文字时直接拒绝，不调用 Vision 模型。"
+    }
   }
 }

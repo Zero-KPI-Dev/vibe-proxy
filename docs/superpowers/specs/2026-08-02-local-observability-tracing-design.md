@@ -292,9 +292,11 @@ When enabled, keep separate snapshots rather than one ambiguous “body”:
 
 1. `client_request`: sanitized original client JSON;
 2. `canonical_request`: normalized IR before preprocessing;
-3. `effective_upstream_request`: provider JSON after route and preprocessing;
-4. `canonical_response`: accumulated normalized output;
-5. `client_response`: optional unary client response shape.
+3. `ocr_request` and `ocr_response`: normalized OCR invocation metadata and result;
+4. `vision_request` and `vision_response`: bounded Vision helper wire request and canonical result when assist runs;
+5. `effective_canonical_request`: IR after OCR or Vision evidence replacement;
+6. `upstream_request`: provider JSON for the model that will answer;
+7. `canonical_response`: accumulated normalized output.
 
 Streaming responses are accumulated from canonical stream events under the same
 size budget; raw SSE frames are not persisted in the first release. Every

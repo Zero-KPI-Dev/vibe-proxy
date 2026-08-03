@@ -252,6 +252,20 @@ func validateMultimodal(cfg MultimodalConfig) []ValidationIssue {
 	if cfg.Strategy != "ocr_then_vision" {
 		issues = append(issues, issue("error", "multimodal.strategy", "unsupported_multimodal_strategy", "Only ocr_then_vision is supported."))
 	}
+	switch cfg.VisionFallbackStrategy {
+	case "assist", "takeover", "reject":
+	default:
+		issues = append(issues, issue("error", "multimodal.vision_fallback_strategy", "unsupported_vision_fallback_strategy", "Vision fallback strategy must be assist, takeover, or reject."))
+	}
+	if cfg.VisionAssist.MaxPromptChars <= 0 || cfg.VisionAssist.MaxPromptChars > 50000 {
+		issues = append(issues, issue("error", "multimodal.vision_assist.max_prompt_chars", "invalid_vision_assist_limit", "Vision assist prompt text must be between 1 and 50000 characters."))
+	}
+	if cfg.VisionAssist.MaxOutputTokens <= 0 || cfg.VisionAssist.MaxOutputTokens > 8192 {
+		issues = append(issues, issue("error", "multimodal.vision_assist.max_output_tokens", "invalid_vision_assist_limit", "Vision assist output must be between 1 and 8192 tokens."))
+	}
+	if cfg.VisionAssist.Cache.IsEnabled() && (cfg.VisionAssist.Cache.MaxEntries <= 0 || cfg.VisionAssist.Cache.MaxEntries > 4096 || cfg.VisionAssist.Cache.TTL.Duration <= 0) {
+		issues = append(issues, issue("error", "multimodal.vision_assist.cache", "invalid_vision_assist_cache", "Vision assist cache requires a positive TTL and 1 to 4096 entries."))
+	}
 	hasOCR := cfg.OCR.Provider != ""
 	if !hasOCR && cfg.VisionFallbackModel == "" {
 		issues = append(issues, issue("error", "multimodal", "missing_multimodal_fallback", "A built-in OCR provider, HTTP OCR endpoint, or Vision fallback model is required when multimodal fallback is enabled."))

@@ -140,7 +140,17 @@ export function MultimodalFlow({ event, className }: MultimodalFlowProps) {
   const originalModel = flow?.original_model || event.virtual_model
   const style = routeStyle(route)
   const usesOCR = route === "ocr_fallback" || route === "vision_fallback"
-  const processingDetail = usesOCR
+  const routeDisplay = route === "vision_fallback"
+    ? t(flow?.vision_strategy === "takeover" ? "multimodalFlow.visionTakeover" : "multimodalFlow.visionAssist")
+    : routeLabel(route, t)
+  const processingDetail = route === "vision_fallback"
+    ? [
+        flow?.ocr_failure_code,
+        flow?.vision_model,
+        flow?.vision_latency_ms != null ? `${flow.vision_latency_ms}ms` : "",
+        flow?.vision_cache_hit ? t("multimodalFlow.cacheHit") : "",
+      ].filter(Boolean).join(" · ")
+    : usesOCR
     ? flow?.ocr_failure_code
       ? flow.ocr_failure_code
       : [
@@ -161,7 +171,7 @@ export function MultimodalFlow({ event, className }: MultimodalFlowProps) {
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <h3 className="text-sm font-semibold">{t("multimodalFlow.requestPath")}</h3>
-            <Badge variant={style.badge}>{routeLabel(route, t)}</Badge>
+            <Badge variant={style.badge}>{routeDisplay}</Badge>
           </div>
           <p className="mt-0.5 text-xs text-muted-foreground">
             {t("multimodalFlow.pathSummary", {
@@ -210,7 +220,7 @@ export function MultimodalFlow({ event, className }: MultimodalFlowProps) {
           <FlowNode
             icon={style.icon}
             label={t("multimodalFlow.processing")}
-            value={routeLabel(route, t)}
+            value={routeDisplay}
             detail={processingDetail}
             iconClass={style.iconClass}
           />
@@ -248,6 +258,10 @@ export function MultimodalFlow({ event, className }: MultimodalFlowProps) {
             value={flow?.ocr_min_confidence != null ? flow.ocr_min_confidence.toFixed(2) : null}
           />
           <Detail label={t("multimodalFlow.routeReason")} value={flow?.route_reason} mono />
+          <Detail label={t("multimodalFlow.visionStrategy")} value={flow?.vision_strategy} mono />
+          <Detail label={t("multimodalFlow.visionTarget")} value={flow?.vision_model ? `${flow.vision_provider || "-"} / ${flow.vision_model}` : null} mono />
+          <Detail label={t("multimodalFlow.visionLatency")} value={flow?.vision_latency_ms != null ? `${flow.vision_latency_ms}ms` : null} />
+          <Detail label={t("multimodalFlow.visionEvidenceChars")} value={flow?.vision_evidence_chars} />
           <Detail label={t("multimodalFlow.errorCode")} value={flow?.ocr_failure_code || event.error_code} mono />
         </dl>
       </details>

@@ -97,6 +97,9 @@ func TestValidateRuntimeAcceptsHTTPOCRFallback(t *testing.T) {
 	if cfg.Multimodal.OCR.MaxImages != 4 || cfg.Multimodal.OCR.Cache.MaxEntries != 256 || !cfg.Multimodal.OCR.Cache.IsEnabled() {
 		t.Fatalf("OCR defaults not applied: %+v", cfg.Multimodal.OCR)
 	}
+	if cfg.Multimodal.VisionFallbackStrategy != "assist" || cfg.Multimodal.VisionAssist.MaxPromptChars != 4000 || cfg.Multimodal.VisionAssist.MaxOutputTokens != 1024 || !cfg.Multimodal.VisionAssist.Cache.IsEnabled() {
+		t.Fatalf("Vision assist defaults not applied: %+v", cfg.Multimodal)
+	}
 }
 
 func TestValidateRuntimeDefaultsToBuiltinOCRFallback(t *testing.T) {

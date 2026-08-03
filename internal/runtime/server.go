@@ -135,13 +135,23 @@ func (s *Server) applyRuntimeConfig(cfg *config.RuntimeConfig) {
 
 func (s *Server) buildSnapshot(cfg *config.RuntimeConfig) *Snapshot {
 	resolver := modelresolver.New(cfg.ModelResolver)
+	visionProviders := make(map[string]providerRuntime, len(cfg.Providers))
+	for id, provider := range cfg.Providers {
+		provider := provider
+		visionProviders[id] = providerRuntime{
+			MaxConcurrency: provider.MaxConcurrency,
+			Timeout:        provider.Timeout.Duration,
+			Auth:           provider.Auth.Apply,
+		}
+	}
 	processor := multimodal.NewProcessor(multimodal.ProcessorOptions{
-		Config:     cfg.Multimodal,
-		Catalog:    s.catalog,
-		Client:     s.ocrHTTPClient,
-		BuiltinOCR: s.builtinOCR,
-		Resolver:   resolver,
-		Providers:  cfg.Providers,
+		Config:         cfg.Multimodal,
+		Catalog:        s.catalog,
+		Client:         s.ocrHTTPClient,
+		BuiltinOCR:     s.builtinOCR,
+		Resolver:       resolver,
+		Providers:      cfg.Providers,
+		VisionAnalyzer: newRuntimeVisionAnalyzer(s, visionProviders),
 		AdapterCapabilities: func(providerType string) (protocol.Capabilities, bool) {
 			adapter, ok := s.providerAdapters[providerType]
 			if !ok {
@@ -430,6 +440,15 @@ func (s *Server) handleWithClient(w http.ResponseWriter, r *http.Request, truste
 		ProviderConfig:      providerCfg,
 		AdapterCapabilities: providerAdapter.Capabilities(),
 	})
+	for _, diagnostic := range prepared.Diagnostics {
+		recordCaptureValue(telemetry.PayloadStage(diagnostic.Stage), diagnostic.Value)
+	}
+	for _, item := range prepared.Observations {
+		observation := telemetry.NewObservation(uuid.NewString(), requestID, identity.TraceID, identity.SpanID, item.Type, item.Name, item.StartedAt)
+		observation.Attributes = item.Attributes
+		observation.Finish(item.CompletedAt, item.Status, item.ErrorCode)
+		_ = telemetry.RecordObservation(s.sink, observation)
+	}
 	if err != nil {
 		ge := errorToIR(err)
 		tracker.Event.Transformation = transformationSummary(prepared.Decisions, originalTarget, prepared.Target)
@@ -438,6 +457,7 @@ func (s *Server) handleWithClient(w http.ResponseWriter, r *http.Request, truste
 		return
 	}
 	creq = prepared.Request
+	recordCaptureValue(telemetry.PayloadStageEffectiveCanonicalRequest, creq)
 	if prepared.Target.ProviderID != target.ProviderID || prepared.Target.Model != target.Model {
 		target = prepared.Target
 		creq.ResolvedProvider = target.ProviderID

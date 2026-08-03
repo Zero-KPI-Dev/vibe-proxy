@@ -78,22 +78,28 @@ type RequestShapeSummary struct {
 }
 
 type TransformationSummary struct {
-	MultimodalRoute   string   `json:"multimodal_route,omitempty"`
-	RouteReason       string   `json:"route_reason,omitempty"`
-	ModelImageSupport string   `json:"model_image_support,omitempty"`
-	CapabilitySource  string   `json:"capability_source,omitempty"`
-	CatalogMatch      string   `json:"catalog_match,omitempty"`
-	InputImages       int      `json:"input_images,omitempty"`
-	OriginalProvider  string   `json:"original_provider,omitempty"`
-	OriginalModel     string   `json:"original_model,omitempty"`
-	EffectiveProvider string   `json:"effective_provider,omitempty"`
-	EffectiveModel    string   `json:"effective_model,omitempty"`
-	OCRProvider       string   `json:"ocr_provider,omitempty"`
-	OCRProcessed      int      `json:"ocr_processed,omitempty"`
-	OCRCacheHits      int      `json:"ocr_cache_hits,omitempty"`
-	OCRLatencyMS      int64    `json:"ocr_latency_ms,omitempty"`
-	OCRMinConfidence  *float64 `json:"ocr_min_confidence,omitempty"`
-	OCRFailureCode    string   `json:"ocr_failure_code,omitempty"`
+	MultimodalRoute     string   `json:"multimodal_route,omitempty"`
+	RouteReason         string   `json:"route_reason,omitempty"`
+	ModelImageSupport   string   `json:"model_image_support,omitempty"`
+	CapabilitySource    string   `json:"capability_source,omitempty"`
+	CatalogMatch        string   `json:"catalog_match,omitempty"`
+	InputImages         int      `json:"input_images,omitempty"`
+	OriginalProvider    string   `json:"original_provider,omitempty"`
+	OriginalModel       string   `json:"original_model,omitempty"`
+	EffectiveProvider   string   `json:"effective_provider,omitempty"`
+	EffectiveModel      string   `json:"effective_model,omitempty"`
+	OCRProvider         string   `json:"ocr_provider,omitempty"`
+	OCRProcessed        int      `json:"ocr_processed,omitempty"`
+	OCRCacheHits        int      `json:"ocr_cache_hits,omitempty"`
+	OCRLatencyMS        int64    `json:"ocr_latency_ms,omitempty"`
+	OCRMinConfidence    *float64 `json:"ocr_min_confidence,omitempty"`
+	OCRFailureCode      string   `json:"ocr_failure_code,omitempty"`
+	VisionStrategy      string   `json:"vision_strategy,omitempty"`
+	VisionProvider      string   `json:"vision_provider,omitempty"`
+	VisionModel         string   `json:"vision_model,omitempty"`
+	VisionCacheHit      bool     `json:"vision_cache_hit,omitempty"`
+	VisionLatencyMS     int64    `json:"vision_latency_ms,omitempty"`
+	VisionEvidenceChars int      `json:"vision_evidence_chars,omitempty"`
 }
 
 type Tracker struct {

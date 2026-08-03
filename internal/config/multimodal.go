@@ -7,10 +7,18 @@ import (
 )
 
 type MultimodalConfig struct {
-	Enabled             bool      `yaml:"enabled" json:"enabled"`
-	Strategy            string    `yaml:"strategy,omitempty" json:"strategy,omitempty"`
-	OCR                 OCRConfig `yaml:"ocr,omitempty" json:"ocr,omitempty"`
-	VisionFallbackModel string    `yaml:"vision_fallback_model,omitempty" json:"vision_fallback_model,omitempty"`
+	Enabled                bool               `yaml:"enabled" json:"enabled"`
+	Strategy               string             `yaml:"strategy,omitempty" json:"strategy,omitempty"`
+	OCR                    OCRConfig          `yaml:"ocr,omitempty" json:"ocr,omitempty"`
+	VisionFallbackModel    string             `yaml:"vision_fallback_model,omitempty" json:"vision_fallback_model,omitempty"`
+	VisionFallbackStrategy string             `yaml:"vision_fallback_strategy,omitempty" json:"vision_fallback_strategy,omitempty"`
+	VisionAssist           VisionAssistConfig `yaml:"vision_assist,omitempty" json:"vision_assist,omitempty"`
+}
+
+type VisionAssistConfig struct {
+	MaxPromptChars  int            `yaml:"max_prompt_chars,omitempty" json:"max_prompt_chars,omitempty"`
+	MaxOutputTokens int            `yaml:"max_output_tokens,omitempty" json:"max_output_tokens,omitempty"`
+	Cache           OCRCacheConfig `yaml:"cache,omitempty" json:"cache,omitempty"`
 }
 
 type OCRConfig struct {
@@ -42,6 +50,24 @@ func (c OCRCacheConfig) IsEnabled() bool {
 func applyMultimodalDefaults(cfg *MultimodalConfig) {
 	if cfg.Strategy == "" {
 		cfg.Strategy = "ocr_then_vision"
+	}
+	if cfg.VisionFallbackStrategy == "" {
+		// Existing configurations only contain vision_fallback_model. Treating
+		// them as assist avoids moving a long conversation to a smaller Vision
+		// model while preserving takeover as an explicit opt-in.
+		cfg.VisionFallbackStrategy = "assist"
+	}
+	if cfg.VisionAssist.MaxPromptChars == 0 {
+		cfg.VisionAssist.MaxPromptChars = 4000
+	}
+	if cfg.VisionAssist.MaxOutputTokens == 0 {
+		cfg.VisionAssist.MaxOutputTokens = 1024
+	}
+	if cfg.VisionAssist.Cache.MaxEntries == 0 {
+		cfg.VisionAssist.Cache.MaxEntries = 256
+	}
+	if cfg.VisionAssist.Cache.TTL.Duration == 0 {
+		cfg.VisionAssist.Cache.TTL.Duration = 24 * time.Hour
 	}
 	if cfg.OCR.Provider == "" {
 		if cfg.OCR.Endpoint != "" {

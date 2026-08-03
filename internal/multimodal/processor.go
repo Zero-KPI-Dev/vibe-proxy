@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -30,6 +31,12 @@ const (
 	RouteRejected          RouteMode = "rejected"
 )
 
+const (
+	VisionFallbackAssist   = "assist"
+	VisionFallbackTakeover = "takeover"
+	VisionFallbackReject   = "reject"
+)
+
 type Decision struct {
 	Mode              RouteMode                    `json:"mode"`
 	Reason            string                       `json:"reason,omitempty"`
@@ -42,21 +49,41 @@ type Decision struct {
 	Degraded          bool                         `json:"degraded"`
 }
 
+type OCRRequestDiagnostic struct {
+	Provider string                  `json:"provider"`
+	Endpoint string                  `json:"endpoint,omitempty"`
+	Images   []resolvedImageIdentity `json:"images"`
+}
+
+type OCRResponseDiagnostic struct {
+	Provider  string       `json:"provider"`
+	Results   []ocr.Result `json:"results,omitempty"`
+	CacheHits int          `json:"cache_hits"`
+	LatencyMS int64        `json:"latency_ms"`
+	ErrorCode string       `json:"error_code,omitempty"`
+}
+
 type Processor struct {
-	Enabled             bool
-	Catalog             *modelcatalog.Service
-	OCR                 ocr.Provider
-	OCRTimeout          time.Duration
-	MinConfidence       float64
-	MinTextChars        int
-	ImageLimits         ImageLimits
-	TextLimits          TextLimits
-	Cache               *OCRCache
-	cachePrefix         string
-	VisionFallbackModel string
-	Resolver            *modelresolver.Resolver
-	Providers           map[string]config.ProviderConfig
-	AdapterCapabilities func(providerType string) (protocol.Capabilities, bool)
+	Enabled                bool
+	Catalog                *modelcatalog.Service
+	OCR                    ocr.Provider
+	OCREndpoint            string
+	OCRTimeout             time.Duration
+	MinConfidence          float64
+	MinTextChars           int
+	ImageLimits            ImageLimits
+	TextLimits             TextLimits
+	Cache                  *OCRCache
+	cachePrefix            string
+	VisionFallbackModel    string
+	VisionFallbackStrategy string
+	VisionAnalyzer         VisionAnalyzer
+	VisionCache            *VisionCache
+	VisionMaxPromptChars   int
+	VisionMaxOutputTokens  int
+	Resolver               *modelresolver.Resolver
+	Providers              map[string]config.ProviderConfig
+	AdapterCapabilities    func(providerType string) (protocol.Capabilities, bool)
 }
 
 type ProcessorOptions struct {
@@ -67,6 +94,7 @@ type ProcessorOptions struct {
 	Resolver            *modelresolver.Resolver
 	Providers           map[string]config.ProviderConfig
 	AdapterCapabilities func(providerType string) (protocol.Capabilities, bool)
+	VisionAnalyzer      VisionAnalyzer
 }
 
 func NewProcessor(opts ProcessorOptions) *Processor {
@@ -75,6 +103,7 @@ func NewProcessor(opts ProcessorOptions) *Processor {
 		Enabled:       cfg.Enabled,
 		Catalog:       opts.Catalog,
 		OCRTimeout:    cfg.OCR.Timeout.Duration,
+		OCREndpoint:   cfg.OCR.Endpoint,
 		MinConfidence: cfg.OCR.MinConfidence,
 		MinTextChars:  cfg.OCR.MinTextChars,
 		ImageLimits: ImageLimits{
@@ -83,11 +112,15 @@ func NewProcessor(opts ProcessorOptions) *Processor {
 			MaxTotalImageBytes: cfg.OCR.MaxTotalImageBytes,
 			RemoteImages:       cfg.OCR.RemoteImages,
 		},
-		TextLimits:          TextLimits{PerImage: cfg.OCR.MaxTextCharsPerImage, Total: cfg.OCR.MaxTextCharsTotal},
-		VisionFallbackModel: cfg.VisionFallbackModel,
-		Resolver:            opts.Resolver,
-		Providers:           opts.Providers,
-		AdapterCapabilities: opts.AdapterCapabilities,
+		TextLimits:             TextLimits{PerImage: cfg.OCR.MaxTextCharsPerImage, Total: cfg.OCR.MaxTextCharsTotal},
+		VisionFallbackModel:    cfg.VisionFallbackModel,
+		VisionFallbackStrategy: cfg.VisionFallbackStrategy,
+		VisionAnalyzer:         opts.VisionAnalyzer,
+		VisionMaxPromptChars:   cfg.VisionAssist.MaxPromptChars,
+		VisionMaxOutputTokens:  cfg.VisionAssist.MaxOutputTokens,
+		Resolver:               opts.Resolver,
+		Providers:              opts.Providers,
+		AdapterCapabilities:    opts.AdapterCapabilities,
 	}
 	if !cfg.Enabled {
 		return processor
@@ -102,6 +135,9 @@ func NewProcessor(opts ProcessorOptions) *Processor {
 		if cfg.OCR.Endpoint != "" {
 			processor.OCR = ocr.NewHTTPProvider(ocr.HTTPOptions{Endpoint: cfg.OCR.Endpoint, Auth: cfg.OCR.Auth, Client: opts.Client})
 		}
+	}
+	if cfg.VisionAssist.Cache.IsEnabled() {
+		processor.VisionCache = NewVisionCache(cfg.VisionAssist.Cache.MaxEntries, cfg.VisionAssist.Cache.TTL.Duration)
 	}
 	if processor.OCR == nil {
 		return processor
@@ -153,7 +189,7 @@ func (p *Processor) Decide(req *ir.Request, route preprocess.RouteContext) Decis
 			decision.Mode = RouteOCRFallback
 			decision.Reason = "model_does_not_support_images"
 			decision.Degraded = true
-		} else if p.VisionFallbackModel != "" {
+		} else if p.VisionFallbackModel != "" && p.VisionFallbackStrategy != VisionFallbackReject {
 			fallback, err := p.resolveVisionFallback(req, route.Target)
 			if err != nil {
 				decision.Mode = RouteRejected
@@ -161,7 +197,9 @@ func (p *Processor) Decide(req *ir.Request, route preprocess.RouteContext) Decis
 			} else {
 				decision.Mode = RouteVisionFallback
 				decision.Reason = "ocr_unavailable"
-				decision.EffectiveTarget = fallback
+				if p.VisionFallbackStrategy == VisionFallbackTakeover {
+					decision.EffectiveTarget = fallback
+				}
 			}
 		} else {
 			decision.Mode = RouteRejected
@@ -186,7 +224,19 @@ func (p *Processor) Prepare(ctx context.Context, req *ir.Request, route preproce
 	if decision.Mode != RouteRejected {
 		if decision.Mode == RouteOCRFallback {
 			attributes["ocr_provider"] = p.OCR.Name()
-			processed, hits, latency, minConfidence, err := p.applyOCR(ctx, req)
+			identities, _ := imageIdentities(req, p.ImageLimits)
+			result.Diagnostics = append(result.Diagnostics, preprocess.Diagnostic{Stage: "ocr_request", Value: OCRRequestDiagnostic{Provider: p.OCR.Name(), Endpoint: p.OCREndpoint, Images: identities}})
+			ocrStarted := time.Now().UTC()
+			processed, ocrResults, hits, latency, minConfidence, err := p.applyOCR(ctx, req)
+			ocrCompleted := time.Now().UTC()
+			ocrStatus := "ok"
+			ocrCode := ""
+			if err != nil {
+				ocrStatus = "error"
+				ocrCode = gatewayErrorCode(err)
+			}
+			result.Diagnostics = append(result.Diagnostics, preprocess.Diagnostic{Stage: "ocr_response", Value: OCRResponseDiagnostic{Provider: p.OCR.Name(), Results: ocrResults, CacheHits: hits, LatencyMS: latency.Milliseconds(), ErrorCode: ocrCode}})
+			result.Observations = append(result.Observations, preprocess.Observation{Type: "preprocess", Name: "ocr.invoke", StartedAt: ocrStarted, CompletedAt: ocrCompleted, Status: ocrStatus, ErrorCode: ocrCode, Attributes: map[string]any{"provider": p.OCR.Name(), "image_count": decision.InputImageCount, "cache_hits": hits}})
 			if err != nil {
 				attributes["ocr_error_code"] = gatewayErrorCode(err)
 				attributes["ocr_latency_ms"] = latency.Milliseconds()
@@ -194,18 +244,8 @@ func (p *Processor) Prepare(ctx context.Context, req *ir.Request, route preproce
 				if minConfidence != nil {
 					attributes["ocr_min_confidence"] = *minConfidence
 				}
-				if p.VisionFallbackModel != "" && canUseVisionFallback(err) {
-					fallback, fallbackErr := p.resolveVisionFallback(req, route.Target)
-					if fallbackErr != nil {
-						attributes["vision_fallback_error"] = "invalid_target"
-						result.Decisions = []preprocess.Decision{{Processor: p.Name(), Route: string(RouteRejected), Reason: "vision_fallback_invalid", Attributes: attributes}}
-						return result, ir.GatewayError{StatusCode: 500, Kind: "multimodal_error", Code: "vision_fallback_invalid", Message: "The configured Vision fallback model is invalid or does not explicitly support image input."}
-					}
-					result.Target = fallback
-					attributes["effective_provider"] = fallback.ProviderID
-					attributes["effective_model"] = fallback.Model
-					result.Decisions = []preprocess.Decision{{Processor: p.Name(), Route: string(RouteVisionFallback), Reason: gatewayErrorCode(err), Attributes: attributes}}
-					return result, nil
+				if p.VisionFallbackModel != "" && p.VisionFallbackStrategy != VisionFallbackReject && canUseVisionFallback(err) {
+					return p.applyVisionFallback(ctx, result, req, route, attributes, gatewayErrorCode(err))
 				}
 				result.Decisions = []preprocess.Decision{{Processor: p.Name(), Route: string(RouteRejected), Reason: gatewayErrorCode(err), Attributes: attributes}}
 				return result, err
@@ -219,9 +259,7 @@ func (p *Processor) Prepare(ctx context.Context, req *ir.Request, route preproce
 				attributes["ocr_min_confidence"] = *minConfidence
 			}
 		} else if decision.Mode == RouteVisionFallback {
-			result.Target = decision.EffectiveTarget
-			attributes["effective_provider"] = decision.EffectiveTarget.ProviderID
-			attributes["effective_model"] = decision.EffectiveTarget.Model
+			return p.applyVisionFallback(ctx, result, req, route, attributes, decision.Reason)
 		}
 		result.Decisions = []preprocess.Decision{{Processor: p.Name(), Route: string(decision.Mode), Reason: decision.Reason, Attributes: attributes}}
 		return result, nil
@@ -232,6 +270,107 @@ func (p *Processor) Prepare(ctx context.Context, req *ir.Request, route preproce
 	}
 	result.Decisions = []preprocess.Decision{{Processor: p.Name(), Route: string(decision.Mode), Reason: decision.Reason, Attributes: attributes}}
 	return result, ir.GatewayError{StatusCode: status, Kind: "multimodal_error", Code: decision.Reason, Message: multimodalErrorMessage(decision.Reason)}
+}
+
+func (p *Processor) applyVisionFallback(ctx context.Context, result preprocess.Result, req *ir.Request, route preprocess.RouteContext, attributes map[string]any, reason string) (preprocess.Result, error) {
+	fallback, fallbackErr := p.resolveVisionFallback(req, route.Target)
+	if fallbackErr != nil {
+		attributes["vision_fallback_error"] = "invalid_target"
+		result.Decisions = []preprocess.Decision{{Processor: p.Name(), Route: string(RouteRejected), Reason: "vision_fallback_invalid", Attributes: attributes}}
+		return result, ir.GatewayError{StatusCode: 500, Kind: "multimodal_error", Code: "vision_fallback_invalid", Message: "The configured Vision fallback model is invalid or does not explicitly support image input."}
+	}
+	strategy := p.VisionFallbackStrategy
+	if strategy == "" {
+		strategy = VisionFallbackAssist
+	}
+	attributes["vision_strategy"] = strategy
+	attributes["vision_provider"] = fallback.ProviderID
+	attributes["vision_model"] = fallback.Model
+
+	if strategy == VisionFallbackTakeover {
+		if estimated, limit, exceeded := p.takeoverContextLimit(req, fallback); exceeded {
+			attributes["vision_estimated_input_tokens"] = estimated
+			attributes["vision_input_limit"] = limit
+			result.Decisions = []preprocess.Decision{{Processor: p.Name(), Route: string(RouteRejected), Reason: "vision_takeover_context_exceeded", Attributes: attributes}}
+			return result, ir.GatewayError{StatusCode: 422, Kind: "multimodal_error", Code: "vision_takeover_context_exceeded", Message: "The request is too large for the configured Vision takeover model. Use assist mode or reduce the context."}
+		}
+		result.Target = fallback
+		attributes["effective_provider"] = fallback.ProviderID
+		attributes["effective_model"] = fallback.Model
+		result.Decisions = []preprocess.Decision{{Processor: p.Name(), Route: string(RouteVisionFallback), Reason: reason, Attributes: attributes}}
+		return result, nil
+	}
+	if strategy != VisionFallbackAssist || p.VisionAnalyzer == nil {
+		result.Decisions = []preprocess.Decision{{Processor: p.Name(), Route: string(RouteRejected), Reason: "vision_fallback_unavailable", Attributes: attributes}}
+		return result, ir.GatewayError{StatusCode: 503, Kind: "multimodal_error", Code: "vision_fallback_unavailable", Message: "Vision assist is not available."}
+	}
+
+	helper, question := BuildVisionAssistRequest(req, fallback, p.VisionMaxPromptChars, p.VisionMaxOutputTokens)
+	identities, identityErr := imageIdentities(req, p.ImageLimits)
+	if identityErr != nil {
+		result.Decisions = []preprocess.Decision{{Processor: p.Name(), Route: string(RouteRejected), Reason: gatewayErrorCode(identityErr), Attributes: attributes}}
+		return result, identityErr
+	}
+	cacheKey := VisionCacheKey(fallback, identities, question)
+	visionStarted := time.Now().UTC()
+	analysis, cacheHit, analysisErr := p.VisionCache.Do(ctx, cacheKey, func() (VisionAnalysisResult, error) {
+		return p.VisionAnalyzer.Analyze(ctx, VisionAnalysisRequest{Target: fallback, Request: helper})
+	})
+	visionCompleted := time.Now().UTC()
+	requestValue := VisionRequestDiagnostic{Strategy: strategy, PromptVersion: visionAssistPromptVersion, Provider: fallback.ProviderID, Model: fallback.Model, CanonicalRequest: helper}
+	if len(analysis.UpstreamRequest) > 0 {
+		requestValue.UpstreamRequest = decodeJSONOrString(analysis.UpstreamRequest)
+	}
+	result.Diagnostics = append(result.Diagnostics, preprocess.Diagnostic{Stage: "vision_request", Value: requestValue})
+	visionStatus := "ok"
+	visionCode := ""
+	if analysisErr != nil {
+		visionStatus = "error"
+		visionCode = visionErrorCode(analysisErr)
+	}
+	result.Diagnostics = append(result.Diagnostics, preprocess.Diagnostic{Stage: "vision_response", Value: VisionResponseDiagnostic{Strategy: strategy, Provider: fallback.ProviderID, Model: fallback.Model, CacheHit: cacheHit, LatencyMS: visionCompleted.Sub(visionStarted).Milliseconds(), Evidence: analysis.Evidence, Response: analysis.Response, ErrorCode: visionCode}})
+	result.Observations = append(result.Observations, preprocess.Observation{Type: "preprocess", Name: "vision.analyze", StartedAt: visionStarted, CompletedAt: visionCompleted, Status: visionStatus, ErrorCode: visionCode, Attributes: map[string]any{"provider": fallback.ProviderID, "model": fallback.Model, "strategy": strategy, "cache_hit": cacheHit, "image_count": len(identities)}})
+	attributes["vision_cache_hit"] = cacheHit
+	attributes["vision_latency_ms"] = visionCompleted.Sub(visionStarted).Milliseconds()
+	if analysisErr != nil {
+		result.Decisions = []preprocess.Decision{{Processor: p.Name(), Route: string(RouteRejected), Reason: visionCode, Attributes: attributes}}
+		return result, analysisErr
+	}
+	processed, normalizeErr := NormalizeVisionRequest(req, analysis.Evidence, fallback.ProviderID, fallback.Model, p.TextLimits.Total)
+	if normalizeErr != nil {
+		result.Decisions = []preprocess.Decision{{Processor: p.Name(), Route: string(RouteRejected), Reason: gatewayErrorCode(normalizeErr), Attributes: attributes}}
+		return result, normalizeErr
+	}
+	result.Request = processed
+	attributes["vision_evidence_chars"] = utf8.RuneCountInString(analysis.Evidence)
+	attributes["effective_provider"] = route.Target.ProviderID
+	attributes["effective_model"] = route.Target.Model
+	result.Decisions = []preprocess.Decision{{Processor: p.Name(), Route: string(RouteVisionFallback), Reason: reason, Attributes: attributes}}
+	return result, nil
+}
+
+func (p *Processor) takeoverContextLimit(req *ir.Request, target modelresolver.Target) (estimated, limit int64, exceeded bool) {
+	if p.Catalog == nil {
+		return 0, 0, false
+	}
+	provider, ok := p.Providers[target.ProviderID]
+	if !ok {
+		return 0, 0, false
+	}
+	match := p.Catalog.Snapshot().Lookup(provider.CatalogProvider, target.ProviderID, provider.BaseURL, target.Model)
+	if match.Model == nil {
+		return 0, 0, false
+	}
+	if match.Model.InputLimit != nil {
+		limit = *match.Model.InputLimit
+	} else if match.Model.ContextLimit != nil {
+		limit = *match.Model.ContextLimit
+	}
+	if limit <= 0 {
+		return 0, 0, false
+	}
+	estimated = estimateRequestTokens(req)
+	return estimated, limit, estimated > limit
 }
 
 func (p *Processor) resolveVisionFallback(req *ir.Request, original modelresolver.Target) (modelresolver.Target, error) {
@@ -267,29 +406,44 @@ func (p *Processor) resolveVisionFallback(req *ir.Request, original modelresolve
 }
 
 func gatewayErrorCode(err error) string {
-	if gateway, ok := err.(ir.GatewayError); ok {
+	var gateway ir.GatewayError
+	if errors.As(err, &gateway) {
 		return gateway.Code
 	}
-	if provider, ok := err.(ocr.Error); ok {
+	var provider ocr.Error
+	if errors.As(err, &provider) {
 		return provider.Code
 	}
 	return "ocr_unavailable"
+}
+
+func visionErrorCode(err error) string {
+	code := gatewayErrorCode(err)
+	if code == "ocr_unavailable" {
+		return "vision_fallback_unavailable"
+	}
+	return code
 }
 
 func canUseVisionFallback(err error) bool {
 	// A malformed image is a client error, not an OCR quality or availability
 	// failure. Forwarding it to a Vision provider would bypass the gateway's
 	// deterministic input validation and turn a 400 into an upstream request.
-	return gatewayErrorCode(err) != "ocr_invalid_image"
+	switch gatewayErrorCode(err) {
+	case "ocr_invalid_image", "ocr_image_limit_exceeded":
+		return false
+	default:
+		return true
+	}
 }
 
-func (p *Processor) applyOCR(ctx context.Context, req *ir.Request) (*ir.Request, int, time.Duration, *float64, error) {
+func (p *Processor) applyOCR(ctx context.Context, req *ir.Request) (*ir.Request, []ocr.Result, int, time.Duration, *float64, error) {
 	images, err := ResolveImages(req, p.ImageLimits)
 	if err != nil {
-		return nil, 0, 0, nil, err
+		return nil, nil, 0, 0, nil, err
 	}
 	if len(images) == 0 {
-		return req, 0, 0, nil, nil
+		return req, nil, 0, 0, nil, nil
 	}
 	ocrCtx := ctx
 	cancel := func() {}
@@ -317,7 +471,7 @@ func (p *Processor) applyOCR(ctx context.Context, req *ir.Request) (*ir.Request,
 			return result, nil
 		})
 		if recognizeErr != nil {
-			return nil, cacheHits, time.Since(started), minConfidence, normalizeOCRError(recognizeErr)
+			return nil, results, cacheHits, time.Since(started), minConfidence, normalizeOCRError(recognizeErr)
 		}
 		if hit {
 			cacheHits++
@@ -329,20 +483,21 @@ func (p *Processor) applyOCR(ctx context.Context, req *ir.Request) (*ir.Request,
 				minConfidence = &value
 			}
 			if *result.Confidence < p.MinConfidence {
-				return nil, cacheHits, time.Since(started), minConfidence, ir.GatewayError{StatusCode: 422, Kind: "multimodal_error", Code: "ocr_no_usable_text", Message: "OCR confidence is below the configured threshold."}
+				results = append(results, result)
+				return nil, results, cacheHits, time.Since(started), minConfidence, ir.GatewayError{StatusCode: 422, Kind: "multimodal_error", Code: "ocr_no_usable_text", Message: "OCR confidence is below the configured threshold."}
 			}
 		}
 		totalTextChars += utf8.RuneCountInString(strings.TrimSpace(result.Text))
 		results = append(results, result)
 	}
 	if totalTextChars < p.MinTextChars {
-		return nil, cacheHits, time.Since(started), minConfidence, ir.GatewayError{StatusCode: 422, Kind: "multimodal_error", Code: "ocr_no_usable_text", Message: "OCR did not extract enough usable text from the images."}
+		return nil, results, cacheHits, time.Since(started), minConfidence, ir.GatewayError{StatusCode: 422, Kind: "multimodal_error", Code: "ocr_no_usable_text", Message: "OCR did not extract enough usable text from the images."}
 	}
 	processed, err := NormalizeOCRRequest(req, results, p.TextLimits)
 	if err != nil {
-		return nil, cacheHits, time.Since(started), minConfidence, err
+		return nil, results, cacheHits, time.Since(started), minConfidence, err
 	}
-	return processed, cacheHits, time.Since(started), minConfidence, nil
+	return processed, results, cacheHits, time.Since(started), minConfidence, nil
 }
 
 func normalizeOCRError(err error) error {

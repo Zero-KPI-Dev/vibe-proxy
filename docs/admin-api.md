@@ -290,6 +290,7 @@ candidates:
   "enabled": true,
   "provider": "builtin",
   "vision_fallback_model": "gateway/kimi-k2.6",
+  "vision_fallback_strategy": "assist",
   "vision_fallback_models": [
     {
       "target": "gateway/kimi-k2.6",
@@ -311,6 +312,10 @@ results are read from the active local snapshot and are not persisted into provi
 Before writing the configuration, it resolves a non-empty `vision_fallback_model` through
 the same capability path used by requests. An invalid selection returns HTTP 400 with
 `error: vision_fallback_invalid` and leaves the configuration file unchanged.
+
+`vision_fallback_strategy` accepts `assist`, `takeover`, or `reject`. Missing values are
+saved as `assist`. In assist mode the selected Vision model analyzes a bounded image-local
+request, while the originally resolved model remains the final answering target.
 
 `POST /admin/multimodal/ocr/test` runs the selected
 provider against an embedded deterministic Chinese and English fixture. Its

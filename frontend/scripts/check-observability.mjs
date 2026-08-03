@@ -46,8 +46,12 @@ assert.match(hooks, /useInfiniteQuery/, "cursor pagination must use an infinite 
 assert.match(requests, /RequestFilters/, "requests page must render all request filters")
 assert.match(sessions, /session_id/, "sessions page must show explicit Session identity")
 assert.match(sessions, /principal_name/, "sessions page must keep principal separate from Agent")
-assert.match(details, /summary[\s\S]*timeline[\s\S]*request[\s\S]*response[\s\S]*changes[\s\S]*metadata/i,
+assert.match(details, /summary[\s\S]*timeline[\s\S]*request[\s\S]*processing[\s\S]*response[\s\S]*changes[\s\S]*metadata/i,
   "request details must expose all required tabs")
+for (const stage of ["ocr_request", "ocr_response", "vision_request", "vision_response", "effective_canonical_request", "upstream_request"]) {
+  assert.ok(details.includes(stage), `processing tab must expose ${stage}`)
+}
+assert.match(details, /vision_strategy === "assist"/, "Vision helper stages must only appear for assist mode")
 assert.match(filters, /capture_status/, "filters must expose capture state")
 assert.match(timeline, /observations/, "timeline must render gateway observations")
 assert.match(diff, /base_id/, "diff UI must support a manual base request")

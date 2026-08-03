@@ -637,7 +637,7 @@ func TestRuntimeOCRFallbackForAllClientProtocolsAndCache(t *testing.T) {
 func TestRuntimeFallsBackFromOCRToVisionProvider(t *testing.T) {
 	cfg, err := config.CompileSimple(config.SimpleConfig{
 		ClientKeys: []config.ClientKeyConfig{{Name: "test", KeyHash: "$2a$10$AXRkz.6y44ygdJFk6L1/IO0aRVp9zRMfXDJoBCBsroxVac/Lovvz6", Enabled: true, AllowedModels: []string{"*"}, RPM: 1000}},
-		Multimodal: config.MultimodalConfig{Enabled: true, VisionFallbackModel: "vibe-vision", OCR: config.OCRConfig{Provider: "http", Endpoint: "http://ocr.local/v1/ocr", Auth: upstreamauth.Profile{Type: "none"}}},
+		Multimodal: config.MultimodalConfig{Enabled: true, VisionFallbackModel: "vibe-vision", VisionFallbackStrategy: "takeover", OCR: config.OCRConfig{Provider: "http", Endpoint: "http://ocr.local/v1/ocr", Auth: upstreamauth.Profile{Type: "none"}}},
 		Providers: map[string]config.ProviderConfig{
 			"text":   {Type: "openai-compatible", BaseURL: "https://text.example/v1", Auth: upstreamauth.Profile{Type: "none"}, Models: []string{"text-model"}, DefaultCapabilities: modelcapability.ModelCapabilities{ImageInput: modelcapability.SupportUnsupported}},
 			"vision": {Type: "openai-compatible", BaseURL: "https://vision.example/v1", Auth: upstreamauth.Profile{Type: "none"}, Models: []string{"vision-model"}, DefaultCapabilities: modelcapability.ModelCapabilities{ImageInput: modelcapability.SupportSupported}},
@@ -671,12 +671,82 @@ func TestRuntimeFallsBackFromOCRToVisionProvider(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer vibe-local-dev-key")
 	w := httptest.NewRecorder()
 	s.Routes().ServeHTTP(w, req)
-	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "vision ok") || w.Header().Get("X-Vibe-Proxy-Image-Fallback") != "vision" {
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "vision ok") || w.Header().Get("X-Vibe-Proxy-Image-Fallback") != "vision" || w.Header().Get("X-Vibe-Proxy-Vision-Strategy") != "takeover" {
 		t.Fatalf("unexpected Vision fallback response: %d %v %s", w.Code, w.Header(), w.Body.String())
 	}
 	events := recent.Recent(10)
 	if len(events) != 1 || events[0].Transformation == nil || events[0].Transformation.MultimodalRoute != "vision_fallback" || events[0].Transformation.RouteReason != "ocr_no_usable_text" || events[0].Transformation.ModelImageSupport != "unsupported" || events[0].Transformation.OriginalProvider != "text" || events[0].Transformation.EffectiveProvider != "vision" || events[0].Transformation.OCRFailureCode != "ocr_no_usable_text" {
 		t.Fatalf("unexpected Vision telemetry: %+v", events)
+	}
+}
+
+func TestRuntimeVisionAssistExtractsEvidenceThenUsesOriginalModel(t *testing.T) {
+	cfg, err := config.CompileSimple(config.SimpleConfig{
+		Observability: config.ObservabilityConfig{Capture: config.ObservabilityCaptureConfig{Mode: "structured", MaxSnapshotBytes: 512 << 10, CaptureResponse: true}},
+		ClientKeys:    []config.ClientKeyConfig{{Name: "test", KeyHash: "$2a$10$AXRkz.6y44ygdJFk6L1/IO0aRVp9zRMfXDJoBCBsroxVac/Lovvz6", Enabled: true, AllowedModels: []string{"*"}, RPM: 1000}},
+		Multimodal:    config.MultimodalConfig{Enabled: true, VisionFallbackModel: "vibe-vision", OCR: config.OCRConfig{Provider: "http", Endpoint: "http://ocr.local/v1/ocr", Auth: upstreamauth.Profile{Type: "none"}}},
+		Providers: map[string]config.ProviderConfig{
+			"text":   {Type: "openai-compatible", BaseURL: "https://text.example/v1", Auth: upstreamauth.Profile{Type: "none"}, Models: []string{"text-model"}, DefaultCapabilities: modelcapability.ModelCapabilities{ImageInput: modelcapability.SupportUnsupported}},
+			"vision": {Type: "openai-compatible", BaseURL: "https://vision.example/v1", Auth: upstreamauth.Profile{Type: "none"}, Models: []string{"vision-model"}, DefaultCapabilities: modelcapability.ModelCapabilities{ImageInput: modelcapability.SupportSupported}},
+		},
+		Models: config.ModelsConfig{AllowRaw: true, Aliases: map[string]string{"vibe-fast": "text/text-model", "vibe-vision": "vision/vision-model"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sink := &observabilityRecordingSink{}
+	testPromOnce.Do(func() { testProm = metrics.New() })
+	s := New("", cfg, sink, testProm)
+	s.SetOCRHTTPClient(&http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
+		return jsonResponse(200, `{"results":[{"index":0,"text":"uncertain","confidence":0.1}]}`), nil
+	})})
+	var calls atomic.Int32
+	s.SetHTTPClient(&http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
+		body, _ := io.ReadAll(r.Body)
+		switch calls.Add(1) {
+		case 1:
+			if r.URL.String() != "https://vision.example/v1/chat/completions" || !strings.Contains(string(body), `"model":"vision-model"`) || !strings.Contains(string(body), `"image_url"`) {
+				t.Fatalf("unexpected Vision assist request: %s %s", r.URL, body)
+			}
+			if strings.Contains(string(body), "historic context must stay with primary") {
+				t.Fatalf("Vision helper received the full conversation: %s", body)
+			}
+			return jsonResponse(200, `{"id":"vision-evidence","model":"vision-model","choices":[{"message":{"role":"assistant","content":"A ginger cat is sitting on a blue chair."},"finish_reason":"stop"}],"usage":{"prompt_tokens":20,"completion_tokens":8,"total_tokens":28}}`), nil
+		case 2:
+			if r.URL.String() != "https://text.example/v1/chat/completions" || !strings.Contains(string(body), `"model":"text-model"`) {
+				t.Fatalf("original model was not used after Vision assist: %s %s", r.URL, body)
+			}
+			if strings.Contains(string(body), `"image_url"`) || !strings.Contains(string(body), "vibe-proxy-vision") || !strings.Contains(string(body), "A ginger cat is sitting on a blue chair") || !strings.Contains(string(body), "historic context must stay with primary") {
+				t.Fatalf("primary request did not contain preserved context plus Vision evidence: %s", body)
+			}
+			return jsonResponse(200, `{"id":"primary-answer","model":"text-model","choices":[{"message":{"role":"assistant","content":"primary model answered"},"finish_reason":"stop"}],"usage":{"prompt_tokens":100,"completion_tokens":4,"total_tokens":104}}`), nil
+		default:
+			t.Fatalf("unexpected extra provider call: %s", r.URL)
+			return nil, nil
+		}
+	})})
+	encoded := base64.StdEncoding.EncodeToString([]byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52})
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"vibe-fast","messages":[{"role":"user","content":"historic context must stay with primary"},{"role":"user","content":[{"type":"text","text":"What is in this image?"},{"type":"image_url","image_url":{"url":"data:image/png;base64,`+encoded+`"}}]}]}`))
+	req.Header.Set("Authorization", "Bearer vibe-local-dev-key")
+	w := httptest.NewRecorder()
+	s.Routes().ServeHTTP(w, req)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "primary model answered") || calls.Load() != 2 || w.Header().Get("X-Vibe-Proxy-Vision-Strategy") != "assist" {
+		t.Fatalf("unexpected Vision assist response: calls=%d status=%d body=%s", calls.Load(), w.Code, w.Body.String())
+	}
+	if len(sink.finished) != 1 || sink.finished[0].Transformation == nil || sink.finished[0].Transformation.EffectiveProvider != "text" {
+		t.Fatalf("Vision assist must report the original model as final target: %+v", sink.finished)
+	}
+	stages := map[telemetry.PayloadStage]bool{}
+	for _, payload := range sink.payloads {
+		stages[payload.Stage] = true
+	}
+	for _, stage := range []telemetry.PayloadStage{telemetry.PayloadStageOCRRequest, telemetry.PayloadStageOCRResponse, telemetry.PayloadStageVisionRequest, telemetry.PayloadStageVisionResponse, telemetry.PayloadStageEffectiveCanonicalRequest, telemetry.PayloadStageUpstreamRequest} {
+		if !stages[stage] {
+			t.Fatalf("missing capture stage %s: %+v", stage, stages)
+		}
+	}
+	if len(sink.observations) < 3 {
+		t.Fatalf("expected OCR, Vision, and primary observations: %+v", sink.observations)
 	}
 }
 

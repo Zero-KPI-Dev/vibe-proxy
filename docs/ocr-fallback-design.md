@@ -30,7 +30,9 @@ vibe-proxy 已经可以把三种客户端协议中的图片解析为 Canonical I
   -> OCR
       -> OCR 结果可用：图片块替换为受保护的文本块，调用原文本模型
       -> OCR 结果不可用：尝试可选 Vision fallback
-          -> Vision fallback 可用：原始图片请求改投 Vision 模型
+          -> assist（默认）：Vision 只提取图片证据，回注后仍由原文本模型回答
+          -> takeover（显式）：原始图片请求改投 Vision 模型并由其回答
+          -> reject：返回明确错误
           -> Vision fallback 不可用：返回明确错误
 
 目标模型图片能力未知
@@ -397,7 +399,10 @@ flowchart TD
   K -- 否 --> N{配置 Vision fallback?}
   I -- 否 --> N
   N -- 是 --> O[解析并校验 Vision target]
-  O --> P[vision_fallback / 原始图片]
+  O --> P{Vision strategy}
+  P -- assist 默认 --> R[图片局部请求 -> Vision 证据 -> 原文本模型]
+  P -- takeover --> S[vision_fallback / Vision 直接回答]
+  P -- reject --> Q
   N -- 否 --> Q[协议原生明确错误]
 ```
 
@@ -420,7 +425,18 @@ flowchart TD
 
 `vision_fallback_model` 是一个 vibe-proxy 可解析模型名，可以是别名或 raw target。
 
-使用时必须：
+`vision_fallback_strategy` 决定 OCR 不可用后的动作：
+
+- `assist`（默认）：只向 Vision 模型发送图片、固定提取提示和最新携图用户消息中的
+  有界文本。Vision 返回的证据替换图片块后，完整历史仍发送给原始模型并由原始模型回答；
+- `takeover`：保留旧行为，将完整原始图片请求改投 Vision 模型并由其回答；
+- `reject`：不调用 Vision，直接返回明确错误。
+
+Assist 模式不得发送完整历史、工具或响应格式给 Vision helper。安全提示与视觉证据一起
+放在原图片位置，不修改开头 system prompt，以保持长历史前缀可被原 Provider 的 prompt
+cache 复用。成功证据按 Vision target、图片 SHA、局部问题和提示版本写入有界内存缓存。
+
+所有会调用 Vision 的策略必须：
 
 - 成功解析到不同的 target；
 - 目标的有效能力为 `image_input: supported`；能力来源优先级固定为
@@ -429,8 +445,9 @@ flowchart TD
   未找到或匹配歧义时保持 `unknown`，不能进入 fallback；
 - 对应 Provider Adapter 能编码图片；
 - 不再递归进入 OCR 或二次 fallback；
-- 保留原始 Canonical IR 图片，而不是使用失败后的 OCR 请求；
-- 遥测同时记录 original target 和 effective target。
+- 以原始 Canonical IR 图片构造 helper 或 takeover 请求，而不是使用失败后的 OCR 请求；
+- 遥测区分分析图片的 Vision target 与最终回答的 effective target；
+- takeover 在目录提供 context/input limit 时对明显超限请求进行预检。
 - `ocr_invalid_image` 属于客户端输入错误，必须直接返回 400，不能借 Vision fallback 绕过网关的格式与 MIME 校验。
 
 客户端密钥仍按**客户端请求的公开模型名**授权。Vision fallback 是公开模型路由内部的实现细节。未来团队网关模式如需成本隔离，可增加内部 target allowlist。
@@ -713,6 +730,7 @@ multimodal:
   ocr:
     provider: builtin
   vision_fallback_model: ""  # 可选；没有 Vision 模型时保持为空
+  vision_fallback_strategy: assist
 
 providers:
   newapi:
@@ -772,6 +790,14 @@ multimodal:
       header: x-api-key
       value: env:OCR_API_KEY
   vision_fallback_model: vibe-vision
+  vision_fallback_strategy: assist
+  vision_assist:
+    max_prompt_chars: 4000
+    max_output_tokens: 1024
+    cache:
+      enabled: true
+      max_entries: 256
+      ttl: 24h
 ```
 
 ### 12.3 配置校验
@@ -785,6 +811,7 @@ multimodal:
 - OCR auth secret 只能以 SecretRef 形式存在；
 - limit 必须大于 0 且不能超过内部硬上限；
 - `vision_fallback_model` 必须可解析；
+- `vision_fallback_strategy` 只能是 `assist`、`takeover` 或 `reject`；缺省为 `assist`；
 - Vision fallback target 的有效能力必须支持图片；静态校验在没有显式能力时返回
   `vision_fallback_unverified` warning，由运行时结合 models.dev 再验证；
 - 显式 `unknown` 或 `unsupported` 仍返回 `vision_fallback_invalid`；
@@ -833,6 +860,9 @@ type Snapshot struct {
 | `ocr_invalid_response` | 502 | OCR 服务响应不符合契约 |
 | `ocr_no_usable_text` | 422 | 没有识别到足够文本且无 Vision fallback |
 | `vision_fallback_invalid` | 500 | fallback 配置不可解析或不具备图片能力 |
+| `vision_fallback_unavailable` | 503 | assist helper 无法连接、超时或不可用 |
+| `vision_no_usable_evidence` | 502 | Vision helper 未返回可用视觉证据 |
+| `vision_takeover_context_exceeded` | 422 | 已知 Vision 输入上限无法容纳 takeover 请求 |
 
 错误在 upstream 请求之前产生，因此三个 Client Adapter 可以输出各自协议的标准错误格式。不要把 OCR 失败包装成上游 LLM 失败。
 
@@ -1024,9 +1054,10 @@ Settings 或 Provider 页面提供轻量状态：
 | 有 | supported | 任意 | - | 任意 | direct_vision |
 | 有 | unknown | enabled | - | 任意 | legacy_passthrough |
 | 有 | unsupported | enabled | usable | 任意 | ocr_fallback |
-| 有 | unsupported | enabled | unusable | 可用 | vision_fallback |
+| 有 | unsupported | enabled | unusable | 可用 + assist | Vision 提取证据，原模型回答 |
+| 有 | unsupported | enabled | unusable | 可用 + takeover | Vision 模型直接回答 |
 | 有 | unsupported | enabled | unusable | 无 | error |
-| 有 | unsupported | disabled | - | 可用 | vision_fallback |
+| 有 | unsupported | disabled | - | 可用 + assist | Vision 提取证据，原模型回答 |
 | 有 | unsupported | disabled | - | 无 | error |
 
 ### 18.7 E2E 测试
@@ -1039,10 +1070,11 @@ Settings 或 Provider 页面提供轻量状态：
 4. 断言 LLM upstream 收到纯文本且没有图片；
 5. 流式和非流式均成功；
 6. 第二次同图命中 cache，不再次请求 OCR；
-7. OCR 无文本时改投 mock Vision upstream；
-8. OCR 与 Vision 均不可用时返回协议原生错误；
-9. Recent Requests 显示正确 fallback metadata；
-10. 普通文本回归测试完全不调用 OCR。
+7. OCR 无文本时先调用 mock Vision 提取证据，再断言原始 text upstream 收到完整历史和证据；
+8. takeover 模式下断言仅调用 Vision upstream，并对已知超限上下文提前拒绝；
+9. OCR 与 Vision 均不可用时返回协议原生错误；
+10. Recent Requests 与详情页显示 OCR/Vision 中间请求、结果和最终请求；
+11. 普通文本回归测试完全不调用 OCR。
 
 ## 19. 分阶段实施
 

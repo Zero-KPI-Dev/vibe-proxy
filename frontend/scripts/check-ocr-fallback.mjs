@@ -21,6 +21,10 @@ assert.doesNotMatch(component, /provider\.model_capabilities/,
   "OCR settings must not duplicate capability precedence in the browser")
 assert.match(component, /visionFallbackUnavailable/,
   "a configured candidate that is no longer valid must be labelled unavailable")
+assert.match(types, /vision_fallback_strategy: "assist" \| "takeover" \| "reject"/,
+  "multimodal configuration must type all Vision fallback strategies")
+assert.match(component, /visionFallbackAssist[\s\S]*visionFallbackTakeover[\s\S]*visionFallbackReject/,
+  "OCR settings must expose assist, takeover, and reject choices")
 assert.match(english, /"visionFallbackSourceModelsDev"/,
   "English translations must explain catalog-derived capabilities")
 assert.match(chinese, /"visionFallbackSourceModelsDev"/,

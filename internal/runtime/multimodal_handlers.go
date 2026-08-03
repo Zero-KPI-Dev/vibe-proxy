@@ -150,19 +150,20 @@ func (s *Server) multimodalAdminSnapshot(cfg *config.RuntimeConfig) map[string]a
 	multimodalCfg := cfg.Multimodal
 	authType, keySource, keyEnv, header := authProfileMeta(multimodalCfg.OCR.Auth)
 	return map[string]any{
-		"enabled":                multimodalCfg.Enabled,
-		"strategy":               multimodalCfg.Strategy,
-		"provider":               multimodalCfg.OCR.Provider,
-		"endpoint":               multimodalCfg.OCR.Endpoint,
-		"auth_type":              authType,
-		"api_key_source":         keySource,
-		"api_key_env":            keyEnv,
-		"header":                 header,
-		"vision_fallback_model":  multimodalCfg.VisionFallbackModel,
-		"vision_fallback_models": s.visionFallbackModels(cfg),
-		"min_confidence":         multimodalCfg.OCR.MinConfidence,
-		"min_text_chars":         multimodalCfg.OCR.MinTextChars,
-		"max_images":             multimodalCfg.OCR.MaxImages,
+		"enabled":                  multimodalCfg.Enabled,
+		"strategy":                 multimodalCfg.Strategy,
+		"provider":                 multimodalCfg.OCR.Provider,
+		"endpoint":                 multimodalCfg.OCR.Endpoint,
+		"auth_type":                authType,
+		"api_key_source":           keySource,
+		"api_key_env":              keyEnv,
+		"header":                   header,
+		"vision_fallback_model":    multimodalCfg.VisionFallbackModel,
+		"vision_fallback_strategy": multimodalCfg.VisionFallbackStrategy,
+		"vision_fallback_models":   s.visionFallbackModels(cfg),
+		"min_confidence":           multimodalCfg.OCR.MinConfidence,
+		"min_text_chars":           multimodalCfg.OCR.MinTextChars,
+		"max_images":               multimodalCfg.OCR.MaxImages,
 	}
 }
 

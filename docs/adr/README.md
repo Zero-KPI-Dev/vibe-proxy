@@ -64,11 +64,12 @@ Retrospective ADRs must distinguish the original decision date from the recordin
 | --- | --- | --- | --- |
 | [ADR-0001](0001-canonical-ir-adapter-boundary.md) | Use Canonical IR between client and provider adapters | Accepted | 2026-07-05 |
 | [ADR-0002](0002-model-capability-resolution-precedence.md) | Resolve model capabilities through explicit precedence | Accepted | 2026-07-20 |
-| [ADR-0003](0003-ocr-then-vision-image-fallback.md) | Use OCR-then-Vision preprocessing for incompatible image requests | Accepted | 2026-07-20 |
+| [ADR-0003](0003-ocr-then-vision-image-fallback.md) | Use OCR-then-Vision preprocessing for incompatible image requests | Superseded by ADR-0008 | 2026-07-20 |
 | [ADR-0004](0004-pure-go-sqlite-storage.md) | Use pure-Go SQLite for the embedded store | Accepted | 2026-07-29 |
 | [ADR-0005](0005-wails-desktop-gateway-lifecycle.md) | Embed and own the local gateway lifecycle in the Wails desktop host | Accepted | 2026-07-30 |
 | [ADR-0006](0006-installer-oriented-release-artifacts.md) | Publish an installer-oriented cross-platform artifact matrix | Accepted | 2026-08-02 |
 | [ADR-0007](0007-local-first-observability-trace-model.md) | Adopt a local-first observability trace and session model | Accepted | 2026-08-03 |
+| [ADR-0008](0008-vision-assist-before-primary-response.md) | Use Vision as bounded evidence assistance before the primary response | Accepted | 2026-08-03 |
 
 ## Template
 

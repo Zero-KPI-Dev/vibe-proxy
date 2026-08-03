@@ -15,10 +15,15 @@ import (
 type PayloadStage string
 
 const (
-	PayloadStageClientRequest     PayloadStage = "client_request"
-	PayloadStageCanonicalRequest  PayloadStage = "canonical_request"
-	PayloadStageUpstreamRequest   PayloadStage = "upstream_request"
-	PayloadStageCanonicalResponse PayloadStage = "canonical_response"
+	PayloadStageClientRequest             PayloadStage = "client_request"
+	PayloadStageCanonicalRequest          PayloadStage = "canonical_request"
+	PayloadStageOCRRequest                PayloadStage = "ocr_request"
+	PayloadStageOCRResponse               PayloadStage = "ocr_response"
+	PayloadStageVisionRequest             PayloadStage = "vision_request"
+	PayloadStageVisionResponse            PayloadStage = "vision_response"
+	PayloadStageEffectiveCanonicalRequest PayloadStage = "effective_canonical_request"
+	PayloadStageUpstreamRequest           PayloadStage = "upstream_request"
+	PayloadStageCanonicalResponse         PayloadStage = "canonical_response"
 )
 
 type PayloadSnapshot struct {

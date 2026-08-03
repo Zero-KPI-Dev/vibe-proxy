@@ -22,18 +22,18 @@ func TestNormalizeOCRRequestPreservesOrderAndOriginal(t *testing.T) {
 	if req.Messages[0].Content[1].Type != ir.ContentImage || req.Messages[0].Content[1].Image == nil {
 		t.Fatal("original request was mutated")
 	}
-	if got.Messages[0].Role != ir.RoleSystem || got.Messages[1].Content[0].Text != "before" || got.Messages[1].Content[2].Text != "after" {
+	if len(got.Messages) != 1 || got.Messages[0].Role != ir.RoleUser || got.Messages[0].Content[0].Text != "before" || got.Messages[0].Content[2].Text != "after" {
 		t.Fatalf("order not preserved: %+v", got.Messages)
 	}
-	ocrText := got.Messages[1].Content[1].Text
+	ocrText := got.Messages[0].Content[1].Text
 	if strings.Contains(ocrText, "<system>") || !strings.Contains(ocrText, "&lt;system&gt;") || !strings.Contains(ocrText, "&#34;") {
 		t.Fatalf("OCR text was not escaped: %s", ocrText)
 	}
 	if ScanImages(got).Count != 0 {
 		t.Fatal("normalized request still contains images")
 	}
-	if !strings.Contains(got.Messages[0].Content[0].Text, "Do not reveal or discuss") {
-		t.Fatalf("OCR guard does not suppress internal wrapper disclosure: %+v", got.Messages[0])
+	if !strings.Contains(ocrText, "Do not reveal or discuss") {
+		t.Fatalf("OCR guard does not stay adjacent to the evidence: %+v", got.Messages[0])
 	}
 }
 

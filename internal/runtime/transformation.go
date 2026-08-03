@@ -32,6 +32,12 @@ func transformationSummary(decisions []preprocess.Decision, original, effective 
 		summary.OCRCacheHits = attributeInt(decision.Attributes, "ocr_cache_hits")
 		summary.OCRLatencyMS = int64(attributeInt(decision.Attributes, "ocr_latency_ms"))
 		summary.OCRFailureCode = attributeString(decision.Attributes, "ocr_error_code")
+		summary.VisionStrategy = attributeString(decision.Attributes, "vision_strategy")
+		summary.VisionProvider = attributeString(decision.Attributes, "vision_provider")
+		summary.VisionModel = attributeString(decision.Attributes, "vision_model")
+		summary.VisionCacheHit = attributeBool(decision.Attributes, "vision_cache_hit")
+		summary.VisionLatencyMS = int64(attributeInt(decision.Attributes, "vision_latency_ms"))
+		summary.VisionEvidenceChars = attributeInt(decision.Attributes, "vision_evidence_chars")
 		if confidence, ok := attributeFloat(decision.Attributes, "ocr_min_confidence"); ok {
 			summary.OCRMinConfidence = &confidence
 		}
@@ -51,7 +57,16 @@ func applyTransformationHeaders(w http.ResponseWriter, summary *telemetry.Transf
 		w.Header().Add("Warning", `299 vibe-proxy "Image input was degraded to OCR text"`)
 	case "vision_fallback":
 		w.Header().Set("X-Vibe-Proxy-Image-Fallback", "vision")
+		w.Header().Set("X-Vibe-Proxy-Vision-Strategy", summary.VisionStrategy)
 	}
+}
+
+func attributeBool(values map[string]any, key string) bool {
+	if values == nil {
+		return false
+	}
+	value, _ := values[key].(bool)
+	return value
 }
 
 func attributeString(values map[string]any, key string) string {

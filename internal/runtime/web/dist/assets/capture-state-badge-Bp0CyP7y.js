@@ -1,0 +1,1 @@
+import{u as r,j as a}from"./index-BxrOpPyH.js";import{B as n}from"./badge-DtV5MAs1.js";const s={not_captured:"outline",captured:"success",redacted:"warning",truncated:"warning",expired:"secondary",dropped:"destructive",missing:"outline"};function u({state:t}){const{t:e}=r();return a.jsx(n,{variant:s[t],children:e(`observability.captureStates.${t}`)})}export{u as C};

@@ -232,6 +232,14 @@ multimodal:
       max_entries: 256
       ttl: 24h
   vision_fallback_model: ""
+  vision_fallback_strategy: assist  # assist (default) | takeover | reject
+  vision_assist:
+    max_prompt_chars: 4000
+    max_output_tokens: 1024
+    cache:
+      enabled: true
+      max_entries: 256
+      ttl: 24h
 ```
 
 `builtin` is the default when `ocr.provider` is omitted and no endpoint is
@@ -280,9 +288,18 @@ logs. Provider authentication uses the same auth profile and secret-reference fo
 LLM providers.
 
 If `vision_fallback_model` is configured, OCR errors, empty text, or confidence below the
-threshold switch to that target while preserving the original image request. The target
-must resolve to a different provider/model, its effective capability must be
-`image_input: supported`, and its provider adapter must be able to transport images.
+threshold apply `vision_fallback_strategy`. `assist` is the default: vibe-proxy sends only
+the image and bounded text from the latest image-bearing user message to the Vision model,
+replaces the image with its untrusted visual evidence, and lets the original model answer
+with the full conversation. This avoids moving a long context to a smaller Vision model and
+keeps the historical prefix stable for upstream prompt-cache reuse.
+
+`takeover` preserves the original direct fallback: the untouched image request is routed to
+the Vision target and that model answers. When models.dev provides an input/context limit,
+clearly oversized takeover requests are rejected before the upstream call. `reject` does not
+invoke Vision after unusable OCR. The fallback target must resolve to a different
+provider/model, its effective capability must be `image_input: supported`, and its provider
+adapter must be able to transport images.
 Effective support may come from a model override, a provider default, or an unambiguous
 models.dev match, in that order. Explicit `unknown` and `unsupported`, as well as absent,
 ambiguous, or not-found catalog data, are rejected.

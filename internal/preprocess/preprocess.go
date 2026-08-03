@@ -2,6 +2,7 @@ package preprocess
 
 import (
 	"context"
+	"time"
 
 	"github.com/a448582655/vibe-proxy/internal/config"
 	"github.com/a448582655/vibe-proxy/internal/ir"
@@ -23,9 +24,30 @@ type Decision struct {
 }
 
 type Result struct {
-	Request   *ir.Request
-	Target    modelresolver.Target
-	Decisions []Decision
+	Request      *ir.Request
+	Target       modelresolver.Target
+	Decisions    []Decision
+	Diagnostics  []Diagnostic
+	Observations []Observation
+}
+
+// Diagnostic is a structured intermediate artifact produced by a preprocessor.
+// Runtime capture policy still decides whether its value is persisted.
+type Diagnostic struct {
+	Stage string
+	Value any
+}
+
+// Observation describes one bounded preprocessing operation. The runtime turns
+// it into the same trace-observation format used for primary provider calls.
+type Observation struct {
+	Type        string
+	Name        string
+	StartedAt   time.Time
+	CompletedAt time.Time
+	Status      string
+	ErrorCode   string
+	Attributes  map[string]any
 }
 
 type RequestPreprocessor interface {
@@ -63,6 +85,8 @@ func (p *Pipeline) Prepare(ctx context.Context, req *ir.Request, route RouteCont
 			result.Target = step.Target
 		}
 		result.Decisions = append(result.Decisions, step.Decisions...)
+		result.Diagnostics = append(result.Diagnostics, step.Diagnostics...)
+		result.Observations = append(result.Observations, step.Observations...)
 		if err != nil {
 			return result, err
 		}

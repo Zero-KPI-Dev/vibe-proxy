@@ -15,8 +15,16 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useDeleteRequestContent, useRequestDetails, useSessionDetails } from "@/hooks/use-requests"
 import type { CaptureStatus, PayloadContent, RequestEvent } from "@/lib/types"
 
-const requestStages = ["client_request", "canonical_request", "upstream_request"] as const
+const requestStages = ["client_request", "canonical_request"] as const
 const responseStages = ["canonical_response"] as const
+
+function processingStagesFor(request: RequestEvent): PayloadContent["stage"][] {
+  const stages: PayloadContent["stage"][] = []
+  if (request.transformation?.ocr_provider) stages.push("ocr_request", "ocr_response")
+  if (request.transformation?.vision_strategy === "assist") stages.push("vision_request", "vision_response")
+  stages.push("effective_canonical_request", "upstream_request")
+  return stages
+}
 
 export function RequestDetailPage() {
   const { requestId = "" } = useParams()
@@ -60,6 +68,7 @@ export function RequestDetailPage() {
           <TabsTrigger value="summary">{t("observability.detail.tabs.summary")}</TabsTrigger>
           <TabsTrigger value="timeline">{t("observability.detail.tabs.timeline")}</TabsTrigger>
           <TabsTrigger value="request">{t("observability.detail.tabs.request")}</TabsTrigger>
+          <TabsTrigger value="processing">{t("observability.detail.tabs.processing")}</TabsTrigger>
           <TabsTrigger value="response">{t("observability.detail.tabs.response")}</TabsTrigger>
           <TabsTrigger value="changes">{t("observability.detail.tabs.changes")}</TabsTrigger>
           <TabsTrigger value="metadata">{t("observability.detail.tabs.metadata")}</TabsTrigger>
@@ -68,6 +77,7 @@ export function RequestDetailPage() {
         <TabsContent value="summary"><RequestSummary request={request} /></TabsContent>
         <TabsContent value="timeline"><Card><CardContent className="p-6"><RequestTimeline request={request} observations={observations} /></CardContent></Card></TabsContent>
         <TabsContent value="request"><PayloadStages payloads={payloads} stages={requestStages} /></TabsContent>
+        <TabsContent value="processing"><PayloadStages payloads={payloads} stages={processingStagesFor(request)} /></TabsContent>
         <TabsContent value="response"><PayloadStages payloads={payloads} stages={responseStages} /></TabsContent>
         <TabsContent value="changes"><Card><CardContent className="p-6"><RequestDiff requestId={request.request_id} candidates={candidates} /></CardContent></Card></TabsContent>
         <TabsContent value="metadata"><Metadata request={request} locale={i18n.language} /></TabsContent>

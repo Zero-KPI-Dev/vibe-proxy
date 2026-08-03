@@ -153,7 +153,14 @@
     "cacheHits": "OCR cache hits",
     "reportedConfidence": "Confidence reported by OCR",
     "routeReason": "Route reason",
-    "errorCode": "Error code"
+    "errorCode": "Error code",
+    "visionAssist": "Vision extracts evidence; original model answers",
+    "visionTakeover": "Vision model takes over",
+    "cacheHit": "evidence cache hit",
+    "visionStrategy": "Vision strategy",
+    "visionTarget": "Assistant Vision target",
+    "visionLatency": "Vision analysis latency",
+    "visionEvidenceChars": "Vision evidence characters"
   },
   "providers": {
     "title": "Providers",
@@ -543,7 +550,8 @@
         "request": "Request",
         "response": "Response",
         "changes": "Changes",
-        "metadata": "Metadata"
+        "metadata": "Metadata",
+        "processing": "Processing"
       },
       "duration": "Total duration",
       "route": "Effective route",
@@ -565,9 +573,14 @@
     },
     "payloadStages": {
       "client_request": "Client request",
-      "canonical_request": "Canonical request",
+      "canonical_request": "Canonical IR (protocol-neutral request)",
       "upstream_request": "Upstream request",
-      "canonical_response": "Canonical response"
+      "canonical_response": "Canonical response",
+      "ocr_request": "OCR invocation input",
+      "ocr_response": "OCR recognition result",
+      "vision_request": "Vision analysis request",
+      "vision_response": "Vision analysis result",
+      "effective_canonical_request": "Effective Canonical IR (final internal request)"
     },
     "timeline": {
       "empty": "No gateway observations were recorded for this request.",
@@ -675,7 +688,7 @@
     "ocrAuthType": "OCR authentication",
     "visionFallbackModel": "Optional Vision fallback model",
     "visionFallbackNone": "Do not use a Vision fallback",
-    "visionFallbackHelp": "If OCR is unavailable or confidence is too low, preserve the original image and route to this effectively Vision-capable model.",
+    "visionFallbackHelp": "If OCR is unavailable or unusable, apply the strategy above with this verified image-capable model.",
     "visionFallbackEmpty": "No configured model currently has verified image support.",
     "visionFallbackSourceModelsDev": "models.dev",
     "visionFallbackSourceModelOverride": "Manual model correction",
@@ -710,6 +723,15 @@
     "languageHelp": "Defaults to your browser language and is saved locally after you choose.",
     "chinese": "简体中文",
     "english": "English",
-    "languageChanged": "Language changed"
+    "languageChanged": "Language changed",
+    "visionFallbackStrategy": "Vision strategy after OCR failure",
+    "visionFallbackAssist": "Assist analysis (recommended)",
+    "visionFallbackTakeover": "Take over response",
+    "visionFallbackReject": "Reject request",
+    "visionFallbackStrategyHelp": {
+      "assist": "Vision only analyzes images into evidence; the original model keeps the full context and answers.",
+      "takeover": "The entire request moves to the Vision model, whose context limit may be smaller than the original model.",
+      "reject": "Reject the request when OCR cannot provide usable text; do not call a Vision model."
+    }
   }
 }

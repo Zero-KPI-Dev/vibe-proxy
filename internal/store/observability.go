@@ -196,6 +196,11 @@ func (s *SQLite) RequestDetails(requestID string) (telemetry.RequestDetails, err
 	stages := []telemetry.PayloadStage{
 		telemetry.PayloadStageClientRequest,
 		telemetry.PayloadStageCanonicalRequest,
+		telemetry.PayloadStageOCRRequest,
+		telemetry.PayloadStageOCRResponse,
+		telemetry.PayloadStageVisionRequest,
+		telemetry.PayloadStageVisionResponse,
+		telemetry.PayloadStageEffectiveCanonicalRequest,
 		telemetry.PayloadStageUpstreamRequest,
 		telemetry.PayloadStageCanonicalResponse,
 	}

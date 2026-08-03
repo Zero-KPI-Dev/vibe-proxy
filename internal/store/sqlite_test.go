@@ -685,7 +685,7 @@ func TestSQLiteQueryRequestsUsesStableCursorAndFilters(t *testing.T) {
 		t.Fatalf("filtered query = %+v err=%v", filtered, err)
 	}
 	details, err := database.RequestDetails("a")
-	if err != nil || len(details.Payloads) != 4 {
+	if err != nil || len(details.Payloads) != 9 {
 		t.Fatalf("request details = %+v err=%v", details, err)
 	}
 	for _, payload := range details.Payloads {

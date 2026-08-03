@@ -177,6 +177,12 @@ export interface TransformationSummary {
   ocr_latency_ms?: number
   ocr_min_confidence?: number
   ocr_failure_code?: string
+  vision_strategy?: "assist" | "takeover" | "reject"
+  vision_provider?: string
+  vision_model?: string
+  vision_cache_hit?: boolean
+  vision_latency_ms?: number
+  vision_evidence_chars?: number
 }
 
 export interface RecentRequestsResponse {
@@ -254,6 +260,11 @@ export interface TraceObservation {
 export type PayloadStage =
   | "client_request"
   | "canonical_request"
+  | "ocr_request"
+  | "ocr_response"
+  | "vision_request"
+  | "vision_response"
+  | "effective_canonical_request"
   | "upstream_request"
   | "canonical_response"
 
@@ -513,6 +524,7 @@ interface MultimodalAdminFields {
   api_key_env: string
   header: string
   vision_fallback_model: string
+  vision_fallback_strategy: "assist" | "takeover" | "reject"
   min_confidence: number
   min_text_chars: number
   max_images: number
