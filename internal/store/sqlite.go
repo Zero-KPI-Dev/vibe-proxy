@@ -87,10 +87,10 @@ func (s *SQLite) Token(e telemetry.Event)          {}
 func (s *SQLite) RequestFinished(e telemetry.Event) {
 	var first, completed any
 	if e.FirstTokenAt != nil {
-		first = *e.FirstTokenAt
+		first = sqliteTime(*e.FirstTokenAt)
 	}
 	if e.CompletedAt != nil {
-		completed = *e.CompletedAt
+		completed = sqliteTime(*e.CompletedAt)
 	}
 	var transformation string
 	if e.Transformation != nil {
@@ -113,7 +113,7 @@ func (s *SQLite) RequestFinished(e telemetry.Event) {
 	}
 	values := []any{
 		e.RequestID, e.ClientName, e.VirtualModel, e.UpstreamModel, e.ChannelID, e.ProtocolIn, e.ProtocolOut,
-		e.StartedAt, first, completed, e.TTFTMillis, e.TPOTMillis, e.TPS, e.StatusCode, e.ErrorCode,
+		sqliteTime(e.StartedAt), first, completed, e.TTFTMillis, e.TPOTMillis, e.TPS, e.StatusCode, e.ErrorCode,
 		e.Usage.PromptTokens, e.Usage.CompletionTokens, e.Usage.TotalTokens, e.Usage.CacheReadTokens,
 		e.Usage.CacheWriteTokens, e.Usage.CacheHitRatio, e.InputLabelsJSON, e.OutputLabelsJSON, transformation,
 		e.TraceID, e.SpanID, e.ParentSpanID, e.SessionID, e.SessionName, e.SessionKind, e.SessionPath,
@@ -173,7 +173,7 @@ headers_json, capture_error, created_at, expires_at
 		snapshot.RequestID, snapshot.Stage, snapshot.SchemaVersion, snapshot.CaptureMode, snapshot.CaptureStatus,
 		snapshot.MediaType, snapshot.ContentEncoding, snapshot.Body, snapshot.OriginalBytes, snapshot.StoredBytes,
 		snapshot.Truncated, snapshot.TruncationReason, snapshot.RedactionCount, snapshot.SHA256,
-		string(headersJSON), snapshot.Error, snapshot.CreatedAt, snapshot.ExpiresAt,
+		string(headersJSON), snapshot.Error, sqliteTime(snapshot.CreatedAt), sqliteTime(snapshot.ExpiresAt),
 	)
 	if err != nil {
 		return err
@@ -191,17 +191,24 @@ func (s *SQLite) RecordObservation(observation telemetry.TraceObservation) error
 	}
 	var completedAt any
 	if observation.CompletedAt != nil {
-		completedAt = *observation.CompletedAt
+		completedAt = sqliteTime(*observation.CompletedAt)
 	}
 	_, err = s.db.Exec(`INSERT OR REPLACE INTO trace_observations (
 observation_id, request_id, trace_id, span_id, parent_span_id, type, name,
 started_at, completed_at, status, error_code, attributes_json
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		observation.ObservationID, observation.RequestID, observation.TraceID, observation.SpanID,
-		observation.ParentSpanID, observation.Type, observation.Name, observation.StartedAt, completedAt,
+		observation.ParentSpanID, observation.Type, observation.Name, sqliteTime(observation.StartedAt), completedAt,
 		observation.Status, observation.ErrorCode, string(attributesJSON),
 	)
 	return err
+}
+
+// sqliteTime removes process-local monotonic clock readings before values cross
+// the database boundary. SQLite aggregate functions return DATETIME values as
+// strings, and monotonic suffixes are neither portable nor parseable timestamps.
+func sqliteTime(value time.Time) time.Time {
+	return value.UTC().Round(0)
 }
 
 func (s *SQLite) PayloadSnapshots(requestID string) ([]telemetry.PayloadSnapshot, error) {

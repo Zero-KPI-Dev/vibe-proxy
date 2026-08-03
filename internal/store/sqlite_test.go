@@ -730,6 +730,30 @@ func TestSQLiteQuerySessionsAggregatesAndPages(t *testing.T) {
 	}
 }
 
+func TestSQLiteQuerySessionsAcceptsRuntimeMonotonicTimestamps(t *testing.T) {
+	database, err := Open(filepath.Join(t.TempDir(), "sessions-monotonic.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	// Runtime request envelopes originate from time.Now and carry a monotonic
+	// clock reading. SQLite aggregate expressions return the stored value as a
+	// string, so Session queries must remain readable for real traffic.
+	started := time.Now()
+	database.RequestFinished(telemetry.Event{
+		RequestID: "runtime-request", SessionID: "runtime-session", StartedAt: started, StatusCode: 200,
+	})
+
+	page, err := database.QuerySessions(telemetry.SessionQuery{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Items) != 1 || page.Items[0].SessionID != "runtime-session" {
+		t.Fatalf("runtime session page = %+v", page)
+	}
+}
+
 func TestSQLiteRequestDiffSelectsParentAndReportsExpiredContent(t *testing.T) {
 	database, err := Open(filepath.Join(t.TempDir(), "diff.db"))
 	if err != nil {

@@ -474,6 +474,13 @@ func parseSQLiteAggregateTime(value any) (time.Time, error) {
 	case time.Time:
 		return typed, nil
 	case string:
+		typed = strings.TrimSpace(typed)
+		// Older rows may contain Go's process-local monotonic suffix because the
+		// SQLite driver serialized time.Now() through time.Time.String(). Keep
+		// those databases readable while new writes normalize the value first.
+		if index := strings.LastIndex(typed, " m="); index > 0 {
+			typed = typed[:index]
+		}
 		for _, layout := range []string{
 			time.RFC3339Nano,
 			"2006-01-02 15:04:05.999999999 -0700 MST",

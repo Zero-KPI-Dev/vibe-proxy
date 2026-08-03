@@ -24,6 +24,14 @@ import type {
   OCRTestResponse,
   CloseBehavior,
   DesktopSnapshot,
+  RequestQueryFilters,
+  SessionQueryFilters,
+  RequestPage,
+  SessionPage,
+  RequestDetails,
+  SessionDetailResponse,
+  RequestDiff,
+  DeleteRequestContentResponse,
 } from "./types"
 import { AUTH_REQUIRED_EVENT } from "./auth-api"
 
@@ -239,4 +247,76 @@ export const configApi = {
 // ---- Requests ----
 export const requestApi = {
   recent: () => request<RecentRequestsResponse>("/admin/requests/recent"),
+}
+
+const REQUEST_FILTER_KEYS: Array<keyof RequestQueryFilters> = [
+  "agent_id",
+  "principal_name",
+  "session_id",
+  "project_id",
+  "model",
+  "provider",
+  "protocol",
+  "status_class",
+  "capture_status",
+  "q",
+  "from",
+  "to",
+]
+
+const SESSION_FILTER_KEYS: Array<keyof SessionQueryFilters> = [
+  "session_id",
+  "agent_id",
+  "principal_name",
+  "project_id",
+  "q",
+]
+
+function observabilityQuery<T extends object>(
+  filters: T,
+  keys: Array<keyof T>,
+  cursor?: string,
+  limit = 50,
+): string {
+  const params = new URLSearchParams({ limit: String(limit) })
+  for (const key of keys) {
+    const value = filters[key]
+    if (typeof value === "string" && value.trim()) params.set(String(key), value.trim())
+  }
+  if (cursor) params.set("cursor", cursor)
+  return params.toString()
+}
+
+// ---- Local observability ----
+export const observabilityApi = {
+  requests: (filters: RequestQueryFilters = {}, cursor?: string, limit = 50) =>
+    request<RequestPage>(
+      `/admin/observability/requests?${observabilityQuery(filters, REQUEST_FILTER_KEYS, cursor, limit)}`,
+    ),
+
+  request: (requestId: string) =>
+    request<RequestDetails>(`/admin/observability/requests/${encodeURIComponent(requestId)}`),
+
+  diff: (requestId: string, base_id?: string) => {
+    const query = base_id ? `?base_id=${encodeURIComponent(base_id)}` : ""
+    return request<RequestDiff>(
+      `/admin/observability/requests/${encodeURIComponent(requestId)}/diff${query}`,
+    )
+  },
+
+  deleteContent: (requestId: string) =>
+    request<DeleteRequestContentResponse>(
+      `/admin/observability/requests/${encodeURIComponent(requestId)}/content`,
+      { method: "DELETE" },
+    ),
+
+  sessions: (filters: SessionQueryFilters = {}, cursor?: string, limit = 50) =>
+    request<SessionPage>(
+      `/admin/observability/sessions?${observabilityQuery(filters, SESSION_FILTER_KEYS, cursor, limit)}`,
+    ),
+
+  session: (sessionId: string) =>
+    request<SessionDetailResponse>(
+      `/admin/observability/sessions/${encodeURIComponent(sessionId)}`,
+    ),
 }

@@ -11,6 +11,9 @@ const ProviderNewPage = lazy(() => import("@/pages/provider-new").then((m) => ({
 const ProviderEditPage = lazy(() => import("@/pages/provider-edit").then((m) => ({ default: m.ProviderEditPage })))
 const PlaygroundPage = lazy(() => import("@/pages/playground").then((m) => ({ default: m.PlaygroundPage })))
 const ObservabilityPage = lazy(() => import("@/pages/observability").then((m) => ({ default: m.ObservabilityPage })))
+const RequestsPage = lazy(() => import("@/pages/requests").then((m) => ({ default: m.RequestsPage })))
+const RequestDetailPage = lazy(() => import("@/pages/request-detail").then((m) => ({ default: m.RequestDetailPage })))
+const SessionsPage = lazy(() => import("@/pages/sessions").then((m) => ({ default: m.SessionsPage })))
 const ClientKeysPage = lazy(() => import("@/pages/client-keys").then((m) => ({ default: m.ClientKeysPage })))
 const ModelRoutingPage = lazy(() => import("@/pages/model-routing").then((m) => ({ default: m.ModelRoutingPage })))
 const ConfigurationPage = lazy(() => import("@/pages/configuration").then((m) => ({ default: m.ConfigurationPage })))
@@ -66,6 +69,10 @@ function App() {
               <Route path="/providers/:id/edit" element={<ProviderEditPage />} />
               <Route path="/playground" element={<PlaygroundPage />} />
               <Route path="/observability" element={<ObservabilityPage />} />
+              <Route path="/observability/requests" element={<RequestsPage />} />
+              <Route path="/observability/requests/:requestId" element={<RequestDetailPage />} />
+              <Route path="/observability/sessions" element={<SessionsPage />} />
+              <Route path="/observability/sessions/:sessionId" element={<SessionsPage />} />
               <Route path="/client-keys" element={<ClientKeysPage />} />
               <Route path="/routing" element={<ModelRoutingPage />} />
               <Route path="/configuration" element={<ConfigurationPage />} />
