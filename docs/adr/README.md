@@ -68,7 +68,7 @@ Retrospective ADRs must distinguish the original decision date from the recordin
 | [ADR-0004](0004-pure-go-sqlite-storage.md) | Use pure-Go SQLite for the embedded store | Accepted | 2026-07-29 |
 | [ADR-0005](0005-wails-desktop-gateway-lifecycle.md) | Embed and own the local gateway lifecycle in the Wails desktop host | Accepted | 2026-07-30 |
 | [ADR-0006](0006-installer-oriented-release-artifacts.md) | Publish an installer-oriented cross-platform artifact matrix | Accepted | 2026-08-02 |
-| [ADR-0007](0007-local-first-observability-trace-model.md) | Adopt a local-first observability trace and session model | Proposed | 2026-08-02 |
+| [ADR-0007](0007-local-first-observability-trace-model.md) | Adopt a local-first observability trace and session model | Accepted | 2026-08-03 |
 
 ## Template
 

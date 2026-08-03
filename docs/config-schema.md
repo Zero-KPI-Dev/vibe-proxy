@@ -293,6 +293,69 @@ resolved target against the active catalog before saving or using it. An explici
 `unknown` or `unsupported` remains the error `vision_fallback_invalid`. The client key is
 still authorized against the originally requested public model.
 
+## Local Observability and Content Capture
+
+Request summaries, trace observations, and Session identity are recorded locally in
+SQLite. Content capture is configured separately and defaults to metadata only:
+
+```yaml
+observability:
+  capture:
+    mode: metadata
+    max_snapshot_bytes: 262144
+    capture_response: false
+    capture_reasoning: false
+    image_payloads: metadata
+    header_allowlist: [user-agent, traceparent]
+  retention:
+    summaries_days: 14
+    content_days: 3
+    max_content_storage_mb: 512
+```
+
+`mode` accepts:
+
+- `metadata`: store request identity, routing, shape, status, timing, usage, and
+  observations without request or response bodies. This is the default.
+- `structured`: store bounded sanitized JSON snapshots for supported stages.
+- `raw`: preserve the supported wire JSON shape after the same mandatory sanitizer.
+  This is the highest-risk mode and produces a validation warning.
+
+`raw` does not mean unredacted. All detailed modes decode JSON before sanitizing it.
+Authorization and cookie headers, credential-like JSON keys, reasoning content unless
+`capture_reasoning` is enabled, image/file bytes, base64 payloads, and data URLs are
+always omitted or replaced. Only explicitly allowlisted non-sensitive headers may be
+stored. `image_payloads` currently must remain `metadata`.
+
+`max_snapshot_bytes` is also the shared per-request content budget across client,
+Canonical IR, upstream, and response snapshots. The valid range is 1 KiB through 4 MiB.
+When the budget is exhausted, later payloads report `dropped`; oversized JSON reports
+`truncated` rather than silently appearing complete.
+
+`capture_response` opts into canonical response capture. `capture_reasoning` is a
+separate high-sensitivity opt-in and should remain false unless the local operator has a
+specific debugging need. A request may send:
+
+```text
+X-Vibe-Capture: metadata
+X-Vibe-Capture: off
+```
+
+to reduce the configured capture level for that request. It can never elevate
+`metadata` to `structured` or `raw`.
+
+Summary retention remains longer than or equal to content retention. Content is pruned
+independently by age and `max_content_storage_mb`; payloads are evicted before summaries.
+Deleting one request's content leaves its summary and observations available with an
+explicit `expired` state. The embedded SQLite database is not encrypted by this feature,
+so detailed capture should be enabled only on a trusted local machine with appropriate
+filesystem permissions.
+
+Agent and Session identities are request metadata, not secrets or authorization claims.
+They are supplied by bounded `X-Vibe-Agent-*`, `X-Vibe-Session-*`,
+`X-Vibe-Project-ID`, and `X-Vibe-Parent-Request-ID` values, allowlisted baggage, or
+supported protocol metadata. No config option groups requests by API key or User-Agent.
+
 ## Agent Profiles
 
 Agent profiles are optional. They help with local multi-agent workflows.

@@ -2,11 +2,11 @@
 
 ## Status
 
-Proposed
+Accepted
 
 ## Decision date
 
-2026-08-02 (proposed)
+2026-08-03
 
 ## Recorded date
 
@@ -151,8 +151,10 @@ low-cardinality.
   text.
 - Database migrations are numbered and transactional. Startup fails safely if a
   migration cannot complete.
-- Recorder queue saturation and SQLite failures are observable. Payloads are
-  dropped before summaries, and telemetry failure does not block provider traffic.
+- Recorder queue saturation and SQLite failures are counted by the recorder.
+  Payloads are dropped before summaries, and telemetry failure does not block
+  provider traffic. Those process-local counters can be connected to a future
+  operational metric without adding request identifiers as labels.
 - Graceful shutdown attempts a bounded queue flush; crash recovery relies on
   SQLite WAL guarantees for committed rows.
 - OpenTelemetry or other external export, if added, is disabled by default and has
@@ -164,6 +166,7 @@ low-cardinality.
 - [Architecture](../architecture.md)
 - [ADR-0001: Canonical IR adapter boundary](0001-canonical-ir-adapter-boundary.md)
 - [ADR-0004: Pure-Go SQLite storage](0004-pure-go-sqlite-storage.md)
+- [Pull request #15](https://github.com/a448582655/vibe-proxy/pull/15)
 - [Langfuse observability data model](https://langfuse.com/docs/observability/data-model)
 - [Helicone sessions](https://docs.helicone.ai/features/sessions)
 - [Helicone omit logs](https://docs.helicone.ai/features/advanced-usage/omit-logs)
