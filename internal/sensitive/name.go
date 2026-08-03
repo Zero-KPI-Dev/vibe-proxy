@@ -21,6 +21,9 @@ func IsCredentialName(value string) bool {
 		"token", "password", "passwd", "secret", "credential", "credentials", "bearer", "signature":
 		return true
 	}
+	if isCompactCredentialName(strings.Join(parts, "")) {
+		return true
+	}
 
 	for _, part := range parts {
 		switch part {
@@ -39,6 +42,26 @@ func IsCredentialName(value string) bool {
 	for _, part := range parts[:len(parts)-1] {
 		switch part {
 		case "api", "auth", "access", "client", "credential", "encryption", "private", "secret", "session", "signing":
+			return true
+		}
+	}
+	return false
+}
+
+// isCompactCredentialName catches credential-bearing names whose word
+// boundaries have been erased. This matters for HTTP headers because Go's
+// canonicalization turns X-AuthToken into X-Authtoken, which no longer has a
+// camel-case boundary for nameParts to recover. The suffixes intentionally do
+// not include a bare "key" so safe names such as idempotencykey and
+// secwebsocketkey remain observable.
+func isCompactCredentialName(value string) bool {
+	for _, suffix := range []string{
+		"authorization", "authentication", "credentials", "credential",
+		"password", "passwd", "signature", "cookie", "bearer", "secret", "token", "auth",
+		"apikey", "authkey", "accesskey", "clientkey", "credentialkey",
+		"encryptionkey", "privatekey", "secretkey", "sessionkey", "signingkey",
+	} {
+		if strings.HasSuffix(value, suffix) {
 			return true
 		}
 	}

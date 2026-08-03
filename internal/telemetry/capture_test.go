@@ -70,29 +70,37 @@ func TestCaptureStructuredRedactsSecretsHeadersAndImageData(t *testing.T) {
 
 func TestCaptureStructuredRedactsCredentialLikeNames(t *testing.T) {
 	body := []byte(`{
-		"private_key":"private-key-secret",
-		"credentials":"credential-secret",
-		"clientSecret":"client-secret",
-		"max_tokens":1024,
-		"prompt":"keep me"
-	}`)
+			"private_key":"private-key-secret",
+			"privatekey":"compact-private-key-secret",
+			"credentials":"credential-secret",
+			"clientSecret":"client-secret",
+			"clientsecret":"compact-client-secret",
+			"accesstoken":"compact-access-token-secret",
+			"max_tokens":1024,
+			"prompt":"keep me"
+		}`)
 	headers := http.Header{
 		"X-Auth-Token":    []string{"auth-token-secret"},
 		"Api-Key":         []string{"api-key-secret"},
 		"X-Client-Secret": []string{"header-client-secret"},
 		"X-Request-Id":    []string{"request-123"},
 	}
+	headers.Set("X-AuthToken", "compact-auth-token-secret")
 	result := CapturePayload(body, headers, CapturePolicy{
 		Mode:             CaptureModeStructured,
 		MaxSnapshotBytes: 4096,
-		HeaderAllowlist:  []string{"x-auth-token", "api-key", "x-client-secret", "x-request-id"},
+		HeaderAllowlist:  []string{"x-auth-token", "x-authtoken", "api-key", "x-client-secret", "x-request-id"},
 	}, "")
 
 	if result.Status != CaptureStatusRedacted {
 		t.Fatalf("capture status = %+v", result)
 	}
 	got := string(result.Body)
-	for _, secret := range []string{"private-key-secret", "credential-secret", "client-secret", "auth-token-secret", "api-key-secret", "header-client-secret"} {
+	for _, secret := range []string{
+		"private-key-secret", "compact-private-key-secret", "credential-secret", "client-secret",
+		"compact-client-secret", "compact-access-token-secret", "auth-token-secret",
+		"compact-auth-token-secret", "api-key-secret", "header-client-secret",
+	} {
 		if strings.Contains(got, secret) {
 			t.Fatalf("capture leaked %q: %s", secret, got)
 		}

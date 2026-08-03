@@ -365,7 +365,10 @@ func TestValidateRuntimeRejectsUnsafeObservabilityCapture(t *testing.T) {
 }
 
 func TestValidateRuntimeRejectsCredentialLikeCaptureHeaders(t *testing.T) {
-	for _, header := range []string{"x-auth-token", "api-key", "x-client-secret", "x-private-key", "x-credentials"} {
+	for _, header := range []string{
+		"x-auth-token", "x-authtoken", "api-key", "x-apikey", "x-client-secret", "x-clientsecret",
+		"x-private-key", "x-privatekey", "x-access-token", "x-accesstoken", "x-credentials",
+	} {
 		t.Run(header, func(t *testing.T) {
 			cfg, err := CompileSimple(SimpleConfig{Observability: ObservabilityConfig{
 				Capture: ObservabilityCaptureConfig{HeaderAllowlist: []string{header}},
