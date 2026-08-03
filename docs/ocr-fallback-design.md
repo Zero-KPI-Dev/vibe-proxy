@@ -428,7 +428,9 @@ flowchart TD
 `vision_fallback_strategy` 决定 OCR 不可用后的动作：
 
 - `assist`（默认）：只向 Vision 模型发送图片、固定提取提示和最新携图用户消息中的
-  有界文本。Vision 返回的证据替换图片块后，完整历史仍发送给原始模型并由原始模型回答；
+  有界文本。Vision 返回的证据只替换该最新消息中的图片块；更早消息里的图片不会发送给
+  Vision helper，而是替换为明确的 `historical_image_not_analyzed` 文本标记。之后完整文本历史
+  仍发送给原始模型并由原始模型回答；
 - `takeover`：保留旧行为，将完整原始图片请求改投 Vision 模型并由其回答；
 - `reject`：不调用 Vision，直接返回明确错误。
 

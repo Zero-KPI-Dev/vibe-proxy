@@ -35,7 +35,7 @@ In `assist` mode the gateway must:
 1. keep the original resolved provider/model as the final answering target;
 2. build a bounded unary Vision helper request containing only the image blocks and text from the latest image-bearing user message, never the full conversation or tools;
 3. ask the Vision model for concise factual evidence and treat its output as untrusted user-derived data;
-4. replace the original image blocks in a cloned Canonical request with a protected `<vibe-proxy-vision>` evidence block at the image position;
+4. replace the images in that latest message with a protected `<vibe-proxy-vision>` evidence block at their position; images in older messages are never sent to the helper and become explicit `historical_image_not_analyzed` text markers so the primary request remains text-only without misattributing the new evidence;
 5. send the full original conversation plus that evidence to the originally resolved model;
 6. place safety text adjacent to the replacement evidence instead of rewriting the leading system prompt, preserving the historical prompt prefix for provider cache reuse;
 7. cache successful evidence in a bounded in-memory LRU keyed by prompt version, Vision target, image digests, and local image question.

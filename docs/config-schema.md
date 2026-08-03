@@ -290,9 +290,12 @@ LLM providers.
 If `vision_fallback_model` is configured, OCR errors, empty text, or confidence below the
 threshold apply `vision_fallback_strategy`. `assist` is the default: vibe-proxy sends only
 the image and bounded text from the latest image-bearing user message to the Vision model,
-replaces the image with its untrusted visual evidence, and lets the original model answer
-with the full conversation. This avoids moving a long context to a smaller Vision model and
-keeps the historical prefix stable for upstream prompt-cache reuse.
+replaces those images with untrusted visual evidence, and lets the original model answer
+with the full conversation. Images in older messages are not sent to the helper; they become
+explicit `historical_image_not_analyzed` text markers so a text-only primary model never
+receives raw images or evidence attributed to the wrong turn. This avoids moving a long
+context to a smaller Vision model and keeps the historical prefix stable for upstream
+prompt-cache reuse.
 
 `takeover` preserves the original direct fallback: the untouched image request is routed to
 the Vision target and that model answers. When models.dev provides an input/context limit,

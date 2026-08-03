@@ -10,6 +10,7 @@ import (
 	"github.com/a448582655/vibe-proxy/internal/ir"
 	"github.com/a448582655/vibe-proxy/internal/modelcapability"
 	"github.com/a448582655/vibe-proxy/internal/modelresolver"
+	"github.com/a448582655/vibe-proxy/internal/sensitive"
 )
 
 type ValidationIssue struct {
@@ -182,12 +183,7 @@ func validateObservability(cfg ObservabilityConfig) []ValidationIssue {
 }
 
 func isSensitiveHeader(header string) bool {
-	switch strings.ToLower(strings.TrimSpace(header)) {
-	case "authorization", "proxy-authorization", "cookie", "set-cookie", "x-api-key":
-		return true
-	default:
-		return false
-	}
+	return sensitive.IsCredentialName(header)
 }
 
 func isValidHTTPHeaderName(name string) bool {

@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/a448582655/vibe-proxy/internal/sensitive"
 )
 
 type CaptureMode string
@@ -154,12 +156,7 @@ func captureHeaders(source http.Header, allowlist []string) http.Header {
 }
 
 func sensitiveCaptureHeader(name string) bool {
-	switch strings.ToLower(strings.TrimSpace(name)) {
-	case "authorization", "proxy-authorization", "cookie", "set-cookie", "x-api-key":
-		return true
-	default:
-		return false
-	}
+	return sensitive.IsCredentialName(name)
 }
 
 func sanitizeCapturedValue(value any, key string, binaryContainer, captureReasoning bool) (any, int) {
@@ -221,17 +218,7 @@ func reasoningCaptureKey(key string) bool {
 }
 
 func sensitiveCaptureKey(key string) bool {
-	normalized := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(key), "-", "_"))
-	switch normalized {
-	case "authorization", "proxy_authorization", "cookie", "set_cookie", "api_key", "apikey", "token", "access_token", "refresh_token", "password", "passwd", "secret", "client_secret":
-		return true
-	}
-	for _, suffix := range []string{"_api_key", "_token", "_password", "_secret"} {
-		if strings.HasSuffix(normalized, suffix) {
-			return true
-		}
-	}
-	return false
+	return sensitive.IsCredentialName(key)
 }
 
 func describesBinaryPayload(value map[string]any) bool {

@@ -68,6 +68,43 @@ func TestCaptureStructuredRedactsSecretsHeadersAndImageData(t *testing.T) {
 	}
 }
 
+func TestCaptureStructuredRedactsCredentialLikeNames(t *testing.T) {
+	body := []byte(`{
+		"private_key":"private-key-secret",
+		"credentials":"credential-secret",
+		"clientSecret":"client-secret",
+		"max_tokens":1024,
+		"prompt":"keep me"
+	}`)
+	headers := http.Header{
+		"X-Auth-Token":    []string{"auth-token-secret"},
+		"Api-Key":         []string{"api-key-secret"},
+		"X-Client-Secret": []string{"header-client-secret"},
+		"X-Request-Id":    []string{"request-123"},
+	}
+	result := CapturePayload(body, headers, CapturePolicy{
+		Mode:             CaptureModeStructured,
+		MaxSnapshotBytes: 4096,
+		HeaderAllowlist:  []string{"x-auth-token", "api-key", "x-client-secret", "x-request-id"},
+	}, "")
+
+	if result.Status != CaptureStatusRedacted {
+		t.Fatalf("capture status = %+v", result)
+	}
+	got := string(result.Body)
+	for _, secret := range []string{"private-key-secret", "credential-secret", "client-secret", "auth-token-secret", "api-key-secret", "header-client-secret"} {
+		if strings.Contains(got, secret) {
+			t.Fatalf("capture leaked %q: %s", secret, got)
+		}
+	}
+	if !strings.Contains(got, `"max_tokens":1024`) || !strings.Contains(got, `"prompt":"keep me"`) {
+		t.Fatalf("capture redacted non-credential fields: %s", got)
+	}
+	if len(result.Headers) != 1 || result.Headers.Get("X-Request-Id") != "request-123" {
+		t.Fatalf("credential-like headers captured or safe header lost: %#v", result.Headers)
+	}
+}
+
 func TestCaptureRawStillAppliesMandatoryRedaction(t *testing.T) {
 	result := CapturePayload([]byte(`{"token":"secret","value":"visible"}`), nil, CapturePolicy{
 		Mode:             CaptureModeRaw,

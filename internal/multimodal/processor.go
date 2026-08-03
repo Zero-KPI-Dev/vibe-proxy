@@ -306,7 +306,7 @@ func (p *Processor) applyVisionFallback(ctx context.Context, result preprocess.R
 	}
 
 	helper, question := BuildVisionAssistRequest(req, fallback, p.VisionMaxPromptChars, p.VisionMaxOutputTokens)
-	identities, identityErr := imageIdentities(req, p.ImageLimits)
+	identities, identityErr := visionAssistImageIdentities(req, p.ImageLimits)
 	if identityErr != nil {
 		result.Decisions = []preprocess.Decision{{Processor: p.Name(), Route: string(RouteRejected), Reason: gatewayErrorCode(identityErr), Attributes: attributes}}
 		return result, identityErr

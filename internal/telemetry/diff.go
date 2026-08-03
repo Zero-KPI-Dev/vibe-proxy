@@ -98,7 +98,7 @@ func SelectDiffBase(current Event, candidates []Event, explicitRequestID string)
 		return base, "explicit", ok && base.RequestID != current.RequestID
 	}
 	if current.ParentRequestID != "" {
-		if base, ok := byID[current.ParentRequestID]; ok {
+		if base, ok := byID[current.ParentRequestID]; ok && current.SessionID != "" && base.SessionID == current.SessionID {
 			return base, "parent", true
 		}
 	}
@@ -108,15 +108,28 @@ func SelectDiffBase(current Event, candidates []Event, explicitRequestID string)
 		if candidate.RequestID == current.RequestID || current.SessionID == "" || candidate.SessionID != current.SessionID {
 			continue
 		}
-		if compareEventPosition(candidate, current) >= 0 {
+		if candidate.CompletedAt == nil || candidate.CompletedAt.After(current.StartedAt) {
 			continue
 		}
-		if !found || compareEventPosition(candidate, previous) > 0 {
+		if !found || completedEventAfter(candidate, previous) {
 			previous = candidate
 			found = true
 		}
 	}
 	return previous, "previous", found
+}
+
+func completedEventAfter(left, right Event) bool {
+	if left.CompletedAt == nil {
+		return false
+	}
+	if right.CompletedAt == nil || left.CompletedAt.After(*right.CompletedAt) {
+		return true
+	}
+	if left.CompletedAt.Before(*right.CompletedAt) {
+		return false
+	}
+	return compareEventPosition(left, right) > 0
 }
 
 func compareEventPosition(left, right Event) int {

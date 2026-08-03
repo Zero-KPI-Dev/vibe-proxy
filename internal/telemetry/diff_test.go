@@ -57,10 +57,12 @@ func TestDiffCanonicalRequestsClassifiesConversationAndRouteChanges(t *testing.T
 
 func TestSelectDiffBaseUsesExplicitThenParentThenChronologicalPrevious(t *testing.T) {
 	started := time.Date(2026, time.August, 2, 12, 0, 0, 0, time.UTC)
+	completedA := started.Add(-2 * time.Second)
+	completedB := started.Add(-time.Second)
 	events := []Event{
-		{RequestID: "a", SessionID: "session-1", StartedAt: started},
-		{RequestID: "b", SessionID: "session-1", StartedAt: started},
-		{RequestID: "parent", SessionID: "other", StartedAt: started.Add(-time.Second)},
+		{RequestID: "a", SessionID: "session-1", StartedAt: started.Add(-4 * time.Second), CompletedAt: &completedA},
+		{RequestID: "b", SessionID: "session-1", StartedAt: started.Add(-3 * time.Second), CompletedAt: &completedB},
+		{RequestID: "parent", SessionID: "session-1", StartedAt: started.Add(-time.Second)},
 		{RequestID: "explicit", SessionID: "other", StartedAt: started.Add(time.Second)},
 	}
 	current := Event{RequestID: "c", SessionID: "session-1", ParentRequestID: "parent", StartedAt: started}
@@ -73,6 +75,34 @@ func TestSelectDiffBaseUsesExplicitThenParentThenChronologicalPrevious(t *testin
 	}
 	current.ParentRequestID = ""
 	if base, source, ok := SelectDiffBase(current, events, ""); !ok || base.RequestID != "b" || source != "previous" {
-		t.Fatalf("concurrent chronological selection = %+v %q %v", base, source, ok)
+		t.Fatalf("completed chronological selection = %+v %q %v", base, source, ok)
+	}
+}
+
+func TestSelectDiffBaseIgnoresOverlappingAndIncompleteRequests(t *testing.T) {
+	started := time.Date(2026, time.August, 3, 12, 0, 0, 0, time.UTC)
+	completedBefore := started.Add(-time.Second)
+	completedAfter := started.Add(time.Second)
+	events := []Event{
+		{RequestID: "completed", SessionID: "session-1", StartedAt: started.Add(-4 * time.Second), CompletedAt: &completedBefore},
+		{RequestID: "overlapping", SessionID: "session-1", StartedAt: started.Add(-2 * time.Second), CompletedAt: &completedAfter},
+		{RequestID: "incomplete", SessionID: "session-1", StartedAt: started.Add(-1500 * time.Millisecond)},
+	}
+	current := Event{RequestID: "current", SessionID: "session-1", StartedAt: started}
+
+	base, source, ok := SelectDiffBase(current, events, "")
+	if !ok || base.RequestID != "completed" || source != "previous" {
+		t.Fatalf("diff base = %+v %q %v, want completed previous request", base, source, ok)
+	}
+}
+
+func TestSelectDiffBaseRejectsCrossSessionParent(t *testing.T) {
+	started := time.Date(2026, time.August, 3, 12, 0, 0, 0, time.UTC)
+	completed := started.Add(-time.Second)
+	current := Event{RequestID: "current", SessionID: "session-1", ParentRequestID: "parent", StartedAt: started}
+	parent := Event{RequestID: "parent", SessionID: "session-2", StartedAt: started.Add(-2 * time.Second), CompletedAt: &completed}
+
+	if base, source, ok := SelectDiffBase(current, []Event{parent}, ""); ok {
+		t.Fatalf("cross-session parent selected as %q: %+v", source, base)
 	}
 }

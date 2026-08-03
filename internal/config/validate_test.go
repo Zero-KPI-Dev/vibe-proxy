@@ -364,6 +364,22 @@ func TestValidateRuntimeRejectsUnsafeObservabilityCapture(t *testing.T) {
 	}
 }
 
+func TestValidateRuntimeRejectsCredentialLikeCaptureHeaders(t *testing.T) {
+	for _, header := range []string{"x-auth-token", "api-key", "x-client-secret", "x-private-key", "x-credentials"} {
+		t.Run(header, func(t *testing.T) {
+			cfg, err := CompileSimple(SimpleConfig{Observability: ObservabilityConfig{
+				Capture: ObservabilityCaptureConfig{HeaderAllowlist: []string{header}},
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if issues := ValidateRuntime(cfg); !hasIssueCode(issues, "sensitive_capture_header") {
+				t.Fatalf("credential-like header %q was accepted: %+v", header, issues)
+			}
+		})
+	}
+}
+
 func TestValidateRuntimeWarnsForRawObservabilityCapture(t *testing.T) {
 	cfg, err := CompileSimple(SimpleConfig{Observability: ObservabilityConfig{
 		Capture: ObservabilityCaptureConfig{Mode: "raw"},
