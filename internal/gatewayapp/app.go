@@ -26,6 +26,7 @@ var (
 type App struct {
 	server   *http.Server
 	database *store.SQLite
+	recorder *telemetry.AsyncRecorder
 
 	ready     chan struct{}
 	done      chan struct{}
@@ -77,7 +78,8 @@ func Start(_ context.Context, options Options) (*App, error) {
 
 	prom := sharedPrometheus()
 	recent := telemetry.NewRecentStore(200)
-	sink := metrics.MultiSink{db, prom, recent}
+	recorder := telemetry.NewAsyncRecorder(db, telemetry.DefaultRecorderCapacity)
+	sink := metrics.MultiSink{recorder, prom, recent}
 	runtimeServer := runtime.NewWithOptions(options.ConfigPath, cfg, sink, prom, options.Runtime)
 	httpServer := &http.Server{
 		Addr:         cfg.Server.Listen,
@@ -98,6 +100,9 @@ func Start(_ context.Context, options Options) (*App, error) {
 	}
 	listener, err := listen("tcp", cfg.Server.Listen)
 	if err != nil {
+		flushContext, cancel := context.WithTimeout(context.Background(), time.Second)
+		_ = recorder.Close(flushContext)
+		cancel()
 		_ = db.Close()
 		return nil, startupError("listen", cfg.Server.Listen, err)
 	}
@@ -105,6 +110,7 @@ func Start(_ context.Context, options Options) (*App, error) {
 	app := &App{
 		server:          httpServer,
 		database:        db,
+		recorder:        recorder,
 		ready:           make(chan struct{}),
 		done:            make(chan struct{}),
 		serveDone:       make(chan struct{}),
@@ -217,7 +223,13 @@ func (a *App) shutdown(ctx context.Context) {
 func (a *App) finish() {
 	a.finishOnce.Do(func() {
 		<-a.handlersDrained
-		closeErr := a.database.Close()
+		var recorderErr error
+		if a.recorder != nil {
+			flushContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			recorderErr = a.recorder.Close(flushContext)
+			cancel()
+		}
+		closeErr := errors.Join(recorderErr, a.database.Close())
 		a.mu.Lock()
 		if a.shutdownErr == nil && closeErr != nil {
 			a.shutdownErr = closeErr

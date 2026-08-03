@@ -164,7 +164,10 @@ func TestPayloadRecorderClosesGracefullyWithGateway(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := app.database.RecordPayload(telemetry.PayloadSnapshot{
+	if app.recorder == nil {
+		t.Fatal("gateway did not attach the bounded observability recorder")
+	}
+	if err := app.recorder.RecordPayload(telemetry.PayloadSnapshot{
 		RequestID: "request-1", Stage: telemetry.PayloadStageClientRequest, SchemaVersion: 1,
 		CaptureMode: telemetry.CaptureModeStructured, CaptureStatus: telemetry.CaptureStatusCaptured,
 		Body: []byte(`{"prompt":"hello"}`), StoredBytes: 18, CreatedAt: time.Now(),

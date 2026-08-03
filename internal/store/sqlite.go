@@ -85,6 +85,10 @@ func (s *SQLite) RequestStarted(e telemetry.Event) {}
 func (s *SQLite) Token(e telemetry.Event)          {}
 
 func (s *SQLite) RequestFinished(e telemetry.Event) {
+	_ = s.RecordRequest(e)
+}
+
+func (s *SQLite) RecordRequest(e telemetry.Event) error {
 	var first, completed any
 	if e.FirstTokenAt != nil {
 		first = sqliteTime(*e.FirstTokenAt)
@@ -126,7 +130,8 @@ func (s *SQLite) RequestFinished(e telemetry.Event) {
 		e.CaptureMode, e.CaptureStatus, e.CaptureTruncated, e.RedactionCount,
 	}
 	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(columns)), ",")
-	_, _ = s.db.Exec(`INSERT OR REPLACE INTO request_logs (`+strings.Join(columns, ",")+`) VALUES (`+placeholders+`)`, values...)
+	_, err := s.db.Exec(`INSERT OR REPLACE INTO request_logs (`+strings.Join(columns, ",")+`) VALUES (`+placeholders+`)`, values...)
+	return err
 }
 
 func (s *SQLite) ConfigurePayloadStorage(retention time.Duration, maxBytes int64) error {
