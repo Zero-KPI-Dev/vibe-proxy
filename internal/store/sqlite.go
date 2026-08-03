@@ -25,6 +25,18 @@ type SQLite struct {
 	payloadQuota     int64
 }
 
+// payloadQuotaBytesSQL counts all variable-size captured content retained in a
+// payload row. stored_bytes intentionally remains the body-size field exposed
+// by the API; headers and diagnostic metadata are added only for quota
+// enforcement. CAST(... AS BLOB) makes SQLite count UTF-8 bytes, not runes.
+const payloadQuotaBytesSQL = `(COALESCE(CASE WHEN stored_bytes > 0 THEN stored_bytes ELSE length(body_blob) END, 0)
+	+ COALESCE(length(CAST(headers_json AS BLOB)), 0)
+	+ COALESCE(length(CAST(capture_error AS BLOB)), 0)
+	+ COALESCE(length(CAST(media_type AS BLOB)), 0)
+	+ COALESCE(length(CAST(content_encoding AS BLOB)), 0)
+	+ COALESCE(length(CAST(truncation_reason AS BLOB)), 0)
+	+ COALESCE(length(CAST(sha256 AS BLOB)), 0))`
+
 func Open(path string) (*SQLite, error) {
 	dsn, err := sqliteDSN(path)
 	if err != nil {
@@ -307,11 +319,11 @@ WHERE request_id IN (
 		return err
 	}
 	var total int64
-	if err := tx.QueryRow(`SELECT COALESCE(SUM(CASE WHEN stored_bytes > 0 THEN stored_bytes ELSE length(body_blob) END), 0) FROM payload_snapshots`).Scan(&total); err != nil {
+	if err := tx.QueryRow(`SELECT COALESCE(SUM(` + payloadQuotaBytesSQL + `), 0) FROM payload_snapshots`).Scan(&total); err != nil {
 		return err
 	}
 	if maxBytes >= 0 && total > maxBytes {
-		rows, err := tx.Query(`SELECT request_id, stage, COALESCE(CASE WHEN stored_bytes > 0 THEN stored_bytes ELSE length(body_blob) END, 0)
+		rows, err := tx.Query(`SELECT request_id, stage, ` + payloadQuotaBytesSQL + `
 FROM payload_snapshots ORDER BY created_at, request_id, stage`)
 		if err != nil {
 			return err

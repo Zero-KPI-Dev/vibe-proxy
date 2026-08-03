@@ -76,6 +76,48 @@ func TestVisionAssistCacheIdentityIgnoresHistoricalImages(t *testing.T) {
 	}
 }
 
+func TestEstimateRequestTokensIncludesNonMessageContext(t *testing.T) {
+	imageData := strings.Repeat("a", 32*1024)
+	request := &ir.Request{
+		RequestedModel: "vision-model",
+		Messages: []ir.Message{{Role: ir.RoleUser, Content: []ir.ContentBlock{
+			{Type: ir.ContentText, Text: "analyze"},
+			{Type: ir.ContentImage, Image: &ir.ImageContent{MediaType: "image/png", Base64: imageData}},
+			{Type: ir.ContentToolResult, ToolResult: &ir.ToolResult{ToolCallID: "call-1", Content: []ir.ContentBlock{
+				{Type: ir.ContentText, Text: strings.Repeat("result", 1024)},
+			}}},
+		}}},
+		Tools: []ir.Tool{{
+			Name: "large-tool", Description: strings.Repeat("description", 8192),
+			Parameters: json.RawMessage(`{"type":"object","properties":{"query":{"type":"string"}}}`),
+		}},
+		ToolChoice:     &ir.ToolChoice{Type: "function", Name: "large-tool"},
+		ResponseFormat: &ir.ResponseFormat{Type: "json_schema", JSONSchema: json.RawMessage(`{"type":"object","required":["answer"]}`)},
+		Stop:           []string{"END"},
+		Metadata:       map[string]string{"conversation": strings.Repeat("metadata", 1024)},
+		VendorExtensions: map[string]any{
+			"provider_context": strings.Repeat("extension", 1024),
+		},
+	}
+
+	estimated := estimateRequestTokens(request)
+	if estimated < 25_000 {
+		t.Fatalf("non-message context was not included in takeover estimate: %d", estimated)
+	}
+	if request.Messages[0].Content[1].Image.Base64 != imageData {
+		t.Fatal("token estimation mutated the original image payload")
+	}
+	withoutContext := *request
+	withoutContext.Tools = nil
+	withoutContext.ToolChoice = nil
+	withoutContext.ResponseFormat = nil
+	withoutContext.Metadata = nil
+	withoutContext.VendorExtensions = nil
+	if smaller := estimateRequestTokens(&withoutContext); smaller >= estimated {
+		t.Fatalf("removing non-message context did not reduce estimate: full=%d reduced=%d", estimated, smaller)
+	}
+}
+
 func messageTextForTest(message ir.Message) string {
 	var text strings.Builder
 	for _, block := range message.Content {

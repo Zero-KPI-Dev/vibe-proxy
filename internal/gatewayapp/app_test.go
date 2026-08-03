@@ -191,6 +191,89 @@ func TestPayloadRecorderClosesGracefullyWithGateway(t *testing.T) {
 	}
 }
 
+func TestGatewayEnforcesConfiguredRetentionAtStartupAndPeriodically(t *testing.T) {
+	directory := t.TempDir()
+	databasePath := filepath.Join(directory, "observability.db")
+	database, err := store.Open(databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.RecordRequest(telemetry.Event{
+		RequestID: "expired-before-start", StartedAt: time.Now().UTC().Add(-48 * time.Hour), StatusCode: 200,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	configPath := filepath.Join(directory, "config.yaml")
+	config := "version: vibeproxy.io/v1alpha1\n" +
+		"server:\n  listen: 127.0.0.1:0\n" +
+		"storage:\n  sqlite_path: " + filepath.ToSlash(databasePath) + "\n  retention_days: 14\n" +
+		"observability:\n  retention:\n    summaries_days: 1\n    content_days: 1\n    max_content_storage_mb: 1\n" +
+		"models:\n  allow_raw: true\nproviders: {}\n"
+	if err := os.WriteFile(configPath, []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	app, err := Start(context.Background(), Options{
+		ConfigPath: configPath, RetentionSweepInterval: 10 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := app.Shutdown(ctx); err != nil {
+			t.Errorf("shutdown: %v", err)
+		}
+	}()
+
+	page, err := app.database.QueryRequests(telemetry.RequestQuery{Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Items) != 0 {
+		t.Fatalf("startup retained summaries older than observability policy: %+v", page.Items)
+	}
+
+	now := time.Now().UTC()
+	if err := app.database.RecordRequest(telemetry.Event{
+		RequestID: "expired-periodically", StartedAt: now.Add(-48 * time.Hour), StatusCode: 200,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.database.RecordRequest(telemetry.Event{
+		RequestID: "payload-periodically", StartedAt: now, StatusCode: 200,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.database.RecordPayload(telemetry.PayloadSnapshot{
+		RequestID: "payload-periodically", Stage: telemetry.PayloadStageClientRequest,
+		CaptureMode: telemetry.CaptureModeStructured, CaptureStatus: telemetry.CaptureStatusCaptured,
+		Body: []byte(`{"prompt":"short lived"}`), CreatedAt: now, ExpiresAt: now.Add(30 * time.Millisecond),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		page, queryErr := app.database.QueryRequests(telemetry.RequestQuery{Limit: 10, Query: "expired-periodically"})
+		payloads, payloadErr := app.database.PayloadSnapshots("payload-periodically")
+		if queryErr != nil || payloadErr != nil {
+			t.Fatalf("query during retention sweep: requests=%v payloads=%v", queryErr, payloadErr)
+		}
+		if len(page.Items) == 0 && len(payloads) == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("periodic retention did not remove summary/payload: summaries=%d payloads=%d", len(page.Items), len(payloads))
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func writeTestConfig(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "config.yaml")

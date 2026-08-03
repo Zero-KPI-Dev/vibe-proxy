@@ -647,6 +647,43 @@ func TestSQLiteExpiresAndEvictsPayloadsBeforeSummaries(t *testing.T) {
 	}
 }
 
+func TestSQLitePayloadQuotaIncludesHeadersAndDiagnosticMetadata(t *testing.T) {
+	database, err := Open(filepath.Join(t.TempDir(), "header-quota.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	for index, requestID := range []string{"old", "new"} {
+		created := now.Add(time.Duration(index) * time.Second)
+		if err := database.RecordRequest(telemetry.Event{RequestID: requestID, StartedAt: created, StatusCode: 200}); err != nil {
+			t.Fatal(err)
+		}
+		if err := database.RecordPayload(telemetry.PayloadSnapshot{
+			RequestID: requestID, Stage: telemetry.PayloadStageClientRequest, SchemaVersion: 1,
+			CaptureMode: telemetry.CaptureModeStructured, CaptureStatus: telemetry.CaptureStatusCaptured,
+			MediaType: "application/json", Body: []byte(`{}`), StoredBytes: 2,
+			Headers: http.Header{"X-Debug": []string{strings.Repeat(requestID, 256)}},
+			Error:   strings.Repeat("diagnostic-", 16), CreatedAt: created, ExpiresAt: now.Add(time.Hour),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Both bodies fit comfortably in this quota, but the captured headers and
+	// diagnostic text do not. The oldest complete payload row must be evicted.
+	if err := database.PrunePayloads(now, 1500); err != nil {
+		t.Fatal(err)
+	}
+	if payloads, err := database.PayloadSnapshots("old"); err != nil || len(payloads) != 0 {
+		t.Fatalf("oldest header-heavy payload was not quota-evicted: %+v err=%v", payloads, err)
+	}
+	if payloads, err := database.PayloadSnapshots("new"); err != nil || len(payloads) != 1 {
+		t.Fatalf("newest payload should remain after quota eviction: %+v err=%v", payloads, err)
+	}
+}
+
 func TestSQLiteQueryRequestsUsesStableCursorAndFilters(t *testing.T) {
 	database, err := Open(filepath.Join(t.TempDir(), "query.db"))
 	if err != nil {

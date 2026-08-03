@@ -11,7 +11,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	"github.com/a448582655/vibe-proxy/internal/ir"
 	"github.com/a448582655/vibe-proxy/internal/modelresolver"
@@ -312,19 +311,64 @@ func (c *VisionCache) removeVisionElement(element *list.Element) {
 }
 
 func estimateRequestTokens(req *ir.Request) int64 {
-	var runes int
-	images := 0
-	for _, message := range req.Messages {
-		for _, block := range message.Content {
-			switch block.Type {
-			case ir.ContentText:
-				runes += utf8.RuneCountInString(block.Text)
-			case ir.ContentImage:
-				images++
-			}
+	if req == nil {
+		return 0
+	}
+	sanitized := *req
+	var images int
+	sanitized.Messages = append([]ir.Message(nil), req.Messages...)
+	for messageIndex := range sanitized.Messages {
+		blocks, imageCount := blocksForTokenEstimate(req.Messages[messageIndex].Content)
+		sanitized.Messages[messageIndex].Content = blocks
+		images += imageCount
+	}
+	raw, err := json.Marshal(sanitized)
+	if err != nil {
+		// Provider encoding will also reject non-JSON values. Keep the preflight
+		// conservative enough for the image budget even when serialization fails.
+		return int64(images * 1024)
+	}
+	// Count the complete provider-facing canonical request so tools, tool
+	// calls/results, schemas, stop sequences, metadata, and vendor extensions
+	// cannot bypass the takeover context guard. Image payload bytes are scrubbed
+	// before marshaling and represented by a conservative fixed token budget.
+	asciiBytes := 0
+	nonASCIIRunes := 0
+	for _, value := range string(raw) {
+		if value <= 0x7f {
+			asciiBytes++
+		} else {
+			nonASCIIRunes++
 		}
 	}
-	// Deliberately conservative approximation for a preflight guard. Explicit
-	// takeover is rejected only when known catalog limits are clearly exceeded.
-	return int64((runes+3)/4 + images*1024)
+	// English and JSON syntax average roughly four bytes per token. Non-ASCII
+	// text (notably CJK and emoji) is budgeted more conservatively because it
+	// commonly consumes one or more tokens per rune.
+	textTokens := (asciiBytes+3)/4 + nonASCIIRunes*2
+	return int64(textTokens + images*1024)
+}
+
+func blocksForTokenEstimate(source []ir.ContentBlock) ([]ir.ContentBlock, int) {
+	blocks := append([]ir.ContentBlock(nil), source...)
+	images := 0
+	for index := range blocks {
+		block := &blocks[index]
+		if block.Type == ir.ContentImage && block.Image != nil {
+			images++
+			image := *block.Image
+			image.Base64 = ""
+			if strings.HasPrefix(strings.ToLower(image.URL), "data:") {
+				image.URL = ""
+			}
+			block.Image = &image
+		}
+		if block.ToolResult != nil {
+			toolResult := *block.ToolResult
+			var nestedImages int
+			toolResult.Content, nestedImages = blocksForTokenEstimate(block.ToolResult.Content)
+			images += nestedImages
+			block.ToolResult = &toolResult
+		}
+	}
+	return blocks, images
 }

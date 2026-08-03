@@ -22,11 +22,16 @@ var (
 	prometheusSink *metrics.Prometheus
 )
 
+const defaultRetentionSweepInterval = time.Hour
+
 // App is a running gateway and the resources it owns.
 type App struct {
 	server   *http.Server
 	database *store.SQLite
 	recorder *telemetry.AsyncRecorder
+
+	retentionCancel context.CancelFunc
+	retentionDone   chan struct{}
 
 	ready     chan struct{}
 	done      chan struct{}
@@ -64,7 +69,7 @@ func Start(_ context.Context, options Options) (*App, error) {
 	if err != nil {
 		return nil, startupError("database", cfg.Server.Listen, err)
 	}
-	if err := db.Retain(cfg.Storage.RetentionDays); err != nil {
+	if err := db.Retain(cfg.Observability.Retention.SummariesDays); err != nil {
 		_ = db.Close()
 		return nil, startupError("database", cfg.Server.Listen, err)
 	}
@@ -115,12 +120,25 @@ func Start(_ context.Context, options Options) (*App, error) {
 		done:            make(chan struct{}),
 		serveDone:       make(chan struct{}),
 		handlersDrained: make(chan struct{}),
+		retentionDone:   make(chan struct{}),
 		status: Status{
 			State:     StateStarting,
 			Address:   listener.Addr().String(),
 			StartedAt: time.Now(),
 		},
 	}
+	retentionContext, retentionCancel := context.WithCancel(context.Background())
+	app.retentionCancel = retentionCancel
+	retentionInterval := options.RetentionSweepInterval
+	if retentionInterval <= 0 {
+		retentionInterval = defaultRetentionSweepInterval
+	}
+	go app.runRetention(
+		retentionContext,
+		cfg.Observability.Retention.SummariesDays,
+		int64(cfg.Observability.Retention.MaxContentStorageMB)<<20,
+		retentionInterval,
+	)
 	httpServer.Handler = app.trackHandlers(runtimeServer.Routes())
 	app.setState(StateRunning, nil)
 	close(app.ready)
@@ -223,6 +241,10 @@ func (a *App) shutdown(ctx context.Context) {
 func (a *App) finish() {
 	a.finishOnce.Do(func() {
 		<-a.handlersDrained
+		if a.retentionCancel != nil {
+			a.retentionCancel()
+			<-a.retentionDone
+		}
 		var recorderErr error
 		if a.recorder != nil {
 			flushContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -247,6 +269,23 @@ func (a *App) finish() {
 		a.mu.Unlock()
 		close(a.done)
 	})
+}
+
+func (a *App) runRetention(ctx context.Context, summaryDays int, payloadQuotaBytes int64, interval time.Duration) {
+	defer close(a.retentionDone)
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			// Retention is best-effort maintenance. A transient busy database must
+			// not terminate the gateway; the next sweep retries both policies.
+			_ = a.database.Retain(summaryDays)
+			_ = a.database.PrunePayloads(time.Now().UTC(), payloadQuotaBytes)
+		}
+	}
 }
 
 func (a *App) trackHandlers(next http.Handler) http.Handler {
