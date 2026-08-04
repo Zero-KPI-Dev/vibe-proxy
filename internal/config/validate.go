@@ -218,9 +218,11 @@ func validateAgentProfiles(profiles []AgentProfileConfig) []ValidationIssue {
 			}
 			if strings.HasPrefix(detector, "header.") {
 				header := strings.ToLower(strings.TrimPrefix(detector, "header."))
-				switch header {
-				case "authorization", "proxy-authorization", "cookie", "set-cookie", "x-api-key":
+				if sensitive.IsCredentialName(header) {
 					issues = append(issues, issue("error", detectorPath, "sensitive_agent_detector", "Sensitive credential headers cannot classify an Agent."))
+				}
+				if !isValidHTTPHeaderName(header) || len(header) > 100 {
+					issues = append(issues, issue("error", detectorPath, "invalid_agent_detector_header", "Agent detector headers must be valid HTTP field names of at most 100 characters."))
 				}
 			}
 			if strings.TrimSpace(pattern) == "" || len(pattern) > 200 {

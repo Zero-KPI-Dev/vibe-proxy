@@ -36,7 +36,7 @@ func TestAsyncRecorderEvictsPayloadsBeforeObservationsAndSummaries(t *testing.T)
 	}
 
 	got := sink.operations()
-	want := []string{"payload:first", "summary:summary", "observation:observation"}
+	want := []string{"payload:first:captured", "summary:summary", "payload:evicted:dropped", "observation:observation"}
 	if len(got) != len(want) {
 		t.Fatalf("operations = %v, want %v", got, want)
 	}
@@ -82,7 +82,11 @@ func (s *blockingRecorderSink) RecordPayload(snapshot PayloadSnapshot) error {
 		s.once.Do(func() { close(s.entered) })
 		<-s.release
 	}
-	s.append("payload:" + snapshot.RequestID)
+	status := snapshot.CaptureStatus
+	if status == "" {
+		status = CaptureStatusCaptured
+	}
+	s.append("payload:" + snapshot.RequestID + ":" + status)
 	return nil
 }
 func (s *blockingRecorderSink) RecordObservation(observation TraceObservation) error {

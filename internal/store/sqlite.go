@@ -142,8 +142,20 @@ func (s *SQLite) RecordRequest(e telemetry.Event) error {
 		e.CaptureMode, e.CaptureStatus, e.CaptureTruncated, e.RedactionCount,
 	}
 	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(columns)), ",")
-	_, err := s.db.Exec(`INSERT OR REPLACE INTO request_logs (`+strings.Join(columns, ",")+`) VALUES (`+placeholders+`)`, values...)
-	return err
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.Exec(`INSERT OR REPLACE INTO request_logs (`+strings.Join(columns, ",")+`) VALUES (`+placeholders+`)`, values...); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`UPDATE request_logs SET capture_status = ? WHERE request_id = ? AND EXISTS (
+		SELECT 1 FROM payload_snapshots WHERE request_id = ? AND capture_status = ?
+	)`, telemetry.CaptureStatusDropped, e.RequestID, e.RequestID, telemetry.CaptureStatusDropped); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *SQLite) ConfigurePayloadStorage(retention time.Duration, maxBytes int64) error {
@@ -178,11 +190,20 @@ func (s *SQLite) RecordPayload(snapshot telemetry.PayloadSnapshot) error {
 	if snapshot.StoredBytes == 0 && len(snapshot.Body) > 0 {
 		snapshot.StoredBytes = len(snapshot.Body)
 	}
-	headersJSON, err := json.Marshal(snapshot.Headers)
+	headersJSON := []byte(nil)
+	if len(snapshot.Headers) > 0 {
+		var err error
+		headersJSON, err = json.Marshal(snapshot.Headers)
+		if err != nil {
+			return err
+		}
+	}
+	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
-	_, err = s.db.Exec(`INSERT OR REPLACE INTO payload_snapshots (
+	defer func() { _ = tx.Rollback() }()
+	_, err = tx.Exec(`INSERT OR REPLACE INTO payload_snapshots (
 request_id, stage, schema_version, capture_mode, capture_status, media_type, content_encoding,
 body_blob, original_bytes, stored_bytes, truncated, truncation_reason, redaction_count, sha256,
 headers_json, capture_error, created_at, expires_at
@@ -193,6 +214,14 @@ headers_json, capture_error, created_at, expires_at
 		string(headersJSON), snapshot.Error, sqliteTime(snapshot.CreatedAt), sqliteTime(snapshot.ExpiresAt),
 	)
 	if err != nil {
+		return err
+	}
+	if snapshot.CaptureStatus == telemetry.CaptureStatusDropped {
+		if _, err := tx.Exec(`UPDATE request_logs SET capture_status = ? WHERE request_id = ?`, telemetry.CaptureStatusDropped, snapshot.RequestID); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
 		return err
 	}
 	if quota > 0 {
@@ -324,7 +353,7 @@ WHERE request_id IN (
 	}
 	if maxBytes >= 0 && total > maxBytes {
 		rows, err := tx.Query(`SELECT request_id, stage, ` + payloadQuotaBytesSQL + `
-FROM payload_snapshots ORDER BY created_at, request_id, stage`)
+FROM payload_snapshots WHERE ` + payloadQuotaBytesSQL + ` > 0 ORDER BY created_at, request_id, stage`)
 		if err != nil {
 			return err
 		}
@@ -347,7 +376,10 @@ FROM payload_snapshots ORDER BY created_at, request_id, stage`)
 			return err
 		}
 		for _, item := range candidates {
-			if _, err := tx.Exec(`DELETE FROM payload_snapshots WHERE request_id = ? AND stage = ?`, item.requestID, item.stage); err != nil {
+			if _, err := tx.Exec(`UPDATE payload_snapshots SET
+				capture_status = ?, media_type = '', content_encoding = '', body_blob = NULL, stored_bytes = 0,
+				truncated = 0, truncation_reason = '', redaction_count = 0, sha256 = '', headers_json = '', capture_error = ''
+				WHERE request_id = ? AND stage = ?`, telemetry.CaptureStatusDropped, item.requestID, item.stage); err != nil {
 				return err
 			}
 			if _, err := tx.Exec(`UPDATE request_logs SET capture_status = ? WHERE request_id = ?`, telemetry.CaptureStatusDropped, item.requestID); err != nil {
@@ -371,6 +403,7 @@ func (s *SQLite) Retain(days int) error {
 	for _, statement := range []string{
 		`DELETE FROM payload_snapshots WHERE request_id IN (SELECT request_id FROM request_logs WHERE started_at < ?)`,
 		`DELETE FROM trace_observations WHERE request_id IN (SELECT request_id FROM request_logs WHERE started_at < ?)`,
+		`DELETE FROM trace_observations WHERE started_at < ?`,
 		`DELETE FROM request_logs WHERE started_at < ?`,
 	} {
 		if _, err := tx.Exec(statement, cutoff); err != nil {

@@ -174,6 +174,33 @@ func TestRuntimeRecordsPayloadStagesAndIgnoresRecorderFailure(t *testing.T) {
 	}
 }
 
+func TestRuntimeMarksDisabledResponseCaptureAsNotCaptured(t *testing.T) {
+	sink := &observabilityRecordingSink{}
+	s := newObservabilityTestServer(t, sink, func(r *http.Request) (*http.Response, error) {
+		return jsonResponse(http.StatusOK, `{"id":"chatcmpl-1","model":"raw-chat","choices":[{"message":{"role":"assistant","content":"world"},"finish_reason":"stop"}]}`), nil
+	})
+	cfg := *s.current().Config
+	cfg.Observability.Capture.CaptureResponse = false
+	s.applyRuntimeConfig(&cfg)
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"vibe-fast","messages":[{"role":"user","content":"hello"}]}`))
+	request.Header.Set("Authorization", "Bearer vibe-local-dev-key")
+	response := httptest.NewRecorder()
+	s.Routes().ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("response: %d %s", response.Code, response.Body.String())
+	}
+	for _, payload := range sink.payloads {
+		if payload.Stage == telemetry.PayloadStageCanonicalResponse {
+			if payload.CaptureStatus != telemetry.CaptureStatusNotCaptured || len(payload.Body) != 0 || payload.MediaType != "" {
+				t.Fatalf("disabled response capture was not explicit: %+v", payload)
+			}
+			return
+		}
+	}
+	t.Fatalf("missing not-captured response marker: %+v", sink.payloads)
+}
+
 func TestRuntimeStreamingCaptureStoresCanonicalResponseNotSSE(t *testing.T) {
 	sink := &observabilityRecordingSink{}
 	s := newObservabilityTestServer(t, sink, func(r *http.Request) (*http.Response, error) {

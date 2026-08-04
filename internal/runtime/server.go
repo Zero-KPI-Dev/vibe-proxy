@@ -67,6 +67,7 @@ type Server struct {
 	desktopSessions    *auth.DesktopSessionStore
 	passwordAuth       *auth.PasswordAuth
 	desktopController  desktopbridge.Controller
+	onConfigApplied    func(*config.RuntimeConfig)
 }
 
 // New builds a runtime server with the default options.
@@ -90,7 +91,7 @@ func NewWithOptions(cfgPath string, cfg *config.RuntimeConfig, sink telemetry.Ev
 	if provider, ok := sink.(telemetry.ObservabilityReaderProvider); ok {
 		observability = provider.ObservabilityReader()
 	}
-	s := &Server{cfgPath: cfgPath, startedAt: time.Now(), authenticator: auth.NewAuthenticator(), httpClient: &http.Client{Timeout: 0}, ocrHTTPClient: &http.Client{}, builtinOCR: ocr.NewBuiltinProvider(), metrics: prom, sink: sink, recent: recent, observability: observability, catalog: modelcatalog.NewService(modelcatalog.Options{CachePath: modelCatalogCachePath(cfgPath, cfg)}), clientAdapters: []protocol.ClientAdapter{clientopenai.ChatAdapter{}, clientopenai.ResponsesAdapter{}, clientanthropic.MessagesAdapter{}}, providerAdapters: map[string]protocol.ProviderAdapter{"anthropic": provideranthropic.Provider{}, "openai-compatible": provideropenai.Provider{}}, adminTokenOverride: options.AdminTokenOverride, desktopSessions: options.DesktopSessions, passwordAuth: options.PasswordAuth, desktopController: options.DesktopController}
+	s := &Server{cfgPath: cfgPath, startedAt: time.Now(), authenticator: auth.NewAuthenticator(), httpClient: &http.Client{Timeout: 0}, ocrHTTPClient: &http.Client{}, builtinOCR: ocr.NewBuiltinProvider(), metrics: prom, sink: sink, recent: recent, observability: observability, catalog: modelcatalog.NewService(modelcatalog.Options{CachePath: modelCatalogCachePath(cfgPath, cfg)}), clientAdapters: []protocol.ClientAdapter{clientopenai.ChatAdapter{}, clientopenai.ResponsesAdapter{}, clientanthropic.MessagesAdapter{}}, providerAdapters: map[string]protocol.ProviderAdapter{"anthropic": provideranthropic.Provider{}, "openai-compatible": provideropenai.Provider{}}, adminTokenOverride: options.AdminTokenOverride, desktopSessions: options.DesktopSessions, passwordAuth: options.PasswordAuth, desktopController: options.DesktopController, onConfigApplied: options.OnConfigApplied}
 	s.applyRuntimeConfig(cfg)
 	return s
 }
@@ -131,6 +132,9 @@ func (s *Server) applyRuntimeConfig(cfg *config.RuntimeConfig) {
 		_ = s.catalog.SetProxyURL(cfg.ModelCatalog.ProxyURL)
 	}
 	s.snapshot.Store(s.buildSnapshot(cfg))
+	if s.onConfigApplied != nil {
+		s.onConfigApplied(cfg)
+	}
 }
 
 func (s *Server) buildSnapshot(cfg *config.RuntimeConfig) *Snapshot {
@@ -359,6 +363,15 @@ func (s *Server) handleWithClient(w http.ResponseWriter, r *http.Request, truste
 		result := captureBudget.CaptureValue(value, nil, snap.CapturePolicy, captureOverride)
 		recordCaptureResult(stage, result, "application/json")
 	}
+	recordCanonicalResponse := func(value any) {
+		if snap.CapturePolicy.CaptureResponse {
+			recordCaptureValue(telemetry.PayloadStageCanonicalResponse, value)
+			return
+		}
+		recordCaptureResult(telemetry.PayloadStageCanonicalResponse, telemetry.CaptureResult{
+			Mode: effectiveCaptureMode, Status: telemetry.CaptureStatusNotCaptured,
+		}, "")
+	}
 	w.Header().Set("X-Vibe-Proxy-Request-ID", requestID)
 	w.Header().Set("X-Vibe-Proxy-Trace-ID", identity.TraceID)
 	finishError := func(gatewayError ir.GatewayError) {
@@ -561,9 +574,7 @@ func (s *Server) handleWithClient(w http.ResponseWriter, r *http.Request, truste
 		streamStatsMu.Unlock()
 		canonicalResponse := streamAccumulator.Response()
 		tracker.Event.RequestShape = telemetry.MergeResponseShape(tracker.Event.RequestShape, telemetry.SummarizeResponseShape(canonicalResponse))
-		if snap.CapturePolicy.CaptureResponse {
-			recordCaptureValue(telemetry.PayloadStageCanonicalResponse, canonicalResponse)
-		}
+		recordCanonicalResponse(canonicalResponse)
 		tracker.Event.Usage = toTelemetryUsage(finalStreamStats.Usage)
 		if !finalStreamStats.FirstTokenAt.IsZero() {
 			firstTokenAt := finalStreamStats.FirstTokenAt
@@ -591,9 +602,7 @@ func (s *Server) handleWithClient(w http.ResponseWriter, r *http.Request, truste
 	tracker.Event.UpstreamRequestID = out.ID
 	tracker.Event.FinishReason = out.StopReason
 	tracker.Event.RequestShape = telemetry.MergeResponseShape(tracker.Event.RequestShape, telemetry.SummarizeResponseShape(out))
-	if snap.CapturePolicy.CaptureResponse {
-		recordCaptureValue(telemetry.PayloadStageCanonicalResponse, out)
-	}
+	recordCanonicalResponse(out)
 	if err := clientAdapter.EncodeUnary(ctx, w, out); err != nil {
 		ge := errorToIR(err)
 		finishUpstreamObservation("error", ge.Code)

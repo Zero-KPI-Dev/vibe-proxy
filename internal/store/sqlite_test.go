@@ -635,8 +635,8 @@ func TestSQLiteExpiresAndEvictsPayloadsBeforeSummaries(t *testing.T) {
 	if payloads, err := database.PayloadSnapshots("expired"); err != nil || len(payloads) != 0 {
 		t.Fatalf("expired payload remains: %+v err=%v", payloads, err)
 	}
-	if payloads, err := database.PayloadSnapshots("old"); err != nil || len(payloads) != 0 {
-		t.Fatalf("oldest payload was not quota-evicted: %+v err=%v", payloads, err)
+	if payloads, err := database.PayloadSnapshots("old"); err != nil || len(payloads) != 1 || payloads[0].CaptureStatus != telemetry.CaptureStatusDropped || len(payloads[0].Body) != 0 {
+		t.Fatalf("oldest payload did not retain an explicit quota tombstone: %+v err=%v", payloads, err)
 	}
 	if payloads, err := database.PayloadSnapshots("new"); err != nil || len(payloads) != 1 {
 		t.Fatalf("newest payload missing: %+v err=%v", payloads, err)
@@ -670,17 +670,125 @@ func TestSQLitePayloadQuotaIncludesHeadersAndDiagnosticMetadata(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// Migration 4 leaves capture_status NULL on legacy rows. They must still
+	// participate in hard-quota eviction.
+	if _, err := database.db.Exec(`UPDATE payload_snapshots SET capture_status = NULL WHERE request_id = 'old'`); err != nil {
+		t.Fatal(err)
+	}
 
 	// Both bodies fit comfortably in this quota, but the captured headers and
 	// diagnostic text do not. The oldest complete payload row must be evicted.
 	if err := database.PrunePayloads(now, 1500); err != nil {
 		t.Fatal(err)
 	}
-	if payloads, err := database.PayloadSnapshots("old"); err != nil || len(payloads) != 0 {
-		t.Fatalf("oldest header-heavy payload was not quota-evicted: %+v err=%v", payloads, err)
+	if payloads, err := database.PayloadSnapshots("old"); err != nil || len(payloads) != 1 || payloads[0].CaptureStatus != telemetry.CaptureStatusDropped || len(payloads[0].Body) != 0 {
+		t.Fatalf("oldest header-heavy payload did not retain a quota tombstone: %+v err=%v", payloads, err)
 	}
 	if payloads, err := database.PayloadSnapshots("new"); err != nil || len(payloads) != 1 {
 		t.Fatalf("newest payload should remain after quota eviction: %+v err=%v", payloads, err)
+	}
+}
+
+func TestSQLiteQuotaEvictionBeforeSummaryRemainsVisible(t *testing.T) {
+	database, err := Open(filepath.Join(t.TempDir(), "quota-ordering.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err := database.ConfigurePayloadStorage(24*time.Hour, 1); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	if err := database.RecordPayload(telemetry.PayloadSnapshot{
+		RequestID: "late-summary", Stage: telemetry.PayloadStageClientRequest,
+		CaptureMode: telemetry.CaptureModeStructured, CaptureStatus: telemetry.CaptureStatusCaptured,
+		Body: []byte(`{"large":true}`), CreatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.RecordRequest(telemetry.Event{
+		RequestID: "late-summary", StartedAt: now, StatusCode: 200,
+		CaptureMode: string(telemetry.CaptureModeStructured), CaptureStatus: telemetry.CaptureStatusCaptured,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	details, err := database.RequestDetails("late-summary")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if details.Request.CaptureStatus != telemetry.CaptureStatusDropped || details.Payloads[0].State != telemetry.CaptureStatusDropped {
+		t.Fatalf("quota eviction was hidden by a later summary: %+v", details)
+	}
+}
+
+func TestSQLiteDroppedPayloadAfterSummaryUpdatesCaptureState(t *testing.T) {
+	database, err := Open(filepath.Join(t.TempDir(), "dropped-after-summary.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	now := time.Now().UTC()
+	if err := database.RecordRequest(telemetry.Event{
+		RequestID: "early-summary", StartedAt: now, StatusCode: 200,
+		CaptureMode: string(telemetry.CaptureModeStructured), CaptureStatus: telemetry.CaptureStatusCaptured,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.RecordPayload(telemetry.PayloadSnapshot{
+		RequestID: "early-summary", Stage: telemetry.PayloadStageClientRequest,
+		CaptureMode: telemetry.CaptureModeStructured, CaptureStatus: telemetry.CaptureStatusDropped,
+		Error: "recorder_queue_saturated", CreatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	details, err := database.RequestDetails("early-summary")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if details.Request.CaptureStatus != telemetry.CaptureStatusDropped || details.Payloads[0].State != telemetry.CaptureStatusDropped {
+		t.Fatalf("late payload tombstone did not update summary: %+v", details)
+	}
+}
+
+func TestSQLiteMetadataOnlyPayloadMarkerDoesNotConsumeContentQuota(t *testing.T) {
+	database, err := Open(filepath.Join(t.TempDir(), "metadata-marker-quota.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	now := time.Now().UTC()
+	if err := database.RecordPayload(telemetry.PayloadSnapshot{
+		RequestID: "marker", Stage: telemetry.PayloadStageCanonicalResponse,
+		CaptureMode: telemetry.CaptureModeStructured, CaptureStatus: telemetry.CaptureStatusNotCaptured,
+		CreatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.PrunePayloads(now, 0); err != nil {
+		t.Fatal(err)
+	}
+	payloads, err := database.PayloadSnapshots("marker")
+	if err != nil || len(payloads) != 1 || payloads[0].CaptureStatus != telemetry.CaptureStatusNotCaptured {
+		t.Fatalf("metadata-only marker was treated as quota content: %+v err=%v", payloads, err)
+	}
+}
+
+func TestSQLiteRetentionRemovesOrphanedObservations(t *testing.T) {
+	database, err := Open(filepath.Join(t.TempDir(), "orphan-observations.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	observation := telemetry.NewObservation("orphan", "missing-summary", "trace", "span", "upstream", "provider.http", time.Now().UTC().Add(-48*time.Hour))
+	if err := database.RecordObservation(observation); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Retain(1); err != nil {
+		t.Fatal(err)
+	}
+	observations, err := database.TraceObservations("missing-summary")
+	if err != nil || len(observations) != 0 {
+		t.Fatalf("orphaned observations escaped retention: %+v err=%v", observations, err)
 	}
 }
 

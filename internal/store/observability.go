@@ -134,41 +134,30 @@ func (s *SQLite) QueryRequests(query telemetry.RequestQuery) (telemetry.RequestP
 		args = append(args, startedAt, startedAt, requestID)
 	}
 	args = append(args, limit+1)
-	rows, err := s.db.Query(`SELECT request_id, started_at FROM request_logs WHERE `+strings.Join(where, " AND ")+` ORDER BY started_at DESC, request_id DESC LIMIT ?`, args...)
+	rows, err := s.db.Query(`SELECT `+requestEventColumns+` FROM request_logs WHERE `+strings.Join(where, " AND ")+` ORDER BY started_at DESC, request_id DESC LIMIT ?`, args...)
 	if err != nil {
 		return telemetry.RequestPage{}, err
 	}
 	defer rows.Close()
-	type position struct {
-		requestID string
-		startedAt time.Time
-	}
-	positions := []position{}
+	items := make([]telemetry.Event, 0, limit+1)
 	for rows.Next() {
-		var item position
-		if err := rows.Scan(&item.requestID, &item.startedAt); err != nil {
+		event, err := scanRequestEvent(rows)
+		if err != nil {
 			return telemetry.RequestPage{}, err
 		}
-		positions = append(positions, item)
+		items = append(items, event)
 	}
 	if err := rows.Err(); err != nil {
 		return telemetry.RequestPage{}, err
 	}
-	hasMore := len(positions) > limit
+	hasMore := len(items) > limit
 	if hasMore {
-		positions = positions[:limit]
+		items = items[:limit]
 	}
-	page := telemetry.RequestPage{Items: make([]telemetry.Event, 0, len(positions))}
-	for _, item := range positions {
-		event, err := s.requestEvent(item.requestID)
-		if err != nil {
-			return telemetry.RequestPage{}, err
-		}
-		page.Items = append(page.Items, event)
-	}
-	if hasMore && len(positions) > 0 {
-		last := positions[len(positions)-1]
-		page.NextCursor = telemetry.EncodeCursor(last.startedAt, last.requestID)
+	page := telemetry.RequestPage{Items: items}
+	if hasMore && len(items) > 0 {
+		last := items[len(items)-1]
+		page.NextCursor = telemetry.EncodeCursor(last.StartedAt, last.RequestID)
 	}
 	return page, nil
 }
@@ -296,6 +285,12 @@ func (s *SQLite) QuerySessions(query telemetry.SessionQuery) (telemetry.SessionP
 	page := telemetry.SessionPage{Items: make([]telemetry.SessionSummary, 0, len(positions))}
 	for _, item := range positions {
 		summary, err := s.sessionSummary(item.sessionID)
+		if errors.Is(err, telemetry.ErrRequestNotFound) {
+			// Periodic retention may remove the final request in a session after
+			// the grouped cursor query. Treat it as an expired result, not a
+			// transient failure of the whole page.
+			continue
+		}
 		if err != nil {
 			return telemetry.SessionPage{}, err
 		}
@@ -344,29 +339,21 @@ FROM request_logs WHERE session_id = ? GROUP BY session_id`, sessionID).Scan(
 }
 
 func (s *SQLite) SessionRequests(sessionID string) ([]telemetry.Event, error) {
-	rows, err := s.db.Query(`SELECT request_id FROM request_logs WHERE session_id = ? ORDER BY started_at, request_id`, sessionID)
+	rows, err := s.db.Query(`SELECT `+requestEventColumns+` FROM request_logs WHERE session_id = ? ORDER BY started_at, request_id`, sessionID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	ids := []string{}
+	events := []telemetry.Event{}
 	for rows.Next() {
-		var requestID string
-		if err := rows.Scan(&requestID); err != nil {
-			return nil, err
-		}
-		ids = append(ids, requestID)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	events := make([]telemetry.Event, 0, len(ids))
-	for _, requestID := range ids {
-		event, err := s.requestEvent(requestID)
+		event, err := scanRequestEvent(rows)
 		if err != nil {
 			return nil, err
 		}
 		events = append(events, event)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	return events, nil
 }

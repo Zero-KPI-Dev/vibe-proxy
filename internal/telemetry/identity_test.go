@@ -75,6 +75,21 @@ func TestExtractRequestIdentityUsesProfileAndBuiltinUserAgent(t *testing.T) {
 	}
 }
 
+func TestExtractRequestIdentityDoesNotMatchMissingProfileHeader(t *testing.T) {
+	r, _ := http.NewRequest(http.MethodPost, "http://localhost/v1/messages", nil)
+	profile := AgentProfile{ID: "configured-agent", Detect: map[string]string{"header.x-agent-client": "*"}}
+	got := ExtractRequestIdentity(r, nil, []AgentProfile{profile})
+	if got.AgentID != "unknown" || got.AgentSource != "unknown" {
+		t.Fatalf("missing detector header matched wildcard profile: %+v", got)
+	}
+
+	r.Header.Set("X-Agent-Client", "codex")
+	got = ExtractRequestIdentity(r, nil, []AgentProfile{profile})
+	if got.AgentID != "configured-agent" || got.AgentSource != "profile" {
+		t.Fatalf("present detector header did not match wildcard profile: %+v", got)
+	}
+}
+
 func TestExtractRequestIdentityTraceparent(t *testing.T) {
 	r, _ := http.NewRequest(http.MethodPost, "http://localhost/v1/messages", nil)
 	r.Header.Set("Traceparent", "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")

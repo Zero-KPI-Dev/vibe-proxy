@@ -321,18 +321,28 @@ func TestValidateRuntimeRejectsInvalidAndDuplicateClientKeys(t *testing.T) {
 
 func TestValidateRuntimeRejectsUnsafeAgentProfileDetectors(t *testing.T) {
 	cfg, err := CompileSimple(SimpleConfig{AgentProfiles: map[string]AgentProfileConfig{
-		"empty":  {},
-		"secret": {Detect: map[string]string{"header.authorization": "Bearer *"}},
-		"broken": {Detect: map[string]string{"user_agent": "["}},
+		"empty": {},
+		"secret": {Detect: map[string]string{
+			"header.authorization":   "Bearer *",
+			"header.x-auth-token":    "token-*",
+			"header.x-authtoken":     "token-*",
+			"header.api-key":         "key-*",
+			"header.x-client-secret": "secret-*",
+		}},
+		"broken":         {Detect: map[string]string{"user_agent": "["}},
+		"missing-header": {Detect: map[string]string{"header.": "*"}},
 	}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	issues := ValidateRuntime(cfg)
-	for _, code := range []string{"missing_agent_detector", "sensitive_agent_detector", "invalid_agent_detector_pattern"} {
+	for _, code := range []string{"missing_agent_detector", "sensitive_agent_detector", "invalid_agent_detector_header", "invalid_agent_detector_pattern"} {
 		if !hasIssueCode(issues, code) {
 			t.Fatalf("missing %s validation issue: %+v", code, issues)
 		}
+	}
+	if got := countIssueCode(issues, "sensitive_agent_detector"); got != 5 {
+		t.Fatalf("sensitive_agent_detector count = %d, want 5: %+v", got, issues)
 	}
 }
 
@@ -403,4 +413,14 @@ func hasIssueCode(issues []ValidationIssue, code string) bool {
 		}
 	}
 	return false
+}
+
+func countIssueCode(issues []ValidationIssue, code string) int {
+	count := 0
+	for _, validationIssue := range issues {
+		if validationIssue.Code == code {
+			count++
+		}
+	}
+	return count
 }

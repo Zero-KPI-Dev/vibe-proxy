@@ -162,6 +162,10 @@ func matchAgentProfile(r *http.Request, profiles []AgentProfile) (AgentProfile, 
 				value = r.UserAgent()
 			case strings.HasPrefix(detector, "header."):
 				value = r.Header.Get(strings.TrimPrefix(detector, "header."))
+				if value == "" {
+					matched = false
+					continue
+				}
 			default:
 				matched = false
 			}

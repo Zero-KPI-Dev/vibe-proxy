@@ -3,6 +3,7 @@ package telemetry
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -20,6 +21,26 @@ func TestPayloadCaptureBudgetIsSharedAcrossStages(t *testing.T) {
 	}
 	if second.Status != CaptureStatusDropped || second.Error != "request_capture_budget_exhausted" {
 		t.Fatalf("second capture should be payload-first dropped: %+v", second)
+	}
+}
+
+func TestPayloadCaptureBudgetIncludesStoredHeaders(t *testing.T) {
+	budget := NewCaptureBudget(1024)
+	policy := CapturePolicy{
+		Mode: CaptureModeStructured, MaxSnapshotBytes: 1024, HeaderAllowlist: []string{"x-debug"},
+	}
+	result := budget.Capture(
+		[]byte(`{"prompt":"hello"}`),
+		http.Header{"X-Debug": []string{strings.Repeat("h", 1024)}},
+		policy,
+		"",
+	)
+	stored := result.StoredBytes + capturedHeaderBytes(result.Headers)
+	if stored > 1024 || budget.Remaining() != 1024-stored {
+		t.Fatalf("headers escaped the shared content budget: stored=%d remaining=%d result=%+v", stored, budget.Remaining(), result)
+	}
+	if len(result.Headers) != 0 || !result.Truncated || result.Status != CaptureStatusTruncated {
+		t.Fatalf("oversized headers should be omitted explicitly: %+v", result)
 	}
 }
 

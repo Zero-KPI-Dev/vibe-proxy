@@ -3,6 +3,7 @@ package gatewayapp
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	runtimepkg "github.com/a448582655/vibe-proxy/internal/runtime"
 	"github.com/a448582655/vibe-proxy/internal/store"
 	"github.com/a448582655/vibe-proxy/internal/telemetry"
 )
@@ -269,6 +271,102 @@ func TestGatewayEnforcesConfiguredRetentionAtStartupAndPeriodically(t *testing.T
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("periodic retention did not remove summary/payload: summaries=%d payloads=%d", len(page.Items), len(payloads))
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestGatewayReloadUpdatesRetentionAndPayloadStoragePolicy(t *testing.T) {
+	directory := t.TempDir()
+	databasePath := filepath.Join(directory, "reload-observability.db")
+	database, err := store.Open(databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.RecordRequest(telemetry.Event{
+		RequestID: "old-summary", StartedAt: time.Now().UTC().Add(-48 * time.Hour), StatusCode: 200,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	configPath := filepath.Join(directory, "config.yaml")
+	writeConfig := func(summariesDays, contentDays, quotaMB int) {
+		t.Helper()
+		content := "version: vibeproxy.io/v1alpha1\n" +
+			"server:\n  listen: 127.0.0.1:0\n" +
+			"storage:\n  sqlite_path: " + filepath.ToSlash(databasePath) + "\n  retention_days: 14\n" +
+			fmt.Sprintf("observability:\n  retention:\n    summaries_days: %d\n    content_days: %d\n    max_content_storage_mb: %d\n", summariesDays, contentDays, quotaMB) +
+			"models:\n  allow_raw: true\nproviders: {}\n"
+		if err := os.WriteFile(configPath, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeConfig(14, 3, 2)
+	app, err := Start(context.Background(), Options{
+		ConfigPath:             configPath,
+		Runtime:                runtimepkg.Options{AdminTokenOverride: "admin-token"},
+		RetentionSweepInterval: 10 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := app.Shutdown(ctx); err != nil {
+			t.Errorf("shutdown: %v", err)
+		}
+	}()
+
+	page, err := app.database.QueryRequests(telemetry.RequestQuery{Query: "old-summary", Limit: 10})
+	if err != nil || len(page.Items) != 1 {
+		t.Fatalf("startup policy unexpectedly removed summary: items=%d err=%v", len(page.Items), err)
+	}
+	writeConfig(1, 1, 1)
+	reloadRequest, err := http.NewRequest(http.MethodPost, "http://"+app.Address()+"/admin/config/reload", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reloadRequest.Header.Set("Authorization", "Bearer admin-token")
+	reloadResponse, err := http.DefaultClient.Do(reloadRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reloadResponse.Body.Close()
+	if reloadResponse.StatusCode != http.StatusOK {
+		t.Fatalf("reload status = %d", reloadResponse.StatusCode)
+	}
+
+	now := time.Now().UTC()
+	if err := app.database.RecordPayload(telemetry.PayloadSnapshot{
+		RequestID: "reload-payload", Stage: telemetry.PayloadStageClientRequest,
+		CaptureMode: telemetry.CaptureModeStructured, CaptureStatus: telemetry.CaptureStatusCaptured,
+		Body: []byte(`{"prompt":"reload"}`), CreatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	payloads, err := app.database.PayloadSnapshots("reload-payload")
+	if err != nil || len(payloads) != 1 {
+		t.Fatalf("reloaded payload policy was not applied: %+v err=%v", payloads, err)
+	}
+	if lifetime := payloads[0].ExpiresAt.Sub(payloads[0].CreatedAt); lifetime < 23*time.Hour || lifetime > 25*time.Hour {
+		t.Fatalf("content retention remained stale after reload: %s", lifetime)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		page, queryErr := app.database.QueryRequests(telemetry.RequestQuery{Query: "old-summary", Limit: 10})
+		if queryErr != nil {
+			t.Fatal(queryErr)
+		}
+		if len(page.Items) == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("summary retention remained stale after reload")
 		}
 		time.Sleep(10 * time.Millisecond)
 	}

@@ -42,10 +42,14 @@ type AsyncRecorder struct {
 	summaries    []Event
 	observations []TraceObservation
 	payloads     []PayloadSnapshot
-	stats        RecorderStats
-	closed       bool
-	done         chan struct{}
-	closeOnce    sync.Once
+	// droppedPayloads is a bounded control queue. It preserves an explicit
+	// per-stage tombstone when pressure evicts payload content from the main
+	// queue, without allowing those tombstones to consume summary capacity.
+	droppedPayloads []PayloadSnapshot
+	stats           RecorderStats
+	closed          bool
+	done            chan struct{}
+	closeOnce       sync.Once
 }
 
 func NewAsyncRecorder(sink EventSink, capacity int) *AsyncRecorder {
@@ -120,7 +124,11 @@ func (r *AsyncRecorder) enqueue(kind recorderKind, summary Event, observation Tr
 		return
 	}
 	if r.queueLength() >= r.capacity && !r.makeRoom(kind) {
+		if kind == recorderPayload {
+			r.noteDroppedPayload(payload)
+		}
 		r.drop(kind)
+		r.condition.Signal()
 		return
 	}
 	switch kind {
@@ -138,6 +146,7 @@ func (r *AsyncRecorder) makeRoom(kind recorderKind) bool {
 	switch kind {
 	case recorderSummary:
 		if len(r.payloads) > 0 {
+			r.noteDroppedPayload(r.payloads[0])
 			r.payloads = r.payloads[1:]
 			r.stats.DroppedPayloads++
 			return true
@@ -149,12 +158,36 @@ func (r *AsyncRecorder) makeRoom(kind recorderKind) bool {
 		}
 	case recorderObservation:
 		if len(r.payloads) > 0 {
+			r.noteDroppedPayload(r.payloads[0])
 			r.payloads = r.payloads[1:]
 			r.stats.DroppedPayloads++
 			return true
 		}
 	}
 	return false
+}
+
+func (r *AsyncRecorder) noteDroppedPayload(snapshot PayloadSnapshot) {
+	if snapshot.RequestID == "" || snapshot.Stage == "" || len(r.droppedPayloads) >= r.capacity {
+		return
+	}
+	for _, existing := range r.droppedPayloads {
+		if existing.RequestID == snapshot.RequestID && existing.Stage == snapshot.Stage {
+			return
+		}
+	}
+	snapshot.CaptureStatus = CaptureStatusDropped
+	snapshot.MediaType = ""
+	snapshot.ContentEncoding = ""
+	snapshot.Body = nil
+	snapshot.StoredBytes = 0
+	snapshot.Truncated = false
+	snapshot.TruncationReason = ""
+	snapshot.RedactionCount = 0
+	snapshot.SHA256 = ""
+	snapshot.Headers = nil
+	snapshot.Error = "recorder_queue_saturated"
+	r.droppedPayloads = append(r.droppedPayloads, snapshot)
 }
 
 func (r *AsyncRecorder) drop(kind recorderKind) {
@@ -207,16 +240,21 @@ func (r *AsyncRecorder) run() {
 func (r *AsyncRecorder) next() (recorderKind, Event, TraceObservation, PayloadSnapshot, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	for r.queueLength() == 0 && !r.closed {
+	for r.queueLength() == 0 && len(r.droppedPayloads) == 0 && !r.closed {
 		r.condition.Wait()
 	}
-	if r.queueLength() == 0 && r.closed {
+	if r.queueLength() == 0 && len(r.droppedPayloads) == 0 && r.closed {
 		return 0, Event{}, TraceObservation{}, PayloadSnapshot{}, false
 	}
 	if len(r.summaries) > 0 {
 		value := r.summaries[0]
 		r.summaries = r.summaries[1:]
 		return recorderSummary, value, TraceObservation{}, PayloadSnapshot{}, true
+	}
+	if len(r.droppedPayloads) > 0 {
+		value := r.droppedPayloads[0]
+		r.droppedPayloads = r.droppedPayloads[1:]
+		return recorderPayload, Event{}, TraceObservation{}, value, true
 	}
 	if len(r.observations) > 0 {
 		value := r.observations[0]

@@ -143,8 +143,49 @@ func (b *CaptureBudget) Capture(body []byte, headers http.Header, policy Capture
 		boundedPolicy.MaxSnapshotBytes = b.remaining
 	}
 	result := CapturePayload(body, headers, boundedPolicy, requestMode)
-	b.remaining -= result.StoredBytes
+	if result.Mode != CaptureModeStructured && result.Mode != CaptureModeRaw {
+		return result
+	}
+	headerBytes := capturedHeaderBytes(result.Headers)
+	headersDropped := false
+	if headerBytes >= b.remaining {
+		result.Headers = make(http.Header)
+		headerBytes = 0
+		headersDropped = true
+	}
+	bodyLimit := b.remaining - headerBytes
+	if result.StoredBytes > bodyLimit {
+		boundedPolicy.MaxSnapshotBytes = bodyLimit
+		result = CapturePayload(body, headers, boundedPolicy, requestMode)
+		if headersDropped {
+			result.Headers = make(http.Header)
+		} else {
+			headerBytes = capturedHeaderBytes(result.Headers)
+		}
+	}
+	if headersDropped {
+		result.Status = CaptureStatusTruncated
+		result.Truncated = true
+		if result.TruncationReason == "" {
+			result.TruncationReason = "request_capture_budget"
+		}
+	}
+	b.remaining -= result.StoredBytes + headerBytes
+	if b.remaining < 0 {
+		b.remaining = 0
+	}
 	return result
+}
+
+func capturedHeaderBytes(headers http.Header) int {
+	if len(headers) == 0 {
+		return 0
+	}
+	encoded, err := json.Marshal(headers)
+	if err != nil {
+		return 0
+	}
+	return len(encoded)
 }
 
 func (b *CaptureBudget) CaptureValue(value any, headers http.Header, policy CapturePolicy, requestMode string) CaptureResult {
