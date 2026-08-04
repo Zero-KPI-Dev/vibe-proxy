@@ -86,10 +86,40 @@ export interface Usage {
   cache_hit_ratio?: number
 }
 
+export type CaptureMode = "off" | "metadata" | "structured" | "raw"
+
+export type CaptureStatus =
+  | "not_captured"
+  | "captured"
+  | "redacted"
+  | "truncated"
+  | "expired"
+  | "dropped"
+  | "missing"
+
 export interface RequestEvent {
   request_id: string
+  trace_id: string
+  span_id: string
+  parent_span_id?: string
+  session_id?: string
+  session_name?: string
+  session_kind?: string
+  session_path?: string
+  parent_request_id?: string
+  principal_name?: string
   client_name: string
+  agent_id: string
+  agent_name?: string
+  agent_version?: string
+  agent_source: string
+  agent_confidence: string
+  project_id?: string
+  http_method?: string
+  http_path?: string
   virtual_model: string
+  initial_provider?: string
+  initial_model?: string
   upstream_model: string
   channel_id: string
   protocol_in: string
@@ -97,13 +127,37 @@ export interface RequestEvent {
   started_at: string
   first_token_at?: string
   completed_at?: string
+  duration_ms?: number
   ttft_ms?: number
   tpot_ms?: number
   tps?: number
   status_code: number
   error_code?: string
+  finish_reason?: string
+  upstream_request_id?: string
+  retry_count?: number
   usage: Usage
+  request_shape: RequestShapeSummary
+  capture_mode: CaptureMode
+  capture_status: CaptureStatus
+  capture_truncated: boolean
+  redaction_count: number
+  input_labels_json?: string
+  output_labels_json?: string
   transformation?: TransformationSummary
+}
+
+export interface RequestShapeSummary {
+  input_message_count: number
+  input_block_count: number
+  input_tool_count: number
+  input_image_count: number
+  input_text_chars: number
+  output_message_count: number
+  output_block_count: number
+  output_tool_call_count: number
+  output_reasoning_chars: number
+  output_text_chars: number
 }
 
 export interface TransformationSummary {
@@ -123,11 +177,161 @@ export interface TransformationSummary {
   ocr_latency_ms?: number
   ocr_min_confidence?: number
   ocr_failure_code?: string
+  vision_strategy?: "assist" | "takeover" | "reject"
+  vision_provider?: string
+  vision_model?: string
+  vision_cache_hit?: boolean
+  vision_latency_ms?: number
+  vision_evidence_chars?: number
 }
 
 export interface RecentRequestsResponse {
   active: RequestEvent[]
   recent: RequestEvent[]
+}
+
+export interface RequestQueryFilters {
+  agent_id?: string
+  principal_name?: string
+  session_id?: string
+  project_id?: string
+  model?: string
+  provider?: string
+  protocol?: string
+  status_class?: string
+  capture_status?: CaptureStatus | ""
+  q?: string
+  from?: string
+  to?: string
+}
+
+export interface SessionQueryFilters {
+  session_id?: string
+  agent_id?: string
+  principal_name?: string
+  project_id?: string
+  q?: string
+}
+
+export interface RequestPage {
+  items: RequestEvent[]
+  next_cursor?: string
+}
+
+export interface SessionSummary {
+  session_id: string
+  session_name?: string
+  session_kind?: string
+  session_path?: string
+  agent_id?: string
+  agent_name?: string
+  principal_name?: string
+  project_id?: string
+  started_at: string
+  updated_at: string
+  first_request_id: string
+  last_request_id: string
+  request_count: number
+  error_count: number
+  total_tokens: number
+}
+
+export interface SessionPage {
+  items: SessionSummary[]
+  next_cursor?: string
+}
+
+export interface TraceObservation {
+  observation_id: string
+  request_id: string
+  trace_id: string
+  span_id: string
+  parent_span_id?: string
+  type: string
+  name: string
+  started_at: string
+  completed_at?: string
+  duration_ms: number
+  status: string
+  error_code?: string
+  attributes?: Record<string, unknown>
+}
+
+export type PayloadStage =
+  | "client_request"
+  | "canonical_request"
+  | "ocr_request"
+  | "ocr_response"
+  | "vision_request"
+  | "vision_response"
+  | "effective_canonical_request"
+  | "upstream_request"
+  | "canonical_response"
+
+export interface PayloadContent {
+  stage: PayloadStage
+  state: CaptureStatus
+  capture_mode?: CaptureMode
+  media_type?: string
+  content_encoding?: string
+  headers?: Record<string, string[]>
+  body?: unknown
+  original_bytes?: number
+  stored_bytes?: number
+  truncated?: boolean
+  truncation_reason?: string
+  redaction_count?: number
+  sha256?: string
+  error?: string
+  created_at?: string
+  expires_at?: string
+}
+
+export interface RequestDetails {
+  request: RequestEvent
+  observations: TraceObservation[]
+  payloads: PayloadContent[]
+}
+
+export interface SessionDetailResponse {
+  session: SessionSummary
+  requests: RequestEvent[]
+}
+
+export interface ValueChange {
+  before: string
+  after: string
+}
+
+export interface DiffChange {
+  kind: string
+  path: string
+  before?: string
+  after?: string
+}
+
+export interface RequestDiff {
+  state: "available" | "no_base" | CaptureStatus
+  unavailable_side?: string
+  request_id: string
+  base_request_id?: string
+  base_selection?: "parent" | "previous" | "explicit"
+  append_only: boolean
+  context_shrunk: boolean
+  common_prefix_messages: number
+  messages_added: number
+  messages_removed: number
+  messages_rewritten: number
+  requested_model_change?: ValueChange
+  model_change?: ValueChange
+  provider_change?: ValueChange
+  tool_changes: DiffChange[]
+}
+
+export interface DeleteRequestContentResponse {
+  request_id: string
+  deleted: boolean
+  state: "expired"
 }
 
 // ---- Metrics ----
@@ -320,6 +524,7 @@ interface MultimodalAdminFields {
   api_key_env: string
   header: string
   vision_fallback_model: string
+  vision_fallback_strategy: "assist" | "takeover" | "reject"
   min_confidence: number
   min_text_chars: number
   max_images: number

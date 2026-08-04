@@ -9,18 +9,19 @@ import (
 )
 
 type MultimodalAdminInput struct {
-	Enabled             bool    `json:"enabled"`
-	Provider            string  `json:"provider"`
-	Endpoint            string  `json:"endpoint"`
-	AuthType            string  `json:"auth_type"`
-	APIKeySource        string  `json:"api_key_source"`
-	APIKeyEnv           string  `json:"api_key_env"`
-	APIKey              string  `json:"api_key"`
-	Header              string  `json:"header"`
-	VisionFallbackModel string  `json:"vision_fallback_model"`
-	MinConfidence       float64 `json:"min_confidence"`
-	MinTextChars        int     `json:"min_text_chars"`
-	MaxImages           int     `json:"max_images"`
+	Enabled                bool    `json:"enabled"`
+	Provider               string  `json:"provider"`
+	Endpoint               string  `json:"endpoint"`
+	AuthType               string  `json:"auth_type"`
+	APIKeySource           string  `json:"api_key_source"`
+	APIKeyEnv              string  `json:"api_key_env"`
+	APIKey                 string  `json:"api_key"`
+	Header                 string  `json:"header"`
+	VisionFallbackModel    string  `json:"vision_fallback_model"`
+	VisionFallbackStrategy string  `json:"vision_fallback_strategy"`
+	MinConfidence          float64 `json:"min_confidence"`
+	MinTextChars           int     `json:"min_text_chars"`
+	MaxImages              int     `json:"max_images"`
 }
 
 func SaveMultimodal(path string, input MultimodalAdminInput) (*RuntimeConfig, error) {
@@ -54,9 +55,20 @@ func SaveMultimodal(path string, input MultimodalAdminInput) (*RuntimeConfig, er
 
 func BuildMultimodal(input MultimodalAdminInput, existing *MultimodalConfig) (MultimodalConfig, error) {
 	result := MultimodalConfig{
-		Enabled:             input.Enabled,
-		Strategy:            "ocr_then_vision",
-		VisionFallbackModel: strings.TrimSpace(input.VisionFallbackModel),
+		Enabled:                input.Enabled,
+		Strategy:               "ocr_then_vision",
+		VisionFallbackModel:    strings.TrimSpace(input.VisionFallbackModel),
+		VisionFallbackStrategy: strings.TrimSpace(input.VisionFallbackStrategy),
+	}
+	if result.VisionFallbackStrategy == "" {
+		if existing != nil && existing.VisionFallbackStrategy != "" {
+			result.VisionFallbackStrategy = existing.VisionFallbackStrategy
+		} else {
+			result.VisionFallbackStrategy = "assist"
+		}
+	}
+	if result.VisionFallbackStrategy != "assist" && result.VisionFallbackStrategy != "takeover" && result.VisionFallbackStrategy != "reject" {
+		return MultimodalConfig{}, fmt.Errorf("unsupported Vision fallback strategy %q", result.VisionFallbackStrategy)
 	}
 	if existing != nil {
 		result.OCR.Timeout = existing.OCR.Timeout
@@ -66,6 +78,7 @@ func BuildMultimodal(input MultimodalAdminInput, existing *MultimodalConfig) (Mu
 		result.OCR.MaxTextCharsTotal = existing.OCR.MaxTextCharsTotal
 		result.OCR.RemoteImages = existing.OCR.RemoteImages
 		result.OCR.Cache = existing.OCR.Cache
+		result.VisionAssist = existing.VisionAssist
 	}
 	endpoint := strings.TrimSpace(input.Endpoint)
 	provider := strings.TrimSpace(input.Provider)

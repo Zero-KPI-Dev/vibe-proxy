@@ -23,6 +23,7 @@ const defaultConfig: MultimodalAdminInput = {
   api_key: "",
   header: "",
   vision_fallback_model: "",
+  vision_fallback_strategy: "assist",
   min_confidence: 0.55,
   min_text_chars: 4,
   max_images: 4,
@@ -46,6 +47,7 @@ function snapshotInput(response: MultimodalAdminConfig): MultimodalAdminInput {
     api_key: "",
     header: response.header,
     vision_fallback_model: response.vision_fallback_model,
+    vision_fallback_strategy: response.vision_fallback_strategy || "assist",
     min_confidence: response.min_confidence,
     min_text_chars: response.min_text_chars,
     max_images: response.max_images,
@@ -279,6 +281,25 @@ export function OCRFallbackSettings({ authVersion }: OCRFallbackSettingsProps) {
             </div>
           </>
         )}
+
+        <div className="space-y-2">
+          <Label>{t("settings.visionFallbackStrategy")}</Label>
+          <Select
+            value={config.vision_fallback_strategy}
+            onValueChange={(value) => update("vision_fallback_strategy", value as MultimodalAdminInput["vision_fallback_strategy"])}
+            disabled={loading}
+          >
+            <SelectTrigger><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="assist">{t("settings.visionFallbackAssist")}</SelectItem>
+              <SelectItem value="takeover">{t("settings.visionFallbackTakeover")}</SelectItem>
+              <SelectItem value="reject">{t("settings.visionFallbackReject")}</SelectItem>
+            </SelectContent>
+          </Select>
+          <p className="text-xs text-muted-foreground">
+            {t(`settings.visionFallbackStrategyHelp.${config.vision_fallback_strategy}`)}
+          </p>
+        </div>
 
         <div className="space-y-2">
           <Label>{t("settings.visionFallbackModel")}</Label>

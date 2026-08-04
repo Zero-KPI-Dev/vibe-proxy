@@ -64,6 +64,8 @@ Gateway Mode must not complicate Local Mode.
 ```text
 HTTP Request
   -> Listener / Protocol Detection
+  -> Trace Envelope / Agent and Session Classification
+  -> Client Authentication and Authorization
   -> Client Adapter
   -> Canonical IR
   -> Model Resolver
@@ -73,7 +75,7 @@ HTTP Request
   -> Provider Adapter
   -> Stream Engine
   -> Client Adapter Encoder
-  -> Telemetry Sink
+  -> Bounded Telemetry Recorder / Sinks
 ```
 
 ## Core Modules
@@ -268,36 +270,71 @@ object to the control plane.
 
 ### 8. Telemetry Pipeline
 
-Responsible for request observability.
+Responsible for local request tracing without requiring an external service.
 
-v0.1 captures:
+A trace envelope is created after protocol detection and before authentication,
+body parsing, model authorization, or routing. Consequently, rejected requests
+still finish with a bounded metadata summary. One inbound HTTP call has one
+`request_id`, W3C-compatible `trace_id`/`span_id` fields, and optional explicit
+Session, project, parent-request, and Agent identity.
 
-- request id
-- client protocol
-- detected agent
-- requested model
-- resolved provider/model
-- stream/unary mode
-- status/error code
-- duration
-- TTFT
-- TPOT
-- TPS
-- token usage
-- cache read/write tokens when available
+The authenticated principal is an authorization fact. Agent identity is
+diagnostic, untrusted metadata and never changes permissions or routing. Identity
+classification uses this precedence:
 
-v0.1 sinks:
+1. explicit bounded `X-Vibe-*` headers;
+2. allowlisted W3C baggage;
+3. protocol metadata;
+4. configured Agent profiles;
+5. built-in User-Agent signatures.
 
-- console logs
-- SQLite
-- optional Prometheus endpoint
+No Session is fabricated from an API key, principal, User-Agent, or prompt
+similarity. Session views are derived from explicitly identified request rows and
+may contain multiple Agents or concurrent requests. Chronological order is useful
+for replay but is not automatically treated as causality.
 
-Future sinks:
+SQLite stores three independently useful layers:
 
-- OpenTelemetry
-- Langfuse
-- JSONL
-- external analytics systems
+- request summaries with identity, initial/effective route, request shape,
+  status, finish reason, upstream request ID, duration, TTFT/TPOT/TPS, and token
+  usage;
+- ordered gateway observations for parsing, preprocessing, OCR/Vision fallback,
+  upstream calls, and streaming stages;
+- separately retained payload snapshots for client, Canonical IR, upstream, and
+  canonical-response stages.
+
+Payload capture defaults to `metadata`. `structured` and `raw` are explicit
+opt-ins and both pass through decoded-JSON sanitization. Authorization, cookies,
+credential-like keys, reasoning unless separately enabled, image/file bytes, and
+data URLs cannot bypass mandatory omission or redaction. Streaming stores the
+accumulated Canonical IR response rather than raw SSE frames. Every stage reports
+an explicit state: `not_captured`, `captured`, `redacted`, `truncated`, `expired`,
+`dropped`, or `missing`.
+
+Payloads share a per-request byte budget and have a shorter retention period and
+independent disk quota. Payload-first quota eviction and exact request-content
+deletion preserve request summaries and observations. Request diffs are computed
+on demand from available canonical request snapshots; they describe structural
+message/tool/route changes and do not claim semantic equivalence.
+
+The gateway writes durable telemetry through a bounded asynchronous recorder.
+Summaries have priority over observations, which have priority over payloads.
+Queue pressure evicts payloads first. Recorder and SQLite failures are contained
+and cannot change an otherwise valid model response; shutdown attempts a bounded
+flush before closing SQLite.
+
+Current sinks and query surfaces:
+
+- embedded SQLite as the Local Mode source of truth;
+- an in-memory recent-request view;
+- low-cardinality Prometheus metrics;
+- authenticated Requests, Sessions, detail, timeline, content deletion, and diff
+  Admin APIs and UI.
+
+High-cardinality request, trace, Session, project, and Agent identifiers are not
+Prometheus labels. Future OpenTelemetry, Langfuse, JSONL, or analytics export must
+remain optional, disabled by default, and require an independent content-export
+opt-in rather than weakening local capture policy.
 
 ### 9. Control Plane
 
@@ -310,6 +347,8 @@ v0.1:
 - config reload
 - provider connectivity test
 - recent request viewer
+- searchable Requests and Sessions views
+- request summary, timeline, sanitized payload, metadata, and diff inspection
 
 Future:
 

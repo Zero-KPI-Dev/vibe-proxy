@@ -10,30 +10,22 @@ The default goal is not to be a large hosted gateway. The default goal is:
 
 ## Current Status
 
-This repository currently contains an initial Go backend skeleton and architecture documents.
+The repository contains a working local gateway, embedded browser control plane,
+and Wails desktop host. Current capabilities include:
 
-Implemented in the first backend pass:
-
-- Go `net/http` data plane
-- OpenAI-compatible `/v1/chat/completions` entrypoint
-- OpenAI Chat request transformation to Anthropic Messages API
-- Anthropic event-stream to OpenAI SSE conversion
-- TTFT / TPOT / TPS tracking
-- SQLite request log persistence
-- Prometheus `/metrics`
-- hashed client key authentication
-- provider key isolation through env vars or encrypted config values
-- atomic hot reload snapshot pattern
-- minimal dark local dashboard landing page
-
-The next development step is to refactor the backend around the documented architecture:
-
-- Canonical IR
-- Client Adapters
-- Provider Adapters
-- Upstream Auth Profiles
-- Model Resolver
-- Stream Engine
+- OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages client APIs
+- OpenAI-compatible and Anthropic provider adapters over a Canonical IR
+- unary and streaming protocol conversion
+- raw provider models, virtual aliases, and a default model
+- provider CRUD, literal/environment credentials, and custom auth headers
+- local models.dev capability catalog with proxy, cache, and offline import support
+- OCR-to-text and Vision fallback for image requests sent to non-Vision models
+- hashed data-plane client keys and a separate desktop management password
+- atomic configuration reloads
+- local SQLite request summaries, traces, Sessions, optional sanitized payload
+  capture, replay, and structural request diffs
+- TTFT, TPOT, TPS, token usage, recent-request telemetry, and Prometheus metrics
+- installer-oriented Windows and macOS desktop builds plus a Linux CLI package
 
 ## Architecture Documents
 
@@ -49,7 +41,7 @@ Start here:
 - [`docs/development.md`](docs/development.md) — local development and test commands
 - [`docs/contributing-architecture.md`](docs/contributing-architecture.md) — how contributors should extend the system
 
-## Intended v0.1 Scope
+## v0.1 Scope
 
 Client protocols:
 
@@ -69,10 +61,12 @@ Core local features:
 - custom provider auth headers/query params
 - env and encrypted local secrets
 - hot reload
-- recent request log
-- local dashboard
+- recent request log and searchable request traces
+- explicit Agent/Session identity and Session replay
+- bounded opt-in request/response capture and structural diffs
+- local browser and native desktop control planes
 
-## Example Future Simple Config
+## Example Simple Config
 
 ```yaml
 version: vibeproxy.io/v1alpha1
@@ -98,6 +92,49 @@ models:
     vibe-fast: deepseek/deepseek-chat
 ```
 
+## Local Observability
+
+The gateway records metadata-only request summaries and trace observations by
+default. Open **Observability > Requests** or **Observability > Sessions** in the
+control plane to search requests, inspect an OCR/fallback/upstream timeline, and
+replay requests that share an explicit Session ID.
+
+Detailed prompt and response capture is optional:
+
+```yaml
+observability:
+  capture:
+    mode: structured
+    capture_response: true
+  retention:
+    summaries_days: 14
+    content_days: 3
+    max_content_storage_mb: 512
+```
+
+Structured and raw capture are bounded and sanitized, but the resulting content
+is still stored in the local **unencrypted SQLite database**. Enable it only on a
+trusted machine. The UI can delete the captured content for one exact request
+while preserving its summary and timeline.
+
+Clients may group related calls explicitly and report their diagnostic Agent
+identity:
+
+```bash
+curl http://127.0.0.1:8080/v1/chat/completions \
+  -H 'Authorization: Bearer vibe-local-dev-key' \
+  -H 'Content-Type: application/json' \
+  -H 'X-Vibe-Session-ID: task-42' \
+  -H 'X-Vibe-Agent-ID: codex' \
+  -d '{"model":"vibe-coder","messages":[{"role":"user","content":"hello"}]}'
+```
+
+Requests without `X-Vibe-Session-ID` remain unclassified; vibe-proxy does not
+guess a Session from an API key or User-Agent. Request diffs compare available
+canonical structures and do not infer semantic equivalence. External OTLP or
+hosted observability export is not required and, if added later, will remain an
+explicit opt-in.
+
 ## Download a Release
 
 Windows and macOS users can choose the **Vibe Proxy Desktop** application. It
@@ -117,7 +154,7 @@ See [`docs/release.md`](docs/release.md) for architecture selection, checksum
 verification, platform-specific startup commands, and the release-candidate
 test checklist.
 
-## Run Current Skeleton
+## Run from Source
 
 Install Go 1.25+, then:
 
@@ -169,7 +206,9 @@ Then open:
 http://127.0.0.1:8080/
 ```
 
-Provider editing in the UI is still evolving. For now, use the admin APIs and config files; the server can run without providers so the control plane remains reachable.
+The server can start without providers so the control plane remains reachable.
+Use **Providers** in the UI to add a backend, fetch and select its models, and
+configure credentials or capability overrides.
 
 
 ## No Local Go?

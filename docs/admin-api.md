@@ -195,6 +195,84 @@ multimodal route, original/effective targets, capability source, image count, OC
 latency, confidence and cache hits. It never contains image bytes, image URLs, OCR text, or
 OCR credentials.
 
+## Local Observability Queries
+
+The richer local tracing API lives alongside the compatibility recent-request
+endpoint:
+
+```text
+GET    /admin/observability/requests
+GET    /admin/observability/requests/{request_id}
+GET    /admin/observability/requests/{request_id}/diff
+DELETE /admin/observability/requests/{request_id}/content
+GET    /admin/observability/sessions
+GET    /admin/observability/sessions/{session_id}
+```
+
+The trace envelope is created before authentication and parsing, so rejected or
+malformed requests can still receive a request and trace identity. A successful
+client-key lookup records the authenticated `principal_name` separately from the
+diagnostic Agent identity. The latter can be supplied through bounded
+`X-Vibe-Agent-ID`, `X-Vibe-Agent-Name`, `X-Vibe-Project-ID`,
+`X-Vibe-Session-ID`, and `X-Vibe-Session-Path` headers, or inferred
+best-effort from User-Agent. These values are untrusted metadata: they never
+grant authorization or select a route.
+
+Sessions are explicit. Requests without a session ID remain unclassified; the
+gateway does not group them by client key, Agent, User-Agent, or prompt
+similarity. Valid incoming W3C `traceparent`, `tracestate`, and bounded
+allowlisted `baggage` are propagated as trace context without changing this
+session rule.
+
+All responses use `Cache-Control: no-store`. Request pages are ordered by
+`(started_at, request_id)` descending and accept an opaque `cursor` returned as
+`next_cursor`; clients must not construct or modify cursor values. `limit` is
+between 1 and 200. Supported request filters are `agent_id`, `principal_name`,
+`session_id`, `project_id`, `model`, `provider`, `protocol`, `status_class`,
+`capture_status`, `q`, `from`, and `to`. Times use RFC 3339. Session pages
+support `session_id`, `agent_id`, `principal_name`, `project_id`, and `q`.
+
+Request details return the summary, ordered gateway observations, and an entry
+for every payload stage. A stage always has an explicit state—`not_captured`,
+`captured`, `redacted`, `truncated`, `expired`, `dropped`, or `missing`—instead
+of representing unavailable content as an unexplained empty body. Stored JSON
+has already passed mandatory secret, credential, reasoning, and binary-payload
+sanitization. Image and file bytes are replaced by metadata descriptors.
+
+Metadata-only recording is the default. Structured or raw capture is an
+operator opt-in and still passes through decoded-JSON sanitization, credential
+and reasoning-field redaction, binary omission, per-snapshot size limits, and a
+per-request capture budget. `X-Vibe-Capture: metadata` can reduce one request to
+metadata-only and `X-Vibe-Capture: off` can disable its payload snapshots; a
+request cannot use the header to enable a mode above the configured maximum.
+Streaming responses are captured only as a bounded canonical response shape,
+never as raw SSE frames. The local recorder writes through a bounded
+asynchronous queue where summaries take priority over observations and payloads
+are evicted first, so telemetry pressure or SQLite failures do not fail provider
+traffic.
+
+The diff endpoint accepts an optional `base_id`. Without it, the parent request
+is preferred, followed by the immediately preceding request in the same
+Session. Comparisons report appended, removed, and rewritten messages plus
+tool, requested-model, effective-model, and provider changes. If either
+canonical request is expired, truncated, dropped, or missing, the response
+reports that state and the unavailable side rather than fabricating a diff.
+Diffs are structural comparisons of stored canonical request shapes; they do
+not infer semantic equivalence, tool causality, or content that was never
+captured.
+
+Deleting request content removes only payload snapshots for that exact request
+and retains its summary and trace observations. The request then reports an
+`expired` capture state; other requests in the same Session are unchanged.
+
+Payload retention and the payload disk quota are independent from summary
+retention. The store is the existing local, unencrypted SQLite database, so
+enabling detailed capture should be treated like writing prompts and responses
+to a local log file. The control plane renders captured JSON as escaped text and
+does not execute stored HTML. Future OTLP, Langfuse, or other exporters may be
+added as optional sinks, disabled by default, with a separate opt-in before any
+captured content leaves the machine.
+
 ## Multimodal Configuration
 
 ```text
@@ -212,6 +290,7 @@ candidates:
   "enabled": true,
   "provider": "builtin",
   "vision_fallback_model": "gateway/kimi-k2.6",
+  "vision_fallback_strategy": "assist",
   "vision_fallback_models": [
     {
       "target": "gateway/kimi-k2.6",
@@ -233,6 +312,10 @@ results are read from the active local snapshot and are not persisted into provi
 Before writing the configuration, it resolves a non-empty `vision_fallback_model` through
 the same capability path used by requests. An invalid selection returns HTTP 400 with
 `error: vision_fallback_invalid` and leaves the configuration file unchanged.
+
+`vision_fallback_strategy` accepts `assist`, `takeover`, or `reject`. Missing values are
+saved as `assist`. In assist mode the selected Vision model analyzes a bounded image-local
+request, while the originally resolved model remains the final answering target.
 
 `POST /admin/multimodal/ocr/test` runs the selected
 provider against an embedded deterministic Chinese and English fixture. Its

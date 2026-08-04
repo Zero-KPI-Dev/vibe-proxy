@@ -3,12 +3,14 @@ package config
 import (
 	"fmt"
 	"net/url"
+	"path"
 	"strings"
 	"time"
 
 	"github.com/a448582655/vibe-proxy/internal/ir"
 	"github.com/a448582655/vibe-proxy/internal/modelcapability"
 	"github.com/a448582655/vibe-proxy/internal/modelresolver"
+	"github.com/a448582655/vibe-proxy/internal/sensitive"
 )
 
 type ValidationIssue struct {
@@ -132,8 +134,106 @@ func ValidateRuntime(cfg *RuntimeConfig) []ValidationIssue {
 			issues = append(issues, issue("error", path+".rpm", "invalid_client_key_rpm", "Client key RPM must be greater than zero."))
 		}
 	}
+	issues = append(issues, validateAgentProfiles(cfg.AgentProfiles)...)
+	issues = append(issues, validateObservability(cfg.Observability)...)
 	issues = append(issues, validateMultimodal(cfg.Multimodal)...)
 	issues = append(issues, validateVisionFallback(cfg)...)
+	return issues
+}
+
+func validateObservability(cfg ObservabilityConfig) []ValidationIssue {
+	issues := []ValidationIssue{}
+	switch cfg.Capture.Mode {
+	case "metadata", "structured":
+	case "raw":
+		issues = append(issues, issue("warning", "observability.capture.mode", "raw_capture_sensitive", "Raw capture preserves the wire JSON shape after mandatory redaction and should be enabled only when needed."))
+	default:
+		issues = append(issues, issue("error", "observability.capture.mode", "invalid_capture_mode", "Capture mode must be metadata, structured, or raw."))
+	}
+	if cfg.Capture.MaxSnapshotBytes < 1<<10 || cfg.Capture.MaxSnapshotBytes > 4<<20 {
+		issues = append(issues, issue("error", "observability.capture.max_snapshot_bytes", "invalid_capture_size", "Snapshot size must be between 1 KiB and 4 MiB."))
+	}
+	if cfg.Capture.ImagePayloads != "metadata" {
+		issues = append(issues, issue("error", "observability.capture.image_payloads", "invalid_image_payload_policy", "Image payloads must use metadata-only capture."))
+	}
+	if len(cfg.Capture.HeaderAllowlist) > 32 {
+		issues = append(issues, issue("error", "observability.capture.header_allowlist", "invalid_capture_header", "At most 32 capture headers may be configured."))
+	}
+	for index, rawHeader := range cfg.Capture.HeaderAllowlist {
+		header := strings.ToLower(strings.TrimSpace(rawHeader))
+		headerPath := fmt.Sprintf("observability.capture.header_allowlist.%d", index)
+		if isSensitiveHeader(header) {
+			issues = append(issues, issue("error", headerPath, "sensitive_capture_header", "Credential and cookie headers can never be captured."))
+			continue
+		}
+		if !isValidHTTPHeaderName(header) || len(header) > 100 {
+			issues = append(issues, issue("error", headerPath, "invalid_capture_header", "Capture header names must be valid HTTP field names of at most 100 characters."))
+		}
+	}
+	if cfg.Retention.SummariesDays < 1 || cfg.Retention.SummariesDays > 3650 {
+		issues = append(issues, issue("error", "observability.retention.summaries_days", "invalid_summary_retention", "Summary retention must be between 1 and 3650 days."))
+	}
+	if cfg.Retention.ContentDays < 1 || cfg.Retention.ContentDays > cfg.Retention.SummariesDays {
+		issues = append(issues, issue("error", "observability.retention.content_days", "invalid_content_retention", "Content retention must be positive and no longer than summary retention."))
+	}
+	if cfg.Retention.MaxContentStorageMB < 1 || cfg.Retention.MaxContentStorageMB > 102400 {
+		issues = append(issues, issue("error", "observability.retention.max_content_storage_mb", "invalid_content_quota", "Content storage quota must be between 1 MiB and 100 GiB."))
+	}
+	return issues
+}
+
+func isSensitiveHeader(header string) bool {
+	return sensitive.IsCredentialName(header)
+}
+
+func isValidHTTPHeaderName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for _, r := range name {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || strings.ContainsRune("!#$%&'*+-.^_`|~", r) {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func validateAgentProfiles(profiles []AgentProfileConfig) []ValidationIssue {
+	issues := []ValidationIssue{}
+	for index, profile := range profiles {
+		basePath := fmt.Sprintf("agent_profiles.%s", profile.ID)
+		if strings.TrimSpace(profile.ID) == "" || len(profile.ID) > 100 {
+			issues = append(issues, issue("error", fmt.Sprintf("agent_profiles.%d", index), "invalid_agent_profile_id", "Agent profile id must contain 1 to 100 characters."))
+		}
+		if len(profile.Detect) == 0 {
+			issues = append(issues, issue("error", basePath+".detect", "missing_agent_detector", "Agent profile requires at least one detector."))
+			continue
+		}
+		for detector, pattern := range profile.Detect {
+			detectorPath := basePath + ".detect." + detector
+			if detector != "user_agent" && !strings.HasPrefix(detector, "header.") {
+				issues = append(issues, issue("error", detectorPath, "unsupported_agent_detector", "Agent detector must be user_agent or an allowlisted header."))
+				continue
+			}
+			if strings.HasPrefix(detector, "header.") {
+				header := strings.ToLower(strings.TrimPrefix(detector, "header."))
+				if sensitive.IsCredentialName(header) {
+					issues = append(issues, issue("error", detectorPath, "sensitive_agent_detector", "Sensitive credential headers cannot classify an Agent."))
+				}
+				if !isValidHTTPHeaderName(header) || len(header) > 100 {
+					issues = append(issues, issue("error", detectorPath, "invalid_agent_detector_header", "Agent detector headers must be valid HTTP field names of at most 100 characters."))
+				}
+			}
+			if strings.TrimSpace(pattern) == "" || len(pattern) > 200 {
+				issues = append(issues, issue("error", detectorPath, "invalid_agent_detector_pattern", "Agent detector pattern must contain 1 to 200 characters."))
+				continue
+			}
+			if _, err := path.Match(strings.ToLower(pattern), "validation-value"); err != nil {
+				issues = append(issues, issue("error", detectorPath, "invalid_agent_detector_pattern", "Agent detector pattern is not a valid glob."))
+			}
+		}
+	}
 	return issues
 }
 
@@ -149,6 +249,20 @@ func validateMultimodal(cfg MultimodalConfig) []ValidationIssue {
 	issues := []ValidationIssue{}
 	if cfg.Strategy != "ocr_then_vision" {
 		issues = append(issues, issue("error", "multimodal.strategy", "unsupported_multimodal_strategy", "Only ocr_then_vision is supported."))
+	}
+	switch cfg.VisionFallbackStrategy {
+	case "assist", "takeover", "reject":
+	default:
+		issues = append(issues, issue("error", "multimodal.vision_fallback_strategy", "unsupported_vision_fallback_strategy", "Vision fallback strategy must be assist, takeover, or reject."))
+	}
+	if cfg.VisionAssist.MaxPromptChars <= 0 || cfg.VisionAssist.MaxPromptChars > 50000 {
+		issues = append(issues, issue("error", "multimodal.vision_assist.max_prompt_chars", "invalid_vision_assist_limit", "Vision assist prompt text must be between 1 and 50000 characters."))
+	}
+	if cfg.VisionAssist.MaxOutputTokens <= 0 || cfg.VisionAssist.MaxOutputTokens > 8192 {
+		issues = append(issues, issue("error", "multimodal.vision_assist.max_output_tokens", "invalid_vision_assist_limit", "Vision assist output must be between 1 and 8192 tokens."))
+	}
+	if cfg.VisionAssist.Cache.IsEnabled() && (cfg.VisionAssist.Cache.MaxEntries <= 0 || cfg.VisionAssist.Cache.MaxEntries > 4096 || cfg.VisionAssist.Cache.TTL.Duration <= 0) {
+		issues = append(issues, issue("error", "multimodal.vision_assist.cache", "invalid_vision_assist_cache", "Vision assist cache requires a positive TTL and 1 to 4096 entries."))
 	}
 	hasOCR := cfg.OCR.Provider != ""
 	if !hasOCR && cfg.VisionFallbackModel == "" {

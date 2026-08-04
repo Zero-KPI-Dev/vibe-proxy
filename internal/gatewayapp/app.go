@@ -22,10 +22,17 @@ var (
 	prometheusSink *metrics.Prometheus
 )
 
+const defaultRetentionSweepInterval = time.Hour
+
 // App is a running gateway and the resources it owns.
 type App struct {
 	server   *http.Server
 	database *store.SQLite
+	recorder *telemetry.AsyncRecorder
+
+	retentionCancel context.CancelFunc
+	retentionDone   chan struct{}
+	retentionPolicy *retentionPolicy
 
 	ready     chan struct{}
 	done      chan struct{}
@@ -48,6 +55,41 @@ type App struct {
 	handlersOnce    sync.Once
 }
 
+type retentionPolicy struct {
+	mu                sync.RWMutex
+	summaryDays       int
+	contentRetention  time.Duration
+	payloadQuotaBytes int64
+}
+
+func newRetentionPolicy(cfg *config.RuntimeConfig) *retentionPolicy {
+	policy := &retentionPolicy{}
+	policy.update(cfg)
+	return policy
+}
+
+func (p *retentionPolicy) update(cfg *config.RuntimeConfig) (time.Duration, int64, bool, bool) {
+	if p == nil || cfg == nil {
+		return 0, 0, false, false
+	}
+	contentRetention := time.Duration(cfg.Observability.Retention.ContentDays) * 24 * time.Hour
+	payloadQuotaBytes := int64(cfg.Observability.Retention.MaxContentStorageMB) << 20
+	p.mu.Lock()
+	payloadPolicyChanged := p.contentRetention != contentRetention || p.payloadQuotaBytes != payloadQuotaBytes
+	summaryPolicyChanged := p.summaryDays != cfg.Observability.Retention.SummariesDays
+	p.summaryDays = cfg.Observability.Retention.SummariesDays
+	p.contentRetention = contentRetention
+	p.payloadQuotaBytes = payloadQuotaBytes
+	p.mu.Unlock()
+	return contentRetention, payloadQuotaBytes, payloadPolicyChanged, summaryPolicyChanged
+}
+
+func (p *retentionPolicy) current() (int, int64) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.summaryDays, p.payloadQuotaBytes
+}
+
 // Start loads configuration, starts the HTTP gateway, and returns once its
 // listener has been bound.
 func Start(_ context.Context, options Options) (*App, error) {
@@ -63,15 +105,39 @@ func Start(_ context.Context, options Options) (*App, error) {
 	if err != nil {
 		return nil, startupError("database", cfg.Server.Listen, err)
 	}
-	if err := db.Retain(cfg.Storage.RetentionDays); err != nil {
+	if err := db.Retain(cfg.Observability.Retention.SummariesDays); err != nil {
+		_ = db.Close()
+		return nil, startupError("database", cfg.Server.Listen, err)
+	}
+	if err := db.ConfigurePayloadStorage(
+		time.Duration(cfg.Observability.Retention.ContentDays)*24*time.Hour,
+		int64(cfg.Observability.Retention.MaxContentStorageMB)<<20,
+	); err != nil {
 		_ = db.Close()
 		return nil, startupError("database", cfg.Server.Listen, err)
 	}
 
+	policy := newRetentionPolicy(cfg)
+	runtimeOptions := options.Runtime
+	previousConfigApplied := runtimeOptions.OnConfigApplied
+	runtimeOptions.OnConfigApplied = func(next *config.RuntimeConfig) {
+		contentRetention, payloadQuotaBytes, payloadPolicyChanged, summaryPolicyChanged := policy.update(next)
+		if payloadPolicyChanged {
+			_ = db.ConfigurePayloadStorage(contentRetention, payloadQuotaBytes)
+		}
+		if summaryPolicyChanged {
+			_ = db.Retain(next.Observability.Retention.SummariesDays)
+		}
+		if previousConfigApplied != nil {
+			previousConfigApplied(next)
+		}
+	}
+
 	prom := sharedPrometheus()
 	recent := telemetry.NewRecentStore(200)
-	sink := metrics.MultiSink{db, prom, recent}
-	runtimeServer := runtime.NewWithOptions(options.ConfigPath, cfg, sink, prom, options.Runtime)
+	recorder := telemetry.NewAsyncRecorder(db, telemetry.DefaultRecorderCapacity)
+	sink := metrics.MultiSink{recorder, prom, recent}
+	runtimeServer := runtime.NewWithOptions(options.ConfigPath, cfg, sink, prom, runtimeOptions)
 	httpServer := &http.Server{
 		Addr:         cfg.Server.Listen,
 		ReadTimeout:  cfg.Server.ReadTimeout.Duration,
@@ -91,6 +157,9 @@ func Start(_ context.Context, options Options) (*App, error) {
 	}
 	listener, err := listen("tcp", cfg.Server.Listen)
 	if err != nil {
+		flushContext, cancel := context.WithTimeout(context.Background(), time.Second)
+		_ = recorder.Close(flushContext)
+		cancel()
 		_ = db.Close()
 		return nil, startupError("listen", cfg.Server.Listen, err)
 	}
@@ -98,16 +167,26 @@ func Start(_ context.Context, options Options) (*App, error) {
 	app := &App{
 		server:          httpServer,
 		database:        db,
+		recorder:        recorder,
 		ready:           make(chan struct{}),
 		done:            make(chan struct{}),
 		serveDone:       make(chan struct{}),
 		handlersDrained: make(chan struct{}),
+		retentionDone:   make(chan struct{}),
+		retentionPolicy: policy,
 		status: Status{
 			State:     StateStarting,
 			Address:   listener.Addr().String(),
 			StartedAt: time.Now(),
 		},
 	}
+	retentionContext, retentionCancel := context.WithCancel(context.Background())
+	app.retentionCancel = retentionCancel
+	retentionInterval := options.RetentionSweepInterval
+	if retentionInterval <= 0 {
+		retentionInterval = defaultRetentionSweepInterval
+	}
+	go app.runRetention(retentionContext, retentionInterval)
 	httpServer.Handler = app.trackHandlers(runtimeServer.Routes())
 	app.setState(StateRunning, nil)
 	close(app.ready)
@@ -210,7 +289,17 @@ func (a *App) shutdown(ctx context.Context) {
 func (a *App) finish() {
 	a.finishOnce.Do(func() {
 		<-a.handlersDrained
-		closeErr := a.database.Close()
+		if a.retentionCancel != nil {
+			a.retentionCancel()
+			<-a.retentionDone
+		}
+		var recorderErr error
+		if a.recorder != nil {
+			flushContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			recorderErr = a.recorder.Close(flushContext)
+			cancel()
+		}
+		closeErr := errors.Join(recorderErr, a.database.Close())
 		a.mu.Lock()
 		if a.shutdownErr == nil && closeErr != nil {
 			a.shutdownErr = closeErr
@@ -228,6 +317,24 @@ func (a *App) finish() {
 		a.mu.Unlock()
 		close(a.done)
 	})
+}
+
+func (a *App) runRetention(ctx context.Context, interval time.Duration) {
+	defer close(a.retentionDone)
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			// Retention is best-effort maintenance. A transient busy database must
+			// not terminate the gateway; the next sweep retries both policies.
+			summaryDays, payloadQuotaBytes := a.retentionPolicy.current()
+			_ = a.database.Retain(summaryDays)
+			_ = a.database.PrunePayloads(time.Now().UTC(), payloadQuotaBytes)
+		}
+	}
 }
 
 func (a *App) trackHandlers(next http.Handler) http.Handler {

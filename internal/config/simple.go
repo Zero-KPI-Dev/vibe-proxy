@@ -18,6 +18,7 @@ type SimpleConfig struct {
 	Server        ServerConfig                  `yaml:"server"`
 	Security      SecurityConfig                `yaml:"security"`
 	Storage       StorageConfig                 `yaml:"storage"`
+	Observability ObservabilityConfig           `yaml:"observability,omitempty"`
 	ModelCatalog  ModelCatalogConfig            `yaml:"model_catalog,omitempty"`
 	Multimodal    MultimodalConfig              `yaml:"multimodal,omitempty"`
 	ClientKeys    []ClientKeyConfig             `yaml:"client_keys"`
@@ -55,6 +56,8 @@ type ModelsConfig struct {
 }
 
 type AgentProfileConfig struct {
+	ID           string            `yaml:"-"`
+	Name         string            `yaml:"name,omitempty"`
 	Detect       map[string]string `yaml:"detect"`
 	DefaultModel string            `yaml:"default_model"`
 }
@@ -74,11 +77,13 @@ type RuntimeConfig struct {
 	Server        ServerConfig
 	Security      SecurityConfig
 	Storage       StorageConfig
+	Observability ObservabilityConfig
 	ModelCatalog  ModelCatalogConfig
 	Multimodal    MultimodalConfig
 	ClientKeys    []ClientKeyConfig
 	ModelResolver modelresolver.Config
 	Providers     map[string]ProviderConfig
+	AgentProfiles []AgentProfileConfig
 }
 
 func LoadRuntime(path string) (*RuntimeConfig, error) {
@@ -128,6 +133,7 @@ func CompileSimple(cfg SimpleConfig) (*RuntimeConfig, error) {
 	}
 	applyServerDefaults(&cfg.Server)
 	applyStorageDefaults(&cfg.Storage)
+	applyObservabilityDefaults(&cfg.Observability, cfg.Storage.RetentionDays)
 	applyMultimodalDefaults(&cfg.Multimodal)
 	providers := map[string]ProviderConfig{}
 	resolverProviders := make([]modelresolver.Provider, 0, len(cfg.Providers))
@@ -164,12 +170,36 @@ func CompileSimple(cfg SimpleConfig) (*RuntimeConfig, error) {
 		}
 		aliases[name] = alias
 	}
-	return &RuntimeConfig{Server: cfg.Server, Security: cfg.Security, Storage: cfg.Storage, ModelCatalog: cfg.ModelCatalog, Multimodal: cfg.Multimodal, ClientKeys: cfg.ClientKeys, Providers: providers, ModelResolver: modelresolver.Config{DefaultModel: cfg.Models.Default, AllowRaw: cfg.Models.AllowRaw, Aliases: aliases, Providers: resolverProviders}}, nil
+	agentProfiles := make([]AgentProfileConfig, 0, len(cfg.AgentProfiles))
+	profileIDs := make([]string, 0, len(cfg.AgentProfiles))
+	for id := range cfg.AgentProfiles {
+		profileIDs = append(profileIDs, id)
+	}
+	sort.Strings(profileIDs)
+	for _, id := range profileIDs {
+		profile := cfg.AgentProfiles[id]
+		profile.ID = id
+		profile.Detect = cloneStringMap(profile.Detect)
+		agentProfiles = append(agentProfiles, profile)
+	}
+	return &RuntimeConfig{Server: cfg.Server, Security: cfg.Security, Storage: cfg.Storage, Observability: cfg.Observability, ModelCatalog: cfg.ModelCatalog, Multimodal: cfg.Multimodal, ClientKeys: cfg.ClientKeys, Providers: providers, AgentProfiles: agentProfiles, ModelResolver: modelresolver.Config{DefaultModel: cfg.Models.Default, AllowRaw: cfg.Models.AllowRaw, Aliases: aliases, Providers: resolverProviders}}, nil
+}
+
+func cloneStringMap(source map[string]string) map[string]string {
+	if source == nil {
+		return nil
+	}
+	result := make(map[string]string, len(source))
+	for key, value := range source {
+		result[key] = value
+	}
+	return result
 }
 
 func CompileLegacy(cfg *Config) *RuntimeConfig {
 	applyServerDefaults(&cfg.Server)
 	applyStorageDefaults(&cfg.Storage)
+	applyObservabilityDefaults(&cfg.Observability, cfg.Storage.RetentionDays)
 	providers := map[string]ProviderConfig{}
 	resolverProviders := make([]modelresolver.Provider, 0, len(cfg.Channels))
 	aliases := map[string]modelresolver.Alias{}
@@ -189,7 +219,7 @@ func CompileLegacy(cfg *Config) *RuntimeConfig {
 		providers[ch.ID] = ProviderConfig{Type: ptype, BaseURL: ch.BaseURL, Auth: legacyAuth(ch), Models: models, Priority: ch.Weight, Timeout: ch.Timeout, MaxConcurrency: ch.MaxConcurrency}
 		resolverProviders = append(resolverProviders, modelresolver.Provider{ID: ch.ID, Type: ptype, BaseURL: ch.BaseURL, Models: models, Priority: ch.Weight})
 	}
-	return &RuntimeConfig{Server: cfg.Server, Security: cfg.Security, Storage: cfg.Storage, ClientKeys: cfg.ClientKeys, Providers: providers, ModelResolver: modelresolver.Config{DefaultModel: "", AllowRaw: true, Aliases: aliases, Providers: resolverProviders}}
+	return &RuntimeConfig{Server: cfg.Server, Security: cfg.Security, Storage: cfg.Storage, Observability: cfg.Observability, ClientKeys: cfg.ClientKeys, Providers: providers, ModelResolver: modelresolver.Config{DefaultModel: "", AllowRaw: true, Aliases: aliases, Providers: resolverProviders}}
 }
 
 func parseAlias(target string) (modelresolver.Alias, error) {
@@ -247,5 +277,32 @@ func applyStorageDefaults(s *StorageConfig) {
 	}
 	if s.RetentionDays <= 0 {
 		s.RetentionDays = 14
+	}
+}
+
+func applyObservabilityDefaults(o *ObservabilityConfig, summariesDays int) {
+	if o.Capture.Mode == "" {
+		o.Capture.Mode = "metadata"
+	}
+	if o.Capture.MaxSnapshotBytes == 0 {
+		o.Capture.MaxSnapshotBytes = 256 << 10
+	}
+	if o.Capture.ImagePayloads == "" {
+		o.Capture.ImagePayloads = "metadata"
+	}
+	if o.Capture.HeaderAllowlist == nil {
+		o.Capture.HeaderAllowlist = []string{"user-agent", "traceparent"}
+	}
+	if o.Retention.SummariesDays == 0 {
+		o.Retention.SummariesDays = summariesDays
+		if o.Retention.SummariesDays == 0 {
+			o.Retention.SummariesDays = 14
+		}
+	}
+	if o.Retention.ContentDays == 0 {
+		o.Retention.ContentDays = 3
+	}
+	if o.Retention.MaxContentStorageMB == 0 {
+		o.Retention.MaxContentStorageMB = 512
 	}
 }

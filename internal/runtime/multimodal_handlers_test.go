@@ -141,7 +141,8 @@ func TestRuntimeAdminMultimodalListsEffectiveVisionFallbackModels(t *testing.T) 
 		t.Fatalf("GET /admin/multimodal = %d: %s", w.Code, w.Body.String())
 	}
 	var response struct {
-		VisionFallbackModels []visionFallbackModelResponse `json:"vision_fallback_models"`
+		VisionFallbackModels   []visionFallbackModelResponse `json:"vision_fallback_models"`
+		VisionFallbackStrategy string                        `json:"vision_fallback_strategy"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
 		t.Fatal(err)
@@ -153,6 +154,9 @@ func TestRuntimeAdminMultimodalListsEffectiveVisionFallbackModels(t *testing.T) 
 	}
 	if !reflect.DeepEqual(response.VisionFallbackModels, want) {
 		t.Fatalf("candidates = %#v, want %#v", response.VisionFallbackModels, want)
+	}
+	if response.VisionFallbackStrategy != "assist" {
+		t.Fatalf("default Vision fallback strategy = %q, want assist", response.VisionFallbackStrategy)
 	}
 }
 
@@ -169,11 +173,14 @@ func TestRuntimeAdminMultimodalValidatesVisionFallbackBeforeWriting(t *testing.T
 		t.Fatal(err)
 	}
 
-	valid := adminJSONRequest(http.MethodPut, "/admin/multimodal", `{"enabled":true,"provider":"builtin","vision_fallback_model":"gateway/catalog-vision"}`)
+	valid := adminJSONRequest(http.MethodPut, "/admin/multimodal", `{"enabled":true,"provider":"builtin","vision_fallback_model":"gateway/catalog-vision","vision_fallback_strategy":"takeover"}`)
 	validW := httptest.NewRecorder()
 	s.Routes().ServeHTTP(validW, valid)
 	if validW.Code != http.StatusOK {
 		t.Fatalf("valid save = %d: %s", validW.Code, validW.Body.String())
+	}
+	if !strings.Contains(validW.Body.String(), `"vision_fallback_strategy":"takeover"`) {
+		t.Fatalf("saved strategy not returned: %s", validW.Body.String())
 	}
 
 	before, err := os.ReadFile(path)

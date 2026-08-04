@@ -51,7 +51,9 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
 
           <nav className="flex-1 space-y-1 p-3">
             {NAV_ITEMS.map((item) => {
-              const active = location.pathname === item.href
+              const active = item.href === "/"
+                ? location.pathname === item.href
+                : location.pathname === item.href || location.pathname.startsWith(`${item.href}/`)
               return (
                 <Link
                   key={item.href}

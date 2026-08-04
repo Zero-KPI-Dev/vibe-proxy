@@ -232,6 +232,14 @@ multimodal:
       max_entries: 256
       ttl: 24h
   vision_fallback_model: ""
+  vision_fallback_strategy: assist  # assist (default) | takeover | reject
+  vision_assist:
+    max_prompt_chars: 4000
+    max_output_tokens: 1024
+    cache:
+      enabled: true
+      max_entries: 256
+      ttl: 24h
 ```
 
 `builtin` is the default when `ocr.provider` is omitted and no endpoint is
@@ -280,9 +288,21 @@ logs. Provider authentication uses the same auth profile and secret-reference fo
 LLM providers.
 
 If `vision_fallback_model` is configured, OCR errors, empty text, or confidence below the
-threshold switch to that target while preserving the original image request. The target
-must resolve to a different provider/model, its effective capability must be
-`image_input: supported`, and its provider adapter must be able to transport images.
+threshold apply `vision_fallback_strategy`. `assist` is the default: vibe-proxy sends only
+the image and bounded text from the latest image-bearing user message to the Vision model,
+replaces those images with untrusted visual evidence, and lets the original model answer
+with the full conversation. Images in older messages are not sent to the helper; they become
+explicit `historical_image_not_analyzed` text markers so a text-only primary model never
+receives raw images or evidence attributed to the wrong turn. This avoids moving a long
+context to a smaller Vision model and keeps the historical prefix stable for upstream
+prompt-cache reuse.
+
+`takeover` preserves the original direct fallback: the untouched image request is routed to
+the Vision target and that model answers. When models.dev provides an input/context limit,
+clearly oversized takeover requests are rejected before the upstream call. `reject` does not
+invoke Vision after unusable OCR. The fallback target must resolve to a different
+provider/model, its effective capability must be `image_input: supported`, and its provider
+adapter must be able to transport images.
 Effective support may come from a model override, a provider default, or an unambiguous
 models.dev match, in that order. Explicit `unknown` and `unsupported`, as well as absent,
 ambiguous, or not-found catalog data, are rejected.
@@ -292,6 +312,69 @@ present it reports the warning `vision_fallback_unverified`; the runtime validat
 resolved target against the active catalog before saving or using it. An explicit
 `unknown` or `unsupported` remains the error `vision_fallback_invalid`. The client key is
 still authorized against the originally requested public model.
+
+## Local Observability and Content Capture
+
+Request summaries, trace observations, and Session identity are recorded locally in
+SQLite. Content capture is configured separately and defaults to metadata only:
+
+```yaml
+observability:
+  capture:
+    mode: metadata
+    max_snapshot_bytes: 262144
+    capture_response: false
+    capture_reasoning: false
+    image_payloads: metadata
+    header_allowlist: [user-agent, traceparent]
+  retention:
+    summaries_days: 14
+    content_days: 3
+    max_content_storage_mb: 512
+```
+
+`mode` accepts:
+
+- `metadata`: store request identity, routing, shape, status, timing, usage, and
+  observations without request or response bodies. This is the default.
+- `structured`: store bounded sanitized JSON snapshots for supported stages.
+- `raw`: preserve the supported wire JSON shape after the same mandatory sanitizer.
+  This is the highest-risk mode and produces a validation warning.
+
+`raw` does not mean unredacted. All detailed modes decode JSON before sanitizing it.
+Authorization and cookie headers, credential-like JSON keys, reasoning content unless
+`capture_reasoning` is enabled, image/file bytes, base64 payloads, and data URLs are
+always omitted or replaced. Only explicitly allowlisted non-sensitive headers may be
+stored. `image_payloads` currently must remain `metadata`.
+
+`max_snapshot_bytes` is also the shared per-request content budget across client,
+Canonical IR, upstream, and response snapshots. The valid range is 1 KiB through 4 MiB.
+When the budget is exhausted, later payloads report `dropped`; oversized JSON reports
+`truncated` rather than silently appearing complete.
+
+`capture_response` opts into canonical response capture. `capture_reasoning` is a
+separate high-sensitivity opt-in and should remain false unless the local operator has a
+specific debugging need. A request may send:
+
+```text
+X-Vibe-Capture: metadata
+X-Vibe-Capture: off
+```
+
+to reduce the configured capture level for that request. It can never elevate
+`metadata` to `structured` or `raw`.
+
+Summary retention remains longer than or equal to content retention. Content is pruned
+independently by age and `max_content_storage_mb`; payloads are evicted before summaries.
+Deleting one request's content leaves its summary and observations available with an
+explicit `expired` state. The embedded SQLite database is not encrypted by this feature,
+so detailed capture should be enabled only on a trusted local machine with appropriate
+filesystem permissions.
+
+Agent and Session identities are request metadata, not secrets or authorization claims.
+They are supplied by bounded `X-Vibe-Agent-*`, `X-Vibe-Session-*`,
+`X-Vibe-Project-ID`, and `X-Vibe-Parent-Request-ID` values, allowlisted baggage, or
+supported protocol metadata. No config option groups requests by API key or User-Agent.
 
 ## Agent Profiles
 

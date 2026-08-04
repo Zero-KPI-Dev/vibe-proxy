@@ -97,6 +97,9 @@ func TestValidateRuntimeAcceptsHTTPOCRFallback(t *testing.T) {
 	if cfg.Multimodal.OCR.MaxImages != 4 || cfg.Multimodal.OCR.Cache.MaxEntries != 256 || !cfg.Multimodal.OCR.Cache.IsEnabled() {
 		t.Fatalf("OCR defaults not applied: %+v", cfg.Multimodal.OCR)
 	}
+	if cfg.Multimodal.VisionFallbackStrategy != "assist" || cfg.Multimodal.VisionAssist.MaxPromptChars != 4000 || cfg.Multimodal.VisionAssist.MaxOutputTokens != 1024 || !cfg.Multimodal.VisionAssist.Cache.IsEnabled() {
+		t.Fatalf("Vision assist defaults not applied: %+v", cfg.Multimodal)
+	}
 }
 
 func TestValidateRuntimeDefaultsToBuiltinOCRFallback(t *testing.T) {
@@ -316,6 +319,93 @@ func TestValidateRuntimeRejectsInvalidAndDuplicateClientKeys(t *testing.T) {
 	}
 }
 
+func TestValidateRuntimeRejectsUnsafeAgentProfileDetectors(t *testing.T) {
+	cfg, err := CompileSimple(SimpleConfig{AgentProfiles: map[string]AgentProfileConfig{
+		"empty": {},
+		"secret": {Detect: map[string]string{
+			"header.authorization":   "Bearer *",
+			"header.x-auth-token":    "token-*",
+			"header.x-authtoken":     "token-*",
+			"header.api-key":         "key-*",
+			"header.x-client-secret": "secret-*",
+		}},
+		"broken":         {Detect: map[string]string{"user_agent": "["}},
+		"missing-header": {Detect: map[string]string{"header.": "*"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	issues := ValidateRuntime(cfg)
+	for _, code := range []string{"missing_agent_detector", "sensitive_agent_detector", "invalid_agent_detector_header", "invalid_agent_detector_pattern"} {
+		if !hasIssueCode(issues, code) {
+			t.Fatalf("missing %s validation issue: %+v", code, issues)
+		}
+	}
+	if got := countIssueCode(issues, "sensitive_agent_detector"); got != 5 {
+		t.Fatalf("sensitive_agent_detector count = %d, want 5: %+v", got, issues)
+	}
+}
+
+func TestValidateRuntimeRejectsUnsafeObservabilityCapture(t *testing.T) {
+	cfg, err := CompileSimple(SimpleConfig{Observability: ObservabilityConfig{
+		Capture: ObservabilityCaptureConfig{
+			Mode:             "everything",
+			MaxSnapshotBytes: 8 << 20,
+			ImagePayloads:    "full",
+			HeaderAllowlist:  []string{"authorization", "cookie"},
+		},
+		Retention: ObservabilityRetentionConfig{SummariesDays: 2, ContentDays: 3, MaxContentStorageMB: -1},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	issues := ValidateRuntime(cfg)
+	for _, code := range []string{
+		"invalid_capture_mode",
+		"invalid_capture_size",
+		"invalid_image_payload_policy",
+		"sensitive_capture_header",
+		"invalid_content_retention",
+		"invalid_content_quota",
+	} {
+		if !hasIssueCode(issues, code) {
+			t.Fatalf("missing %s validation issue: %+v", code, issues)
+		}
+	}
+}
+
+func TestValidateRuntimeRejectsCredentialLikeCaptureHeaders(t *testing.T) {
+	for _, header := range []string{
+		"x-auth-token", "x-authtoken", "api-key", "x-apikey", "x-client-secret", "x-clientsecret",
+		"x-private-key", "x-privatekey", "x-access-token", "x-accesstoken", "x-credentials",
+	} {
+		t.Run(header, func(t *testing.T) {
+			cfg, err := CompileSimple(SimpleConfig{Observability: ObservabilityConfig{
+				Capture: ObservabilityCaptureConfig{HeaderAllowlist: []string{header}},
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if issues := ValidateRuntime(cfg); !hasIssueCode(issues, "sensitive_capture_header") {
+				t.Fatalf("credential-like header %q was accepted: %+v", header, issues)
+			}
+		})
+	}
+}
+
+func TestValidateRuntimeWarnsForRawObservabilityCapture(t *testing.T) {
+	cfg, err := CompileSimple(SimpleConfig{Observability: ObservabilityConfig{
+		Capture: ObservabilityCaptureConfig{Mode: "raw"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	issues := ValidateRuntime(cfg)
+	if HasErrors(issues) || !hasIssueCode(issues, "raw_capture_sensitive") {
+		t.Fatalf("raw capture warning missing: %+v", issues)
+	}
+}
+
 func hasIssueCode(issues []ValidationIssue, code string) bool {
 	for _, validationIssue := range issues {
 		if validationIssue.Code == code {
@@ -323,4 +413,14 @@ func hasIssueCode(issues []ValidationIssue, code string) bool {
 		}
 	}
 	return false
+}
+
+func countIssueCode(issues []ValidationIssue, code string) int {
+	count := 0
+	for _, validationIssue := range issues {
+		if validationIssue.Code == code {
+			count++
+		}
+	}
+	return count
 }

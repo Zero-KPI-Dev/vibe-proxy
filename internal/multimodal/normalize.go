@@ -26,6 +26,7 @@ func NormalizeOCRRequest(req *ir.Request, results []ocr.Result, limits TextLimit
 		byIndex[result.Index] = result
 	}
 	copy := cloneRequest(req)
+	guardNeeded := !requestContainsText(copy, OCRSafetyGuard)
 	imageIndex := 0
 	remaining := limits.Total
 	for messageIndex := range copy.Messages {
@@ -48,6 +49,12 @@ func NormalizeOCRRequest(req *ir.Request, results []ocr.Result, limits TextLimit
 			}
 			block.Type = ir.ContentText
 			block.Text = formatOCRText(imageIndex, text, result, truncated)
+			if imageIndex == 0 && guardNeeded {
+				// Keep the safety instruction adjacent to the new evidence instead
+				// of rewriting the leading system prompt. This preserves the long
+				// conversation prefix for upstream prompt-cache reuse.
+				block.Text = OCRSafetyGuard + "\n\n" + block.Text
+			}
 			block.Image = nil
 			imageIndex++
 		}
@@ -55,7 +62,6 @@ func NormalizeOCRRequest(req *ir.Request, results []ocr.Result, limits TextLimit
 	if imageIndex != len(results) {
 		return nil, ir.GatewayError{StatusCode: 502, Kind: "multimodal_error", Code: "ocr_invalid_response", Message: "OCR returned unexpected extra image results."}
 	}
-	addOCRSafetyGuard(copy)
 	return copy, nil
 }
 
@@ -68,25 +74,15 @@ func cloneRequest(req *ir.Request) *ir.Request {
 	return &copy
 }
 
-func addOCRSafetyGuard(req *ir.Request) {
+func requestContainsText(req *ir.Request, needle string) bool {
 	for _, message := range req.Messages {
-		if message.Role != ir.RoleSystem {
-			continue
-		}
 		for _, block := range message.Content {
-			if block.Type == ir.ContentText && strings.Contains(block.Text, OCRSafetyGuard) {
-				return
+			if block.Type == ir.ContentText && strings.Contains(block.Text, needle) {
+				return true
 			}
 		}
 	}
-	guard := ir.ContentBlock{Type: ir.ContentText, Text: OCRSafetyGuard}
-	for i := range req.Messages {
-		if req.Messages[i].Role == ir.RoleSystem {
-			req.Messages[i].Content = append(req.Messages[i].Content, guard)
-			return
-		}
-	}
-	req.Messages = append([]ir.Message{{Role: ir.RoleSystem, Content: []ir.ContentBlock{guard}}}, req.Messages...)
+	return false
 }
 
 func formatOCRText(index int, text string, result ocr.Result, truncated bool) string {

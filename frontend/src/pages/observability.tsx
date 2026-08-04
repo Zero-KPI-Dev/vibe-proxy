@@ -30,6 +30,7 @@ import { cn } from "@/lib/utils"
 import { Activity, Gauge, Coins, AlertTriangle, BarChart3 } from "lucide-react"
 import type { MetricPoint } from "@/lib/types"
 import { useTranslation } from "react-i18next"
+import { ObservabilityNav } from "@/components/observability-nav"
 
 export function ObservabilityPage() {
   const { t, i18n } = useTranslation()
@@ -47,29 +48,32 @@ export function ObservabilityPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold">{t("observability.title")}</h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            {t("observability.description")}
-          </p>
+      <div className="space-y-4">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h1 className="text-2xl font-semibold">{t("observability.title")}</h1>
+            <p className="text-sm text-muted-foreground mt-1">
+              {t("observability.description")}
+            </p>
+          </div>
+          <div className="flex items-center gap-1 self-start rounded-lg border border-border p-1">
+            {TIME_RANGES.map((r) => (
+              <button
+                key={r}
+                onClick={() => setRange(r)}
+                className={cn(
+                  "px-3 py-1 text-sm rounded-md transition-colors",
+                  range === r
+                    ? "bg-accent text-accent-foreground font-medium"
+                    : "text-muted-foreground hover:text-foreground"
+                )}
+              >
+                {r}
+              </button>
+            ))}
+          </div>
         </div>
-        <div className="flex items-center gap-1 rounded-lg border border-border p-1">
-          {TIME_RANGES.map((r) => (
-            <button
-              key={r}
-              onClick={() => setRange(r)}
-              className={cn(
-                "px-3 py-1 text-sm rounded-md transition-colors",
-                range === r
-                  ? "bg-accent text-accent-foreground font-medium"
-                  : "text-muted-foreground hover:text-foreground"
-              )}
-            >
-              {r}
-            </button>
-          ))}
-        </div>
+        <ObservabilityNav />
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">

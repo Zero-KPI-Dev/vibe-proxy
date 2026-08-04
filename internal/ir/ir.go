@@ -37,7 +37,10 @@ type Request struct {
 	ID               string            `json:"id"`
 	ClientProtocol   Protocol          `json:"client_protocol"`
 	AgentID          string            `json:"agent_id,omitempty"`
+	AgentName        string            `json:"agent_name,omitempty"`
+	AgentVersion     string            `json:"agent_version,omitempty"`
 	ProjectID        string            `json:"project_id,omitempty"`
+	SessionID        string            `json:"session_id,omitempty"`
 	RequestedModel   string            `json:"requested_model"`
 	ResolvedProvider string            `json:"resolved_provider,omitempty"`
 	ResolvedModel    string            `json:"resolved_model,omitempty"`

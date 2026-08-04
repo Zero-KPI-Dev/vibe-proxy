@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -19,6 +20,7 @@ import (
 	"github.com/a448582655/vibe-proxy/internal/config"
 	"github.com/a448582655/vibe-proxy/internal/metrics"
 	"github.com/a448582655/vibe-proxy/internal/modelcapability"
+	"github.com/a448582655/vibe-proxy/internal/store"
 	"github.com/a448582655/vibe-proxy/internal/telemetry"
 	"github.com/a448582655/vibe-proxy/internal/upstreamauth"
 )
@@ -29,6 +31,33 @@ var testProm *metrics.Prometheus
 type roundTrip func(*http.Request) (*http.Response, error)
 
 func (f roundTrip) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+type observabilityRecordingSink struct {
+	finished     []telemetry.Event
+	payloads     []telemetry.PayloadSnapshot
+	observations []telemetry.TraceObservation
+	failWrites   bool
+}
+
+func (s *observabilityRecordingSink) RequestStarted(telemetry.Event) {}
+func (s *observabilityRecordingSink) Token(telemetry.Event)          {}
+func (s *observabilityRecordingSink) RequestFinished(event telemetry.Event) {
+	s.finished = append(s.finished, event)
+}
+func (s *observabilityRecordingSink) RecordPayload(snapshot telemetry.PayloadSnapshot) error {
+	if s.failWrites {
+		return errors.New("payload store unavailable")
+	}
+	s.payloads = append(s.payloads, snapshot)
+	return nil
+}
+func (s *observabilityRecordingSink) RecordObservation(observation telemetry.TraceObservation) error {
+	if s.failWrites {
+		return errors.New("observation store unavailable")
+	}
+	s.observations = append(s.observations, observation)
+	return nil
+}
 
 func TestMetricsRange(t *testing.T) {
 	tests := []struct {
@@ -93,6 +122,177 @@ func TestRuntimeHealthzReportsStableServerStartTime(t *testing.T) {
 	}
 }
 
+func TestRuntimeRecordsPayloadStagesAndIgnoresRecorderFailure(t *testing.T) {
+	tests := []struct {
+		name       string
+		failWrites bool
+	}{
+		{name: "records stages"},
+		{name: "telemetry failure does not change response", failWrites: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			sink := &observabilityRecordingSink{failWrites: test.failWrites}
+			s := newObservabilityTestServer(t, sink, func(r *http.Request) (*http.Response, error) {
+				if got := r.Header.Get("Authorization"); got != "" {
+					t.Fatalf("unexpected upstream authorization in auth:none test: %q", got)
+				}
+				return jsonResponse(http.StatusOK, `{"id":"chatcmpl-1","model":"raw-chat","choices":[{"message":{"role":"assistant","content":"world"},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}}`), nil
+			})
+			request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"vibe-fast","messages":[{"role":"user","content":"hello"}],"api_key":"body-secret"}`))
+			request.Header.Set("Authorization", "Bearer vibe-local-dev-key")
+			request.Header.Set("User-Agent", "codex/1")
+			response := httptest.NewRecorder()
+			s.Routes().ServeHTTP(response, request)
+			if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "world") {
+				t.Fatalf("response changed by telemetry: %d %s", response.Code, response.Body.String())
+			}
+			if test.failWrites {
+				return
+			}
+			stages := map[telemetry.PayloadStage]telemetry.PayloadSnapshot{}
+			for _, payload := range sink.payloads {
+				stages[payload.Stage] = payload
+				if strings.Contains(string(payload.Body), "body-secret") || payload.Headers.Get("Authorization") != "" {
+					t.Fatalf("payload leaked a secret: %+v", payload)
+				}
+			}
+			for _, stage := range []telemetry.PayloadStage{
+				telemetry.PayloadStageClientRequest,
+				telemetry.PayloadStageCanonicalRequest,
+				telemetry.PayloadStageUpstreamRequest,
+				telemetry.PayloadStageCanonicalResponse,
+			} {
+				if _, ok := stages[stage]; !ok {
+					t.Fatalf("missing payload stage %q: %+v", stage, sink.payloads)
+				}
+			}
+			if len(sink.observations) == 0 || len(sink.finished) != 1 || sink.finished[0].CaptureStatus == telemetry.CaptureStatusNotCaptured {
+				t.Fatalf("missing observation/capture summary: observations=%+v finished=%+v", sink.observations, sink.finished)
+			}
+		})
+	}
+}
+
+func TestRuntimeMarksDisabledResponseCaptureAsNotCaptured(t *testing.T) {
+	sink := &observabilityRecordingSink{}
+	s := newObservabilityTestServer(t, sink, func(r *http.Request) (*http.Response, error) {
+		return jsonResponse(http.StatusOK, `{"id":"chatcmpl-1","model":"raw-chat","choices":[{"message":{"role":"assistant","content":"world"},"finish_reason":"stop"}]}`), nil
+	})
+	cfg := *s.current().Config
+	cfg.Observability.Capture.CaptureResponse = false
+	s.applyRuntimeConfig(&cfg)
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"vibe-fast","messages":[{"role":"user","content":"hello"}]}`))
+	request.Header.Set("Authorization", "Bearer vibe-local-dev-key")
+	response := httptest.NewRecorder()
+	s.Routes().ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("response: %d %s", response.Code, response.Body.String())
+	}
+	for _, payload := range sink.payloads {
+		if payload.Stage == telemetry.PayloadStageCanonicalResponse {
+			if payload.CaptureStatus != telemetry.CaptureStatusNotCaptured || len(payload.Body) != 0 || payload.MediaType != "" {
+				t.Fatalf("disabled response capture was not explicit: %+v", payload)
+			}
+			return
+		}
+	}
+	t.Fatalf("missing not-captured response marker: %+v", sink.payloads)
+}
+
+func TestRuntimeStreamingCaptureStoresCanonicalResponseNotSSE(t *testing.T) {
+	sink := &observabilityRecordingSink{}
+	s := newObservabilityTestServer(t, sink, func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body: io.NopCloser(strings.NewReader(
+				"data: {\"id\":\"chatcmpl-stream\",\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\n" +
+					"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" +
+					"data: [DONE]\n\n",
+			)),
+		}, nil
+	})
+	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"vibe-fast","stream":true,"messages":[{"role":"user","content":"hi"}]}`))
+	request.Header.Set("Authorization", "Bearer vibe-local-dev-key")
+	response := httptest.NewRecorder()
+	s.Routes().ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("stream response: %d %s", response.Code, response.Body.String())
+	}
+	for _, payload := range sink.payloads {
+		if payload.Stage != telemetry.PayloadStageCanonicalResponse {
+			continue
+		}
+		body := string(payload.Body)
+		if !strings.Contains(body, "hello") || strings.Contains(body, "data:") || strings.Contains(body, "chat.completion.chunk") {
+			t.Fatalf("stream capture is not canonical: %s", body)
+		}
+		return
+	}
+	t.Fatalf("missing canonical stream response: %+v", sink.payloads)
+}
+
+func TestObservabilityAdminHandlersQueryDetailDiffSessionsAndDeleteContent(t *testing.T) {
+	database, err := store.Open(filepath.Join(t.TempDir(), "admin-observability.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	now := time.Now().UTC().Truncate(time.Second)
+	completed := now.Add(time.Second)
+	for _, event := range []telemetry.Event{
+		{RequestID: "request-1", SessionID: "session-1", SessionName: "Trace work", AgentID: "codex", PrincipalName: "alice", StartedAt: now, CompletedAt: &completed, StatusCode: 200, CaptureMode: "structured", CaptureStatus: telemetry.CaptureStatusCaptured},
+		{RequestID: "request-2", SessionID: "session-1", ParentRequestID: "request-1", AgentID: "codex", PrincipalName: "alice", StartedAt: now.Add(time.Second), CompletedAt: &completed, StatusCode: 200, CaptureMode: "structured", CaptureStatus: telemetry.CaptureStatusCaptured},
+	} {
+		database.RequestFinished(event)
+	}
+	for _, payload := range []telemetry.PayloadSnapshot{
+		{RequestID: "request-1", Stage: telemetry.PayloadStageCanonicalRequest, CaptureMode: telemetry.CaptureModeStructured, CaptureStatus: telemetry.CaptureStatusCaptured, Body: []byte(`{"requested_model":"vibe","messages":[]}`), CreatedAt: now},
+		{RequestID: "request-2", Stage: telemetry.PayloadStageCanonicalRequest, CaptureMode: telemetry.CaptureModeStructured, CaptureStatus: telemetry.CaptureStatusCaptured, Body: []byte(`{"requested_model":"vibe","messages":[{"role":"user","content":[]}]}`), CreatedAt: now},
+	} {
+		if err := database.RecordPayload(payload); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cfg, err := config.CompileSimple(config.SimpleConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	testPromOnce.Do(func() { testProm = metrics.New() })
+	s := NewWithOptions("", cfg, metrics.MultiSink{database}, testProm, Options{AdminTokenOverride: "admin-token"})
+
+	for _, target := range []string{
+		"/admin/observability/requests?limit=1&agent_id=codex",
+		"/admin/observability/requests/request-2",
+		"/admin/observability/requests/request-2/diff",
+		"/admin/observability/sessions?agent_id=codex",
+		"/admin/observability/sessions/session-1",
+	} {
+		response := httptest.NewRecorder()
+		s.Routes().ServeHTTP(response, adminJSONRequest(http.MethodGet, target, ""))
+		if response.Code != http.StatusOK || response.Header().Get("Cache-Control") != "no-store" || !json.Valid(response.Body.Bytes()) {
+			t.Fatalf("GET %s = %d headers=%v body=%s", target, response.Code, response.Header(), response.Body.String())
+		}
+	}
+
+	deleteResponse := httptest.NewRecorder()
+	s.Routes().ServeHTTP(deleteResponse, adminJSONRequest(http.MethodDelete, "/admin/observability/requests/request-2/content", ""))
+	if deleteResponse.Code != http.StatusOK || deleteResponse.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("delete content = %d %s", deleteResponse.Code, deleteResponse.Body.String())
+	}
+	detailResponse := httptest.NewRecorder()
+	s.Routes().ServeHTTP(detailResponse, adminJSONRequest(http.MethodGet, "/admin/observability/requests/request-2", ""))
+	if !strings.Contains(detailResponse.Body.String(), `"state":"expired"`) {
+		t.Fatalf("detail did not report expired capture: %s", detailResponse.Body.String())
+	}
+	other, err := database.PayloadSnapshots("request-1")
+	if err != nil || len(other) != 1 {
+		t.Fatalf("exact deletion removed another request: %+v err=%v", other, err)
+	}
+}
+
 func TestRuntimeModelsEndpoint(t *testing.T) {
 	s := newTestServer(t, func(r *http.Request) (*http.Response, error) { return jsonResponse(200, `{}`), nil })
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
@@ -121,6 +321,110 @@ func TestRuntimeOpenAIChatToOpenAICompatible(t *testing.T) {
 	s.Routes().ServeHTTP(w, req)
 	if w.Code != 200 || !strings.Contains(w.Body.String(), `"content":"ok"`) {
 		t.Fatalf("unexpected response code=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestRuntimeTracksIdentityAndRequestShape(t *testing.T) {
+	recent := telemetry.NewRecentStore(10)
+	s := newTestServer(t, func(r *http.Request) (*http.Response, error) {
+		return jsonResponse(200, `{"id":"chatcmpl_identity","model":"raw-chat","choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}}`), nil
+	})
+	s.sink = recent
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"vibe-fast","messages":[{"role":"user","content":[{"type":"text","text":"read"},{"type":"image_url","image_url":{"url":"data:image/png;base64,AA=="}}]}],"tools":[{"type":"function","function":{"name":"lookup","parameters":{"type":"object"}}}]}`))
+	req.Header.Set("Authorization", "Bearer vibe-local-dev-key")
+	req.Header.Set("Traceparent", "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
+	req.Header.Set("X-Vibe-Agent-ID", "codex")
+	req.Header.Set("X-Vibe-Agent-Name", "Codex CLI")
+	req.Header.Set("X-Vibe-Session-ID", "session-42")
+	req.Header.Set("X-Vibe-Project-ID", "vibe-proxy")
+	w := httptest.NewRecorder()
+	s.Routes().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("unexpected response: %d %s", w.Code, w.Body.String())
+	}
+	events := recent.Recent(10)
+	if len(events) != 1 {
+		t.Fatalf("request was not tracked: %+v", events)
+	}
+	event := events[0]
+	if event.RequestID == "" || event.RequestID != w.Header().Get("X-Vibe-Proxy-Request-ID") || event.TraceID != "4bf92f3577b34da6a3ce929d0e0e4736" {
+		t.Fatalf("request and trace identity missing: %+v", event)
+	}
+	if event.PrincipalName != "test" || event.ClientName != "test" || event.AgentID != "codex" || event.SessionID != "session-42" || event.ProjectID != "vibe-proxy" {
+		t.Fatalf("principal or caller identity missing: %+v", event)
+	}
+	if event.InitialProvider != "mockai" || event.InitialModel != "raw-chat" || event.ChannelID != "mockai" || event.UpstreamModel != "raw-chat" {
+		t.Fatalf("route summary missing: %+v", event)
+	}
+	if event.RequestShape.InputMessageCount != 1 || event.RequestShape.InputBlockCount != 2 || event.RequestShape.InputImageCount != 1 || event.RequestShape.InputToolCount != 1 || event.RequestShape.InputTextChars != 4 {
+		t.Fatalf("input shape missing: %+v", event.RequestShape)
+	}
+	if event.RequestShape.OutputMessageCount != 1 || event.RequestShape.OutputTextChars != 2 || event.FinishReason != "stop" || event.UpstreamRequestID != "chatcmpl_identity" {
+		t.Fatalf("output summary missing: %+v", event)
+	}
+}
+
+func TestRuntimeTracksEarlyFailuresWithoutRequestContent(t *testing.T) {
+	tests := []struct {
+		name          string
+		authorization string
+		body          string
+		wantStatus    int
+		wantCode      string
+	}{
+		{name: "authentication", authorization: "Bearer wrong", body: `{"secret":"must-not-appear"}`, wantStatus: http.StatusUnauthorized, wantCode: "invalid_api_key"},
+		{name: "parse", authorization: "Bearer vibe-local-dev-key", body: `{"secret":"must-not-appear"`, wantStatus: http.StatusBadRequest, wantCode: "invalid_json"},
+		{name: "resolution", authorization: "Bearer vibe-local-dev-key", body: `{"model":"missing-model","messages":[]}`, wantStatus: http.StatusNotFound, wantCode: "model_not_found:missing-model"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			recent := telemetry.NewRecentStore(10)
+			s := newTestServer(t, func(r *http.Request) (*http.Response, error) {
+				t.Fatal("early failure reached upstream")
+				return nil, nil
+			})
+			s.sink = recent
+			req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(test.body))
+			req.Header.Set("Authorization", test.authorization)
+			w := httptest.NewRecorder()
+			s.Routes().ServeHTTP(w, req)
+			if w.Code != test.wantStatus {
+				t.Fatalf("unexpected status: %d %s", w.Code, w.Body.String())
+			}
+			events := recent.Recent(10)
+			if len(events) != 1 || events[0].CompletedAt == nil || events[0].StatusCode != test.wantStatus || events[0].ErrorCode != test.wantCode {
+				t.Fatalf("early failure was not finished: %+v", events)
+			}
+			if events[0].RequestID == "" || events[0].RequestID != w.Header().Get("X-Vibe-Proxy-Request-ID") {
+				t.Fatalf("early failure has no stable request id: %+v headers=%v", events[0], w.Header())
+			}
+			raw, _ := json.Marshal(events[0])
+			if strings.Contains(string(raw), "must-not-appear") || strings.Contains(string(raw), test.authorization) {
+				t.Fatalf("request content or credential leaked into telemetry: %s", raw)
+			}
+		})
+	}
+}
+
+func TestRuntimeTracksEarlyFailureDuringModelAuthorization(t *testing.T) {
+	recent := telemetry.NewRecentStore(10)
+	s := newTestServer(t, func(r *http.Request) (*http.Response, error) {
+		t.Fatal("authorization failure reached upstream")
+		return nil, nil
+	})
+	s.sink = recent
+	s.current().Config.ClientKeys[0].AllowedModels = []string{"vibe-coder"}
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"vibe-fast","messages":[]}`))
+	req.Header.Set("Authorization", "Bearer vibe-local-dev-key")
+	w := httptest.NewRecorder()
+	s.Routes().ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("unexpected status: %d %s", w.Code, w.Body.String())
+	}
+	events := recent.Recent(10)
+	if len(events) != 1 || events[0].StatusCode != http.StatusForbidden || events[0].ErrorCode != "model_not_allowed" || events[0].PrincipalName != "test" {
+		t.Fatalf("authorization failure was not tracked: %+v", events)
 	}
 }
 
@@ -216,15 +520,22 @@ func TestRuntimeAdminPlaygroundUsesFullPipelineWithoutDataPlaneKey(t *testing.T)
 		requestIDs[requestID] = true
 	}
 	events := recent.Recent(10)
-	if len(events) != len(requests) {
+	if len(events) != len(requests)+1 {
 		t.Fatalf("admin playground requests were not all tracked: %+v", events)
 	}
+	adminEvents := 0
+	sawRejectedPublicRequest := false
 	for _, event := range events {
+		if event.ErrorCode == "invalid_api_key" {
+			sawRejectedPublicRequest = true
+			continue
+		}
 		if event.ClientName != "admin-playground" || !requestIDs[event.RequestID] {
 			t.Fatalf("admin playground request was not tracked correctly: %+v", events)
 		}
+		adminEvents++
 	}
-	if len(requestIDs) != len(requests) {
+	if adminEvents != len(requests) || !sawRejectedPublicRequest || len(requestIDs) != len(requests) {
 		t.Fatalf("admin playground request was not tracked correctly: %+v", events)
 	}
 }
@@ -353,7 +664,7 @@ func TestRuntimeOCRFallbackForAllClientProtocolsAndCache(t *testing.T) {
 func TestRuntimeFallsBackFromOCRToVisionProvider(t *testing.T) {
 	cfg, err := config.CompileSimple(config.SimpleConfig{
 		ClientKeys: []config.ClientKeyConfig{{Name: "test", KeyHash: "$2a$10$AXRkz.6y44ygdJFk6L1/IO0aRVp9zRMfXDJoBCBsroxVac/Lovvz6", Enabled: true, AllowedModels: []string{"*"}, RPM: 1000}},
-		Multimodal: config.MultimodalConfig{Enabled: true, VisionFallbackModel: "vibe-vision", OCR: config.OCRConfig{Provider: "http", Endpoint: "http://ocr.local/v1/ocr", Auth: upstreamauth.Profile{Type: "none"}}},
+		Multimodal: config.MultimodalConfig{Enabled: true, VisionFallbackModel: "vibe-vision", VisionFallbackStrategy: "takeover", OCR: config.OCRConfig{Provider: "http", Endpoint: "http://ocr.local/v1/ocr", Auth: upstreamauth.Profile{Type: "none"}}},
 		Providers: map[string]config.ProviderConfig{
 			"text":   {Type: "openai-compatible", BaseURL: "https://text.example/v1", Auth: upstreamauth.Profile{Type: "none"}, Models: []string{"text-model"}, DefaultCapabilities: modelcapability.ModelCapabilities{ImageInput: modelcapability.SupportUnsupported}},
 			"vision": {Type: "openai-compatible", BaseURL: "https://vision.example/v1", Auth: upstreamauth.Profile{Type: "none"}, Models: []string{"vision-model"}, DefaultCapabilities: modelcapability.ModelCapabilities{ImageInput: modelcapability.SupportSupported}},
@@ -387,12 +698,82 @@ func TestRuntimeFallsBackFromOCRToVisionProvider(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer vibe-local-dev-key")
 	w := httptest.NewRecorder()
 	s.Routes().ServeHTTP(w, req)
-	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "vision ok") || w.Header().Get("X-Vibe-Proxy-Image-Fallback") != "vision" {
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "vision ok") || w.Header().Get("X-Vibe-Proxy-Image-Fallback") != "vision" || w.Header().Get("X-Vibe-Proxy-Vision-Strategy") != "takeover" {
 		t.Fatalf("unexpected Vision fallback response: %d %v %s", w.Code, w.Header(), w.Body.String())
 	}
 	events := recent.Recent(10)
 	if len(events) != 1 || events[0].Transformation == nil || events[0].Transformation.MultimodalRoute != "vision_fallback" || events[0].Transformation.RouteReason != "ocr_no_usable_text" || events[0].Transformation.ModelImageSupport != "unsupported" || events[0].Transformation.OriginalProvider != "text" || events[0].Transformation.EffectiveProvider != "vision" || events[0].Transformation.OCRFailureCode != "ocr_no_usable_text" {
 		t.Fatalf("unexpected Vision telemetry: %+v", events)
+	}
+}
+
+func TestRuntimeVisionAssistExtractsEvidenceThenUsesOriginalModel(t *testing.T) {
+	cfg, err := config.CompileSimple(config.SimpleConfig{
+		Observability: config.ObservabilityConfig{Capture: config.ObservabilityCaptureConfig{Mode: "structured", MaxSnapshotBytes: 512 << 10, CaptureResponse: true}},
+		ClientKeys:    []config.ClientKeyConfig{{Name: "test", KeyHash: "$2a$10$AXRkz.6y44ygdJFk6L1/IO0aRVp9zRMfXDJoBCBsroxVac/Lovvz6", Enabled: true, AllowedModels: []string{"*"}, RPM: 1000}},
+		Multimodal:    config.MultimodalConfig{Enabled: true, VisionFallbackModel: "vibe-vision", OCR: config.OCRConfig{Provider: "http", Endpoint: "http://ocr.local/v1/ocr", Auth: upstreamauth.Profile{Type: "none"}}},
+		Providers: map[string]config.ProviderConfig{
+			"text":   {Type: "openai-compatible", BaseURL: "https://text.example/v1", Auth: upstreamauth.Profile{Type: "none"}, Models: []string{"text-model"}, DefaultCapabilities: modelcapability.ModelCapabilities{ImageInput: modelcapability.SupportUnsupported}},
+			"vision": {Type: "openai-compatible", BaseURL: "https://vision.example/v1", Auth: upstreamauth.Profile{Type: "none"}, Models: []string{"vision-model"}, DefaultCapabilities: modelcapability.ModelCapabilities{ImageInput: modelcapability.SupportSupported}},
+		},
+		Models: config.ModelsConfig{AllowRaw: true, Aliases: map[string]string{"vibe-fast": "text/text-model", "vibe-vision": "vision/vision-model"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sink := &observabilityRecordingSink{}
+	testPromOnce.Do(func() { testProm = metrics.New() })
+	s := New("", cfg, sink, testProm)
+	s.SetOCRHTTPClient(&http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
+		return jsonResponse(200, `{"results":[{"index":0,"text":"uncertain","confidence":0.1}]}`), nil
+	})})
+	var calls atomic.Int32
+	s.SetHTTPClient(&http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
+		body, _ := io.ReadAll(r.Body)
+		switch calls.Add(1) {
+		case 1:
+			if r.URL.String() != "https://vision.example/v1/chat/completions" || !strings.Contains(string(body), `"model":"vision-model"`) || !strings.Contains(string(body), `"image_url"`) {
+				t.Fatalf("unexpected Vision assist request: %s %s", r.URL, body)
+			}
+			if strings.Contains(string(body), "historic context must stay with primary") {
+				t.Fatalf("Vision helper received the full conversation: %s", body)
+			}
+			return jsonResponse(200, `{"id":"vision-evidence","model":"vision-model","choices":[{"message":{"role":"assistant","content":"A ginger cat is sitting on a blue chair."},"finish_reason":"stop"}],"usage":{"prompt_tokens":20,"completion_tokens":8,"total_tokens":28}}`), nil
+		case 2:
+			if r.URL.String() != "https://text.example/v1/chat/completions" || !strings.Contains(string(body), `"model":"text-model"`) {
+				t.Fatalf("original model was not used after Vision assist: %s %s", r.URL, body)
+			}
+			if strings.Contains(string(body), `"image_url"`) || !strings.Contains(string(body), "vibe-proxy-vision") || !strings.Contains(string(body), "A ginger cat is sitting on a blue chair") || !strings.Contains(string(body), "historic context must stay with primary") {
+				t.Fatalf("primary request did not contain preserved context plus Vision evidence: %s", body)
+			}
+			return jsonResponse(200, `{"id":"primary-answer","model":"text-model","choices":[{"message":{"role":"assistant","content":"primary model answered"},"finish_reason":"stop"}],"usage":{"prompt_tokens":100,"completion_tokens":4,"total_tokens":104}}`), nil
+		default:
+			t.Fatalf("unexpected extra provider call: %s", r.URL)
+			return nil, nil
+		}
+	})})
+	encoded := base64.StdEncoding.EncodeToString([]byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52})
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"vibe-fast","messages":[{"role":"user","content":"historic context must stay with primary"},{"role":"user","content":[{"type":"text","text":"What is in this image?"},{"type":"image_url","image_url":{"url":"data:image/png;base64,`+encoded+`"}}]}]}`))
+	req.Header.Set("Authorization", "Bearer vibe-local-dev-key")
+	w := httptest.NewRecorder()
+	s.Routes().ServeHTTP(w, req)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "primary model answered") || calls.Load() != 2 || w.Header().Get("X-Vibe-Proxy-Vision-Strategy") != "assist" {
+		t.Fatalf("unexpected Vision assist response: calls=%d status=%d body=%s", calls.Load(), w.Code, w.Body.String())
+	}
+	if len(sink.finished) != 1 || sink.finished[0].Transformation == nil || sink.finished[0].Transformation.EffectiveProvider != "text" {
+		t.Fatalf("Vision assist must report the original model as final target: %+v", sink.finished)
+	}
+	stages := map[telemetry.PayloadStage]bool{}
+	for _, payload := range sink.payloads {
+		stages[payload.Stage] = true
+	}
+	for _, stage := range []telemetry.PayloadStage{telemetry.PayloadStageOCRRequest, telemetry.PayloadStageOCRResponse, telemetry.PayloadStageVisionRequest, telemetry.PayloadStageVisionResponse, telemetry.PayloadStageEffectiveCanonicalRequest, telemetry.PayloadStageUpstreamRequest} {
+		if !stages[stage] {
+			t.Fatalf("missing capture stage %s: %+v", stage, stages)
+		}
+	}
+	if len(sink.observations) < 3 {
+		t.Fatalf("expected OCR, Vision, and primary observations: %+v", sink.observations)
 	}
 }
 
@@ -1007,6 +1388,30 @@ func newTestServer(t *testing.T, rt roundTrip) *Server {
 	}
 	testPromOnce.Do(func() { testProm = metrics.New() })
 	s := New("", cfg, nil, testProm)
+	s.SetHTTPClient(&http.Client{Transport: rt})
+	return s
+}
+
+func newObservabilityTestServer(t *testing.T, sink telemetry.EventSink, rt roundTrip) *Server {
+	t.Helper()
+	cfg, err := config.CompileSimple(config.SimpleConfig{
+		Observability: config.ObservabilityConfig{
+			Capture: config.ObservabilityCaptureConfig{
+				Mode:             "structured",
+				MaxSnapshotBytes: 256 << 10,
+				CaptureResponse:  true,
+				HeaderAllowlist:  []string{"user-agent", "authorization"},
+			},
+		},
+		ClientKeys: []config.ClientKeyConfig{{Name: "test", KeyHash: "$2a$10$AXRkz.6y44ygdJFk6L1/IO0aRVp9zRMfXDJoBCBsroxVac/Lovvz6", Enabled: true, AllowedModels: []string{"*"}, RPM: 1000}},
+		Providers:  map[string]config.ProviderConfig{"mockai": {Type: "openai-compatible", BaseURL: "https://mock.openai/v1", Auth: upstreamauth.Profile{Type: "none"}, Models: []string{"raw-chat"}}},
+		Models:     config.ModelsConfig{AllowRaw: true, Aliases: map[string]string{"vibe-fast": "mockai/raw-chat"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	testPromOnce.Do(func() { testProm = metrics.New() })
+	s := New("", cfg, sink, testProm)
 	s.SetHTTPClient(&http.Client{Transport: rt})
 	return s
 }

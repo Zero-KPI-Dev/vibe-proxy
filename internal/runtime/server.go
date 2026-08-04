@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -11,6 +12,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/a448582655/vibe-proxy/internal/auth"
 	clientanthropic "github.com/a448582655/vibe-proxy/internal/clientadapters/anthropic"
@@ -34,11 +37,14 @@ import (
 )
 
 type Snapshot struct {
-	LoadedAt      time.Time
-	Config        *config.RuntimeConfig
-	Resolver      *modelresolver.Resolver
-	Preprocessors *preprocess.Pipeline
-	AdminToken    string
+	LoadedAt         time.Time
+	Config           *config.RuntimeConfig
+	Resolver         *modelresolver.Resolver
+	Preprocessors    *preprocess.Pipeline
+	AgentProfiles    []telemetry.AgentProfile
+	CapturePolicy    telemetry.CapturePolicy
+	ContentRetention time.Duration
+	AdminToken       string
 }
 
 type Server struct {
@@ -61,6 +67,7 @@ type Server struct {
 	desktopSessions    *auth.DesktopSessionStore
 	passwordAuth       *auth.PasswordAuth
 	desktopController  desktopbridge.Controller
+	onConfigApplied    func(*config.RuntimeConfig)
 }
 
 // New builds a runtime server with the default options.
@@ -84,7 +91,7 @@ func NewWithOptions(cfgPath string, cfg *config.RuntimeConfig, sink telemetry.Ev
 	if provider, ok := sink.(telemetry.ObservabilityReaderProvider); ok {
 		observability = provider.ObservabilityReader()
 	}
-	s := &Server{cfgPath: cfgPath, startedAt: time.Now(), authenticator: auth.NewAuthenticator(), httpClient: &http.Client{Timeout: 0}, ocrHTTPClient: &http.Client{}, builtinOCR: ocr.NewBuiltinProvider(), metrics: prom, sink: sink, recent: recent, observability: observability, catalog: modelcatalog.NewService(modelcatalog.Options{CachePath: modelCatalogCachePath(cfgPath, cfg)}), clientAdapters: []protocol.ClientAdapter{clientopenai.ChatAdapter{}, clientopenai.ResponsesAdapter{}, clientanthropic.MessagesAdapter{}}, providerAdapters: map[string]protocol.ProviderAdapter{"anthropic": provideranthropic.Provider{}, "openai-compatible": provideropenai.Provider{}}, adminTokenOverride: options.AdminTokenOverride, desktopSessions: options.DesktopSessions, passwordAuth: options.PasswordAuth, desktopController: options.DesktopController}
+	s := &Server{cfgPath: cfgPath, startedAt: time.Now(), authenticator: auth.NewAuthenticator(), httpClient: &http.Client{Timeout: 0}, ocrHTTPClient: &http.Client{}, builtinOCR: ocr.NewBuiltinProvider(), metrics: prom, sink: sink, recent: recent, observability: observability, catalog: modelcatalog.NewService(modelcatalog.Options{CachePath: modelCatalogCachePath(cfgPath, cfg)}), clientAdapters: []protocol.ClientAdapter{clientopenai.ChatAdapter{}, clientopenai.ResponsesAdapter{}, clientanthropic.MessagesAdapter{}}, providerAdapters: map[string]protocol.ProviderAdapter{"anthropic": provideranthropic.Provider{}, "openai-compatible": provideropenai.Provider{}}, adminTokenOverride: options.AdminTokenOverride, desktopSessions: options.DesktopSessions, passwordAuth: options.PasswordAuth, desktopController: options.DesktopController, onConfigApplied: options.OnConfigApplied}
 	s.applyRuntimeConfig(cfg)
 	return s
 }
@@ -125,17 +132,30 @@ func (s *Server) applyRuntimeConfig(cfg *config.RuntimeConfig) {
 		_ = s.catalog.SetProxyURL(cfg.ModelCatalog.ProxyURL)
 	}
 	s.snapshot.Store(s.buildSnapshot(cfg))
+	if s.onConfigApplied != nil {
+		s.onConfigApplied(cfg)
+	}
 }
 
 func (s *Server) buildSnapshot(cfg *config.RuntimeConfig) *Snapshot {
 	resolver := modelresolver.New(cfg.ModelResolver)
+	visionProviders := make(map[string]providerRuntime, len(cfg.Providers))
+	for id, provider := range cfg.Providers {
+		provider := provider
+		visionProviders[id] = providerRuntime{
+			MaxConcurrency: provider.MaxConcurrency,
+			Timeout:        provider.Timeout.Duration,
+			Auth:           provider.Auth.Apply,
+		}
+	}
 	processor := multimodal.NewProcessor(multimodal.ProcessorOptions{
-		Config:     cfg.Multimodal,
-		Catalog:    s.catalog,
-		Client:     s.ocrHTTPClient,
-		BuiltinOCR: s.builtinOCR,
-		Resolver:   resolver,
-		Providers:  cfg.Providers,
+		Config:         cfg.Multimodal,
+		Catalog:        s.catalog,
+		Client:         s.ocrHTTPClient,
+		BuiltinOCR:     s.builtinOCR,
+		Resolver:       resolver,
+		Providers:      cfg.Providers,
+		VisionAnalyzer: newRuntimeVisionAnalyzer(s, visionProviders),
 		AdapterCapabilities: func(providerType string) (protocol.Capabilities, bool) {
 			adapter, ok := s.providerAdapters[providerType]
 			if !ok {
@@ -153,8 +173,26 @@ func (s *Server) buildSnapshot(cfg *config.RuntimeConfig) *Snapshot {
 		Config:        cfg,
 		Resolver:      resolver,
 		Preprocessors: preprocess.New(processor),
-		AdminToken:    adminToken,
+		AgentProfiles: compileTelemetryAgentProfiles(cfg.AgentProfiles),
+		CapturePolicy: telemetry.CapturePolicy{
+			Mode:             telemetry.CaptureMode(cfg.Observability.Capture.Mode),
+			MaxSnapshotBytes: cfg.Observability.Capture.MaxSnapshotBytes,
+			CaptureResponse:  cfg.Observability.Capture.CaptureResponse,
+			CaptureReasoning: cfg.Observability.Capture.CaptureReasoning,
+			ImagePayloads:    cfg.Observability.Capture.ImagePayloads,
+			HeaderAllowlist:  append([]string(nil), cfg.Observability.Capture.HeaderAllowlist...),
+		},
+		ContentRetention: time.Duration(cfg.Observability.Retention.ContentDays) * 24 * time.Hour,
+		AdminToken:       adminToken,
 	}
+}
+
+func compileTelemetryAgentProfiles(profiles []config.AgentProfileConfig) []telemetry.AgentProfile {
+	compiled := make([]telemetry.AgentProfile, 0, len(profiles))
+	for _, profile := range profiles {
+		compiled = append(compiled, telemetry.AgentProfile{ID: profile.ID, Name: profile.Name, Detect: profile.Detect})
+	}
+	return compiled
 }
 
 func (s *Server) Routes() http.Handler {
@@ -203,6 +241,10 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/admin/client-keys", s.adminClientKeys)        // GET (list), POST (create)
 	mux.HandleFunc("/admin/client-keys/", s.adminClientKeysByName) // PUT (update), DELETE (delete)
 	mux.HandleFunc("/admin/requests/recent", s.adminRecentRequests)
+	mux.HandleFunc("/admin/observability/requests", s.adminObservabilityRequests)
+	mux.HandleFunc("/admin/observability/requests/", s.adminObservabilityRequest)
+	mux.HandleFunc("/admin/observability/sessions", s.adminObservabilitySessions)
+	mux.HandleFunc("/admin/observability/sessions/", s.adminObservabilitySession)
 	mux.HandleFunc("/admin/metrics/summary", s.adminMetricsSummary)
 	mux.HandleFunc("/admin/metrics/history", s.adminMetricsHistory)
 
@@ -274,8 +316,70 @@ func (s *Server) handleWithClient(w http.ResponseWriter, r *http.Request, truste
 		http.NotFound(w, r)
 		return
 	}
+	requestID := uuid.NewString()
+	identity := telemetry.ExtractRequestIdentity(r, nil, snap.AgentProfiles)
+	tracker := telemetry.NewTracker(telemetry.Event{
+		RequestID:       requestID,
+		TraceID:         identity.TraceID,
+		SpanID:          identity.SpanID,
+		ParentSpanID:    identity.ParentSpanID,
+		SessionID:       identity.SessionID,
+		SessionName:     identity.SessionName,
+		SessionKind:     identity.SessionKind,
+		SessionPath:     identity.SessionPath,
+		ParentRequestID: identity.ParentRequestID,
+		AgentID:         identity.AgentID,
+		AgentName:       identity.AgentName,
+		AgentVersion:    identity.AgentVersion,
+		AgentSource:     identity.AgentSource,
+		AgentConfidence: identity.AgentConfidence,
+		ProjectID:       identity.ProjectID,
+		HTTPMethod:      r.Method,
+		HTTPPath:        r.URL.Path,
+		ProtocolIn:      string(clientAdapter.Protocol()),
+		StartedAt:       time.Now(),
+	}, s.sink)
+	captureOverride := r.Header.Get("X-Vibe-Capture")
+	effectiveCaptureMode := telemetry.EffectiveCaptureMode(snap.CapturePolicy.Mode, captureOverride)
+	tracker.Event.CaptureMode = string(effectiveCaptureMode)
+	tracker.Event.CaptureStatus = telemetry.CaptureStatusNotCaptured
+	captureBudget := telemetry.NewCaptureBudget(snap.CapturePolicy.MaxSnapshotBytes)
+	recordCaptureResult := func(stage telemetry.PayloadStage, result telemetry.CaptureResult, mediaType string) {
+		mergeCaptureResult(&tracker.Event, result)
+		if result.Mode != telemetry.CaptureModeStructured && result.Mode != telemetry.CaptureModeRaw {
+			return
+		}
+		now := time.Now().UTC()
+		snapshot := telemetry.NewPayloadSnapshot(requestID, stage, result, mediaType, now, now.Add(snap.ContentRetention))
+		if err := telemetry.RecordPayload(s.sink, snapshot); err != nil {
+			tracker.Event.CaptureStatus = telemetry.CaptureStatusDropped
+		}
+	}
+	recordCaptureBytes := func(stage telemetry.PayloadStage, body []byte, headers http.Header, mediaType string) {
+		result := captureBudget.Capture(body, headers, snap.CapturePolicy, captureOverride)
+		recordCaptureResult(stage, result, mediaType)
+	}
+	recordCaptureValue := func(stage telemetry.PayloadStage, value any) {
+		result := captureBudget.CaptureValue(value, nil, snap.CapturePolicy, captureOverride)
+		recordCaptureResult(stage, result, "application/json")
+	}
+	recordCanonicalResponse := func(value any) {
+		if snap.CapturePolicy.CaptureResponse {
+			recordCaptureValue(telemetry.PayloadStageCanonicalResponse, value)
+			return
+		}
+		recordCaptureResult(telemetry.PayloadStageCanonicalResponse, telemetry.CaptureResult{
+			Mode: effectiveCaptureMode, Status: telemetry.CaptureStatusNotCaptured,
+		}, "")
+	}
+	w.Header().Set("X-Vibe-Proxy-Request-ID", requestID)
+	w.Header().Set("X-Vibe-Proxy-Trace-ID", identity.TraceID)
+	finishError := func(gatewayError ir.GatewayError) {
+		tracker.Finish(gatewayError.StatusCode, types.Usage{}, gatewayError.Code)
+		_ = clientAdapter.EncodeError(r.Context(), w, gatewayError)
+	}
 	if r.Method != http.MethodPost {
-		_ = clientAdapter.EncodeError(r.Context(), w, ir.GatewayError{StatusCode: 405, Kind: "invalid_request_error", Code: "method_not_allowed", Message: "Method not allowed."})
+		finishError(ir.GatewayError{StatusCode: 405, Kind: "invalid_request_error", Code: "method_not_allowed", Message: "Method not allowed."})
 		return
 	}
 	var client auth.Client
@@ -285,44 +389,79 @@ func (s *Server) handleWithClient(w http.ResponseWriter, r *http.Request, truste
 		var gerr *types.GatewayError
 		client, gerr = s.authenticator.AuthenticateDataPlane(r, snap.Config.ClientKeys)
 		if gerr != nil {
-			_ = clientAdapter.EncodeError(r.Context(), w, toIRError(*gerr))
+			finishError(toIRError(*gerr))
 			return
 		}
 	}
+	tracker.Event.PrincipalName = client.Name
+	tracker.Event.ClientName = client.Name
+	if effectiveCaptureMode == telemetry.CaptureModeStructured || effectiveCaptureMode == telemetry.CaptureModeRaw {
+		body, readErr := io.ReadAll(io.LimitReader(r.Body, (32<<20)+1))
+		if readErr != nil {
+			finishError(ir.GatewayError{StatusCode: 400, Kind: "invalid_request_error", Code: "body_read_failed", Message: "Could not read request body."})
+			return
+		}
+		_ = r.Body.Close()
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		recordCaptureBytes(telemetry.PayloadStageClientRequest, body, r.Header, r.Header.Get("Content-Type"))
+	}
 	creq, err := clientAdapter.ParseRequest(r.Context(), r)
 	if err != nil {
-		_ = clientAdapter.EncodeError(r.Context(), w, errorToIR(err))
+		finishError(errorToIR(err))
 		return
 	}
-	w.Header().Set("X-Vibe-Proxy-Request-ID", creq.ID)
+	creq.ID = requestID
+	identity = telemetry.EnrichRequestIdentity(identity, creq.Metadata)
+	applyRequestIdentity(&tracker.Event, identity)
+	creq.AgentID = identity.AgentID
+	creq.AgentName = identity.AgentName
+	creq.AgentVersion = identity.AgentVersion
+	creq.ProjectID = identity.ProjectID
+	creq.SessionID = identity.SessionID
+	tracker.Event.VirtualModel = creq.RequestedModel
+	tracker.Event.RequestShape = telemetry.SummarizeRequestShape(creq)
+	recordCaptureValue(telemetry.PayloadStageCanonicalRequest, creq)
 	if !auth.ModelAllowed(client.AllowedModels, creq.RequestedModel) {
-		_ = clientAdapter.EncodeError(r.Context(), w, ir.GatewayError{StatusCode: 403, Kind: "permission_error", Code: "model_not_allowed", Message: "This API key is not allowed to use the requested model."})
+		finishError(ir.GatewayError{StatusCode: 403, Kind: "permission_error", Code: "model_not_allowed", Message: "This API key is not allowed to use the requested model."})
 		return
 	}
 	target, ierr := snap.Resolver.Resolve(creq)
 	if ierr != nil {
-		_ = clientAdapter.EncodeError(r.Context(), w, *ierr)
+		finishError(*ierr)
 		return
 	}
 	creq.ResolvedProvider = target.ProviderID
 	creq.ResolvedModel = target.Model
+	tracker.Event.InitialProvider = target.ProviderID
+	tracker.Event.InitialModel = target.Model
+	tracker.Event.UpstreamModel = target.Model
+	tracker.Event.ChannelID = target.ProviderID
 	providerCfg, ok := snap.Config.Providers[target.ProviderID]
 	if !ok {
-		_ = clientAdapter.EncodeError(r.Context(), w, ir.GatewayError{StatusCode: 503, Kind: "config_error", Code: "provider_not_found", Message: "Resolved provider is not configured."})
+		finishError(ir.GatewayError{StatusCode: 503, Kind: "config_error", Code: "provider_not_found", Message: "Resolved provider is not configured."})
 		return
 	}
 	providerAdapter := s.providerAdapters[target.ProviderType]
 	if providerAdapter == nil {
-		_ = clientAdapter.EncodeError(r.Context(), w, ir.GatewayError{StatusCode: 501, Kind: "config_error", Code: "provider_adapter_not_found", Message: "Provider adapter is not available."})
+		finishError(ir.GatewayError{StatusCode: 501, Kind: "config_error", Code: "provider_adapter_not_found", Message: "Provider adapter is not available."})
 		return
 	}
+	tracker.Event.ProtocolOut = string(providerAdapter.Protocol())
 	originalTarget := target
-	tracker := telemetry.NewTracker(telemetry.Event{RequestID: creq.ID, ClientName: client.Name, VirtualModel: creq.RequestedModel, UpstreamModel: target.Model, ChannelID: target.ProviderID, ProtocolIn: string(clientAdapter.Protocol()), ProtocolOut: string(providerAdapter.Protocol()), StartedAt: time.Now()}, s.sink)
 	prepared, err := snap.Preprocessors.Prepare(r.Context(), creq, preprocess.RouteContext{
 		Target:              target,
 		ProviderConfig:      providerCfg,
 		AdapterCapabilities: providerAdapter.Capabilities(),
 	})
+	for _, diagnostic := range prepared.Diagnostics {
+		recordCaptureValue(telemetry.PayloadStage(diagnostic.Stage), diagnostic.Value)
+	}
+	for _, item := range prepared.Observations {
+		observation := telemetry.NewObservation(uuid.NewString(), requestID, identity.TraceID, identity.SpanID, item.Type, item.Name, item.StartedAt)
+		observation.Attributes = item.Attributes
+		observation.Finish(item.CompletedAt, item.Status, item.ErrorCode)
+		_ = telemetry.RecordObservation(s.sink, observation)
+	}
 	if err != nil {
 		ge := errorToIR(err)
 		tracker.Event.Transformation = transformationSummary(prepared.Decisions, originalTarget, prepared.Target)
@@ -331,6 +470,7 @@ func (s *Server) handleWithClient(w http.ResponseWriter, r *http.Request, truste
 		return
 	}
 	creq = prepared.Request
+	recordCaptureValue(telemetry.PayloadStageEffectiveCanonicalRequest, creq)
 	if prepared.Target.ProviderID != target.ProviderID || prepared.Target.Model != target.Model {
 		target = prepared.Target
 		creq.ResolvedProvider = target.ProviderID
@@ -373,14 +513,31 @@ func (s *Server) handleWithClient(w http.ResponseWriter, r *http.Request, truste
 		_ = clientAdapter.EncodeError(ctx, w, ge)
 		return
 	}
+	if effectiveCaptureMode == telemetry.CaptureModeStructured || effectiveCaptureMode == telemetry.CaptureModeRaw {
+		if upstreamBody, bodyErr := requestBodyCopy(upReq); bodyErr == nil {
+			recordCaptureBytes(telemetry.PayloadStageUpstreamRequest, upstreamBody, upReq.Header, upReq.Header.Get("Content-Type"))
+		}
+	}
 	if authErr := providerCfg.Auth.Apply(upReq); authErr != nil {
 		tracker.Finish(authErr.StatusCode, types.Usage{}, authErr.Code)
 		_ = clientAdapter.EncodeError(ctx, w, *authErr)
 		return
 	}
+	upstreamObservation := telemetry.NewObservation(uuid.NewString(), requestID, identity.TraceID, identity.SpanID, "upstream", "provider.http", time.Now().UTC())
+	upstreamObservation.Attributes = map[string]any{"provider": target.ProviderID, "model": target.Model, "protocol": providerAdapter.Protocol()}
+	observationFinished := false
+	finishUpstreamObservation := func(status, errorCode string) {
+		if observationFinished {
+			return
+		}
+		observationFinished = true
+		upstreamObservation.Finish(time.Now().UTC(), status, errorCode)
+		_ = telemetry.RecordObservation(s.sink, upstreamObservation)
+	}
 	resp, err := s.httpClient.Do(upReq)
 	if err != nil {
 		ge := ir.GatewayError{StatusCode: 502, Kind: "upstream_error", Code: "upstream_connection_failed", Message: "Could not connect to upstream provider."}
+		finishUpstreamObservation("error", ge.Code)
 		tracker.Finish(ge.StatusCode, types.Usage{}, ge.Code)
 		_ = clientAdapter.EncodeError(ctx, w, ge)
 		return
@@ -389,6 +546,7 @@ func (s *Server) handleWithClient(w http.ResponseWriter, r *http.Request, truste
 		events, err := providerAdapter.ParseStream(ctx, resp)
 		if err != nil {
 			ge := errorToIR(err)
+			finishUpstreamObservation("error", ge.Code)
 			tracker.Finish(ge.StatusCode, types.Usage{}, ge.Code)
 			_ = clientAdapter.EncodeError(ctx, w, ge)
 			return
@@ -400,8 +558,11 @@ func (s *Server) handleWithClient(w http.ResponseWriter, r *http.Request, truste
 			streamStats = stats
 			streamStatsMu.Unlock()
 		})
-		if err := clientAdapter.EncodeStream(ctx, w, tracked); err != nil {
+		streamAccumulator := telemetry.NewStreamAccumulator(target.Model, snap.CapturePolicy.CaptureReasoning)
+		canonicalEvents := streamAccumulator.Wrap(ctx, tracked)
+		if err := clientAdapter.EncodeStream(ctx, w, canonicalEvents); err != nil {
 			ge := errorToIR(err)
+			finishUpstreamObservation("error", ge.Code)
 			tracker.Finish(ge.StatusCode, types.Usage{}, ge.Code)
 			if !headersWritten(w) {
 				_ = clientAdapter.EncodeError(ctx, w, ge)
@@ -411,6 +572,9 @@ func (s *Server) handleWithClient(w http.ResponseWriter, r *http.Request, truste
 		streamStatsMu.Lock()
 		finalStreamStats := streamStats
 		streamStatsMu.Unlock()
+		canonicalResponse := streamAccumulator.Response()
+		tracker.Event.RequestShape = telemetry.MergeResponseShape(tracker.Event.RequestShape, telemetry.SummarizeResponseShape(canonicalResponse))
+		recordCanonicalResponse(canonicalResponse)
 		tracker.Event.Usage = toTelemetryUsage(finalStreamStats.Usage)
 		if !finalStreamStats.FirstTokenAt.IsZero() {
 			firstTokenAt := finalStreamStats.FirstTokenAt
@@ -420,12 +584,14 @@ func (s *Server) handleWithClient(w http.ResponseWriter, r *http.Request, truste
 		if finalStreamStats.OutputTokenCount > 1 && !finalStreamStats.FirstTokenAt.IsZero() && !finalStreamStats.CompletedAt.IsZero() {
 			tracker.Event.TPOTMillis = float64(finalStreamStats.CompletedAt.Sub(finalStreamStats.FirstTokenAt).Milliseconds()) / float64(finalStreamStats.OutputTokenCount-1)
 		}
+		finishUpstreamObservation("ok", "")
 		tracker.Finish(http.StatusOK, toTelemetryUsage(finalStreamStats.Usage), "")
 		return
 	}
 	out, err := providerAdapter.ParseUnary(ctx, resp)
 	if err != nil {
 		ge := errorToIR(err)
+		finishUpstreamObservation("error", ge.Code)
 		tracker.Finish(ge.StatusCode, types.Usage{}, ge.Code)
 		_ = clientAdapter.EncodeError(ctx, w, ge)
 		return
@@ -433,12 +599,75 @@ func (s *Server) handleWithClient(w http.ResponseWriter, r *http.Request, truste
 	if out.Model == "" {
 		out.Model = creq.RequestedModel
 	}
+	tracker.Event.UpstreamRequestID = out.ID
+	tracker.Event.FinishReason = out.StopReason
+	tracker.Event.RequestShape = telemetry.MergeResponseShape(tracker.Event.RequestShape, telemetry.SummarizeResponseShape(out))
+	recordCanonicalResponse(out)
 	if err := clientAdapter.EncodeUnary(ctx, w, out); err != nil {
 		ge := errorToIR(err)
+		finishUpstreamObservation("error", ge.Code)
 		tracker.Finish(ge.StatusCode, types.Usage{}, ge.Code)
 		return
 	}
+	finishUpstreamObservation("ok", "")
 	tracker.Finish(http.StatusOK, toTelemetryUsage(out.Usage), "")
+}
+
+func requestBodyCopy(request *http.Request) ([]byte, error) {
+	if request == nil || request.Body == nil {
+		return nil, nil
+	}
+	if request.GetBody != nil {
+		body, err := request.GetBody()
+		if err != nil {
+			return nil, err
+		}
+		defer body.Close()
+		return io.ReadAll(io.LimitReader(body, (32<<20)+1))
+	}
+	body, err := io.ReadAll(io.LimitReader(request.Body, (32<<20)+1))
+	if err != nil {
+		return nil, err
+	}
+	_ = request.Body.Close()
+	request.Body = io.NopCloser(bytes.NewReader(body))
+	return body, nil
+}
+
+func mergeCaptureResult(event *telemetry.Event, result telemetry.CaptureResult) {
+	if event == nil {
+		return
+	}
+	event.CaptureMode = string(result.Mode)
+	event.CaptureTruncated = event.CaptureTruncated || result.Truncated
+	event.RedactionCount += result.RedactionCount
+	priority := map[string]int{
+		telemetry.CaptureStatusNotCaptured: 1,
+		telemetry.CaptureStatusCaptured:    2,
+		telemetry.CaptureStatusRedacted:    3,
+		telemetry.CaptureStatusTruncated:   4,
+		telemetry.CaptureStatusDropped:     5,
+	}
+	if priority[result.Status] >= priority[event.CaptureStatus] {
+		event.CaptureStatus = result.Status
+	}
+}
+
+func applyRequestIdentity(event *telemetry.Event, identity telemetry.RequestIdentity) {
+	event.TraceID = identity.TraceID
+	event.SpanID = identity.SpanID
+	event.ParentSpanID = identity.ParentSpanID
+	event.SessionID = identity.SessionID
+	event.SessionName = identity.SessionName
+	event.SessionKind = identity.SessionKind
+	event.SessionPath = identity.SessionPath
+	event.ParentRequestID = identity.ParentRequestID
+	event.AgentID = identity.AgentID
+	event.AgentName = identity.AgentName
+	event.AgentVersion = identity.AgentVersion
+	event.AgentSource = identity.AgentSource
+	event.AgentConfidence = identity.AgentConfidence
+	event.ProjectID = identity.ProjectID
 }
 
 func (s *Server) adminPlayground(targetPath string) http.HandlerFunc {

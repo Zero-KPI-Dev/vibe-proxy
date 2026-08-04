@@ -153,7 +153,14 @@
     "cacheHits": "OCR cache hits",
     "reportedConfidence": "Confidence reported by OCR",
     "routeReason": "Route reason",
-    "errorCode": "Error code"
+    "errorCode": "Error code",
+    "visionAssist": "Vision extracts evidence; original model answers",
+    "visionTakeover": "Vision model takes over",
+    "cacheHit": "evidence cache hit",
+    "visionStrategy": "Vision strategy",
+    "visionTarget": "Assistant Vision target",
+    "visionLatency": "Vision analysis latency",
+    "visionEvidenceChars": "Vision evidence characters"
   },
   "providers": {
     "title": "Providers",
@@ -457,7 +464,156 @@
     "noTokenData": "No token usage data available for this period.",
     "noErrorData": "No error data available for this period.",
     "prompt": "Prompt",
-    "completion": "Completion"
+    "completion": "Completion",
+    "navigation": {
+      "overview": "Overview",
+      "requests": "Requests",
+      "sessions": "Sessions"
+    },
+    "requests": {
+      "title": "Requests",
+      "description": "Search local gateway requests, routing decisions, capture states, Agents, and principals.",
+      "results": "Requests · {{count}} loaded",
+      "empty": "No matching requests",
+      "emptyDescription": "Send a model request or adjust the filters."
+    },
+    "sessions": {
+      "title": "Sessions",
+      "description": "Replay explicitly identified conversations, tasks, and Agent workflows.",
+      "results": "Sessions · {{count}} loaded",
+      "empty": "No matching Sessions",
+      "emptyDescription": "Sessions appear only when clients send an explicit Session identity.",
+      "open": "Open Session",
+      "back": "Back to Sessions",
+      "replay": "Chronological replay"
+    },
+    "filters": {
+      "search": "Search",
+      "searchPlaceholder": "Request ID, trace ID, Session, Agent, or model",
+      "agent": "Agent ID",
+      "principal": "Authenticated principal",
+      "session": "Session ID",
+      "project": "Project ID",
+      "model": "Model",
+      "provider": "Provider",
+      "protocol": "Protocol",
+      "status": "HTTP status",
+      "capture": "Capture state",
+      "from": "From",
+      "to": "To",
+      "all": "All",
+      "apply": "Apply filters",
+      "reset": "Reset"
+    },
+    "columns": {
+      "time": "Time",
+      "agent": "Agent",
+      "principal": "Principal",
+      "model": "Model",
+      "provider": "Provider",
+      "status": "Status",
+      "capture": "Capture",
+      "duration": "Duration",
+      "tokens": "Tokens",
+      "session": "Session",
+      "requests": "Requests",
+      "errors": "Errors",
+      "updated": "Updated",
+      "step": "Step"
+    },
+    "captureStates": {
+      "not_captured": "Not captured",
+      "captured": "Captured",
+      "redacted": "Redacted",
+      "truncated": "Truncated",
+      "expired": "Expired",
+      "dropped": "Dropped",
+      "missing": "Missing"
+    },
+    "captureDescriptions": {
+      "not_captured": "Content capture was disabled or metadata-only for this stage.",
+      "captured": "Sanitized content was captured.",
+      "redacted": "Sensitive or excluded fields were replaced before storage.",
+      "truncated": "Only a bounded preview was retained.",
+      "expired": "Content expired or was deleted while the request summary remains.",
+      "dropped": "The recorder could not retain this content within its limits.",
+      "missing": "No payload record exists for this stage."
+    },
+    "detail": {
+      "title": "Request detail",
+      "back": "Back to Requests",
+      "deleteContent": "Delete captured content",
+      "deleteConfirm": "Delete captured content for this request? The request summary and timeline will remain.",
+      "tabs": {
+        "summary": "Summary",
+        "timeline": "Timeline",
+        "request": "Request",
+        "response": "Response",
+        "changes": "Changes",
+        "metadata": "Metadata",
+        "processing": "Processing"
+      },
+      "duration": "Total duration",
+      "route": "Effective route",
+      "identity": "Agent identity",
+      "shape": "Request and response shape",
+      "inputMessages": "Input messages",
+      "inputTools": "Input tools",
+      "inputImages": "Input images",
+      "inputChars": "Input text characters",
+      "outputMessages": "Output messages",
+      "outputTools": "Output tool calls",
+      "outputReasoning": "Output reasoning characters",
+      "outputChars": "Output text characters",
+      "originalBytes": "Original bytes",
+      "storedBytes": "Stored bytes",
+      "redactions": "Redactions",
+      "truncationReason": "Truncation reason",
+      "metadata": "Trace and protocol metadata"
+    },
+    "payloadStages": {
+      "client_request": "Client request",
+      "canonical_request": "Canonical IR (protocol-neutral request)",
+      "upstream_request": "Upstream request",
+      "canonical_response": "Canonical response",
+      "ocr_request": "OCR invocation input",
+      "ocr_response": "OCR recognition result",
+      "vision_request": "Vision analysis request",
+      "vision_response": "Vision analysis result",
+      "effective_canonical_request": "Effective Canonical IR (final internal request)"
+    },
+    "timeline": {
+      "empty": "No gateway observations were recorded for this request.",
+      "request": "Inbound gateway request",
+      "completed": "Request completed",
+      "inProgress": "In progress"
+    },
+    "diff": {
+      "base": "Comparison base",
+      "baseHelp": "Automatic uses the parent request first, then the previous request in the same Session.",
+      "automatic": "Automatic (parent or previous)",
+      "noBase": "No parent or previous Session request is available for comparison.",
+      "unavailable": "The {{side}} payload is unavailable, so no diff was fabricated.",
+      "appendOnly": "Append only",
+      "contextShrunk": "Context shrank",
+      "added": "Messages added",
+      "removed": "Messages removed",
+      "rewritten": "Messages rewritten",
+      "commonPrefix": "Common prefix",
+      "requestedModel": "Requested model",
+      "effectiveModel": "Effective model",
+      "provider": "Provider",
+      "tools": "Tool changes",
+      "unchanged": "Unchanged",
+      "selection": {
+        "parent": "Parent request",
+        "previous": "Previous Session request",
+        "explicit": "Manually selected request"
+      }
+    },
+    "loadMore": "Load more",
+    "loadFailed": "Unable to load observability data",
+    "unclassified": "Unclassified"
   },
   "settings": {
     "title": "Settings",
@@ -532,7 +688,7 @@
     "ocrAuthType": "OCR authentication",
     "visionFallbackModel": "Optional Vision fallback model",
     "visionFallbackNone": "Do not use a Vision fallback",
-    "visionFallbackHelp": "If OCR is unavailable or confidence is too low, preserve the original image and route to this effectively Vision-capable model.",
+    "visionFallbackHelp": "If OCR is unavailable or unusable, apply the strategy above with this verified image-capable model.",
     "visionFallbackEmpty": "No configured model currently has verified image support.",
     "visionFallbackSourceModelsDev": "models.dev",
     "visionFallbackSourceModelOverride": "Manual model correction",
@@ -567,6 +723,15 @@
     "languageHelp": "Defaults to your browser language and is saved locally after you choose.",
     "chinese": "简体中文",
     "english": "English",
-    "languageChanged": "Language changed"
+    "languageChanged": "Language changed",
+    "visionFallbackStrategy": "Vision strategy after OCR failure",
+    "visionFallbackAssist": "Assist analysis (recommended)",
+    "visionFallbackTakeover": "Take over response",
+    "visionFallbackReject": "Reject request",
+    "visionFallbackStrategyHelp": {
+      "assist": "Vision only analyzes images into evidence; the original model keeps the full context and answers.",
+      "takeover": "The entire request moves to the Vision model, whose context limit may be smaller than the original model.",
+      "reject": "Reject the request when OCR cannot provide usable text; do not call a Vision model."
+    }
   }
 }

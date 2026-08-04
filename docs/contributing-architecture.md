@@ -96,15 +96,33 @@ Examples:
 - Langfuse exporter
 - local request timeline
 
-Add a Telemetry Sink or Event Consumer.
+Add a Telemetry Sink, Event Consumer, or implementation of an existing recorder
+interface. Do not create a second request/session identity model or write
+directly from protocol adapters to storage.
 
 Expected work:
 
 1. consume normalized telemetry events
-2. avoid blocking the request data plane
-3. redact secrets
-4. add config toggle
-5. add tests
+2. keep request completion independent from telemetry success and avoid blocking
+   the request data plane
+3. preserve metadata-only capture as the default
+4. run captured decoded JSON through the mandatory sanitizer and never persist
+   credentials, cookies, reasoning fields, binary image/file bodies, or raw SSE
+   frames
+5. keep every unavailable payload stage explicit (`not_captured`, `redacted`,
+   `truncated`, `expired`, `dropped`, or `missing`)
+6. add a config toggle; external export must be disabled by default and require
+   an independent opt-in before captured content leaves the machine
+7. use numbered transactional migrations for persisted schema changes
+8. keep high-cardinality request, trace, session, project, and Agent identifiers
+   out of Prometheus labels
+9. add tests for failure isolation, queue pressure and priority, bounded graceful
+   shutdown, sanitization, and migration of an existing database
+
+The local asynchronous recorder intentionally prioritizes summaries over
+observations and observations over payload snapshots. New sinks must not defeat
+that failure policy by adding an unbounded queue or synchronous network call to
+the hot path.
 
 ## Data Plane Rule
 

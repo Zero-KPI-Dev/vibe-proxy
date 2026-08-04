@@ -76,6 +76,30 @@ func (m MultiSink) Token(e telemetry.Event) {
 	}
 }
 
+func (m MultiSink) RecordPayload(snapshot telemetry.PayloadSnapshot) error {
+	var firstErr error
+	for _, sink := range m {
+		if recorder, ok := sink.(telemetry.PayloadRecorder); ok {
+			if err := recorder.RecordPayload(snapshot); err != nil && firstErr == nil {
+				firstErr = err
+			}
+		}
+	}
+	return firstErr
+}
+
+func (m MultiSink) RecordObservation(observation telemetry.TraceObservation) error {
+	var firstErr error
+	for _, sink := range m {
+		if recorder, ok := sink.(telemetry.ObservationRecorder); ok {
+			if err := recorder.RecordObservation(observation); err != nil && firstErr == nil {
+				firstErr = err
+			}
+		}
+	}
+	return firstErr
+}
+
 func (m MultiSink) RecentStore() *telemetry.RecentStore {
 	for _, s := range m {
 		if r, ok := s.(*telemetry.RecentStore); ok {

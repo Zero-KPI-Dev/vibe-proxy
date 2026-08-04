@@ -153,7 +153,14 @@
     "cacheHits": "OCR 缓存命中",
     "reportedConfidence": "OCR 引擎报告置信度",
     "routeReason": "路由原因",
-    "errorCode": "错误代码"
+    "errorCode": "错误代码",
+    "visionAssist": "Vision 提取证据，原模型回答",
+    "visionTakeover": "Vision 模型接管回答",
+    "cacheHit": "证据缓存命中",
+    "visionStrategy": "Vision 策略",
+    "visionTarget": "辅助 Vision 目标",
+    "visionLatency": "Vision 分析耗时",
+    "visionEvidenceChars": "视觉证据字符数"
   },
   "providers": {
     "title": "服务商",
@@ -457,7 +464,156 @@
     "noTokenData": "该时间段暂无 Token 用量数据。",
     "noErrorData": "该时间段暂无错误数据。",
     "prompt": "输入",
-    "completion": "输出"
+    "completion": "输出",
+    "navigation": {
+      "overview": "总览",
+      "requests": "请求",
+      "sessions": "会话"
+    },
+    "requests": {
+      "title": "请求",
+      "description": "检索本地网关请求、路由决策、采集状态、Agent 与认证主体。",
+      "results": "请求 · 已加载 {{count}} 条",
+      "empty": "没有匹配的请求",
+      "emptyDescription": "发送一次模型请求，或调整筛选条件。"
+    },
+    "sessions": {
+      "title": "会话",
+      "description": "按显式会话标识回放对话、任务与 Agent 工作流。",
+      "results": "会话 · 已加载 {{count}} 个",
+      "empty": "没有匹配的会话",
+      "emptyDescription": "只有客户端显式传入会话标识后，才会生成会话分组。",
+      "open": "打开会话",
+      "back": "返回会话列表",
+      "replay": "按时间顺序回放"
+    },
+    "filters": {
+      "search": "搜索",
+      "searchPlaceholder": "请求 ID、Trace ID、会话、Agent 或模型",
+      "agent": "Agent ID",
+      "principal": "认证主体",
+      "session": "会话 ID",
+      "project": "项目 ID",
+      "model": "模型",
+      "provider": "服务商",
+      "protocol": "协议",
+      "status": "HTTP 状态",
+      "capture": "采集状态",
+      "from": "开始时间",
+      "to": "结束时间",
+      "all": "全部",
+      "apply": "应用筛选",
+      "reset": "重置"
+    },
+    "columns": {
+      "time": "时间",
+      "agent": "Agent",
+      "principal": "认证主体",
+      "model": "模型",
+      "provider": "服务商",
+      "status": "状态",
+      "capture": "采集",
+      "duration": "耗时",
+      "tokens": "Token",
+      "session": "会话",
+      "requests": "请求数",
+      "errors": "错误数",
+      "updated": "最近更新",
+      "step": "步骤"
+    },
+    "captureStates": {
+      "not_captured": "未采集",
+      "captured": "已采集",
+      "redacted": "已脱敏",
+      "truncated": "已截断",
+      "expired": "已过期",
+      "dropped": "已丢弃",
+      "missing": "缺失"
+    },
+    "captureDescriptions": {
+      "not_captured": "该阶段关闭了内容采集，或仅记录元数据。",
+      "captured": "已保存经过安全处理的内容。",
+      "redacted": "敏感或禁止保存的字段已在落盘前替换。",
+      "truncated": "仅保留了有大小上限的预览。",
+      "expired": "内容已过期或被删除，但请求摘要仍然保留。",
+      "dropped": "记录器因容量或队列限制未能保留内容。",
+      "missing": "该阶段没有对应的载荷记录。"
+    },
+    "detail": {
+      "title": "请求详情",
+      "back": "返回请求列表",
+      "deleteContent": "删除采集内容",
+      "deleteConfirm": "删除这条请求的采集内容吗？请求摘要和时间线仍会保留。",
+      "tabs": {
+        "summary": "摘要",
+        "timeline": "时间线",
+        "request": "请求",
+        "response": "响应",
+        "changes": "变化",
+        "metadata": "元数据",
+        "processing": "处理链路"
+      },
+      "duration": "总耗时",
+      "route": "最终路由",
+      "identity": "Agent 身份",
+      "shape": "请求与响应形态",
+      "inputMessages": "输入消息",
+      "inputTools": "输入工具",
+      "inputImages": "输入图片",
+      "inputChars": "输入文字数",
+      "outputMessages": "输出消息",
+      "outputTools": "输出工具调用",
+      "outputReasoning": "输出思考文字数",
+      "outputChars": "输出文字数",
+      "originalBytes": "原始字节",
+      "storedBytes": "存储字节",
+      "redactions": "脱敏项",
+      "truncationReason": "截断原因",
+      "metadata": "Trace 与协议元数据"
+    },
+    "payloadStages": {
+      "client_request": "客户端请求",
+      "canonical_request": "Canonical IR（协议无关内部请求）",
+      "upstream_request": "上游请求",
+      "canonical_response": "Canonical 响应",
+      "ocr_request": "OCR 调用输入",
+      "ocr_response": "OCR 识别结果",
+      "vision_request": "Vision 分析请求",
+      "vision_response": "Vision 分析结果",
+      "effective_canonical_request": "转换后的 Canonical IR（最终内部请求）"
+    },
+    "timeline": {
+      "empty": "这条请求没有记录网关阶段观测。",
+      "request": "网关入口请求",
+      "completed": "请求完成",
+      "inProgress": "处理中"
+    },
+    "diff": {
+      "base": "对比基准",
+      "baseHelp": "自动模式优先选择父请求，否则选择同一会话中的上一条请求。",
+      "automatic": "自动（父请求或上一条）",
+      "noBase": "没有可用于对比的父请求或同会话上一条请求。",
+      "unavailable": "{{side}} 一侧的内容不可用，因此不会伪造差异。",
+      "appendOnly": "仅追加",
+      "contextShrunk": "上下文缩减",
+      "added": "新增消息",
+      "removed": "移除消息",
+      "rewritten": "改写消息",
+      "commonPrefix": "共同前缀",
+      "requestedModel": "请求模型",
+      "effectiveModel": "最终模型",
+      "provider": "服务商",
+      "tools": "工具变化",
+      "unchanged": "未变化",
+      "selection": {
+        "parent": "父请求",
+        "previous": "同会话上一条请求",
+        "explicit": "手动选择的请求"
+      }
+    },
+    "loadMore": "加载更多",
+    "loadFailed": "无法加载可观测性数据",
+    "unclassified": "未分类"
   },
   "settings": {
     "title": "设置",
@@ -532,7 +688,7 @@
     "ocrAuthType": "OCR 鉴权方式",
     "visionFallbackModel": "可选的视觉兜底模型",
     "visionFallbackNone": "不使用视觉模型兜底",
-    "visionFallbackHelp": "当 OCR 不可用或置信度过低时，保留原始图片并转发给当前有效支持图片的模型。",
+    "visionFallbackHelp": "OCR 不可用或结果不可用时，按上方策略使用这个已验证支持图片的模型。",
     "visionFallbackEmpty": "当前没有已验证支持图片的已配置模型。",
     "visionFallbackSourceModelsDev": "models.dev",
     "visionFallbackSourceModelOverride": "模型人工修正",
@@ -567,6 +723,15 @@
     "languageHelp": "首次访问时跟随浏览器语言，手动选择后保存在本地。",
     "chinese": "简体中文",
     "english": "English",
-    "languageChanged": "显示语言已切换"
+    "languageChanged": "显示语言已切换",
+    "visionFallbackStrategy": "OCR 失败后的 Vision 策略",
+    "visionFallbackAssist": "辅助分析（推荐）",
+    "visionFallbackTakeover": "接管回答",
+    "visionFallbackReject": "拒绝请求",
+    "visionFallbackStrategyHelp": {
+      "assist": "Vision 只分析图片并生成证据，完整上下文仍由原始模型回答。",
+      "takeover": "整条请求改发给 Vision 模型；其上下文上限可能小于原始模型。",
+      "reject": "OCR 无法提供有效文字时直接拒绝，不调用 Vision 模型。"
+    }
   }
 }
