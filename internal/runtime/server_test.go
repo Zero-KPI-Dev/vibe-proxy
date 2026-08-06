@@ -147,7 +147,7 @@ func TestDataAndControlRoutesAreIsolated(t *testing.T) {
 	}
 
 	control := s.ControlRoutes()
-	for _, target := range []string{"/v1/models", "/v1/chat/completions", "/v1/responses", "/v1/messages", "/anthropic/v1/messages"} {
+	for _, target := range []string{"/v1", "/v1/models", "/v1/chat/completions", "/v1/responses", "/v1/messages", "/anthropic", "/anthropic/v1/messages"} {
 		response := httptest.NewRecorder()
 		control.ServeHTTP(response, httptest.NewRequest(http.MethodGet, target, nil))
 		if response.Code != http.StatusNotFound {

@@ -9,7 +9,7 @@ cross-platform acceptance before treating it as a stable deployment.
 
 ## Download
 
-Open the [GitHub Releases page](https://github.com/a448582655/vibe-proxy/releases)
+Open the [GitHub Releases page](https://github.com/Zero-KPI-Dev/vibe-proxy/releases)
 and download the artifact matching the operating system and CPU:
 
 | Platform | CPU shown by the OS | Artifact suffix |

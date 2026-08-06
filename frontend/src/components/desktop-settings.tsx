@@ -24,6 +24,7 @@ export function DesktopSettings({ desktop, onDesktopChange, onImported }: Deskto
   const [savingCloseBehavior, setSavingCloseBehavior] = useState(false)
   const [openingDataDirectory, setOpeningDataDirectory] = useState(false)
   const [importing, setImporting] = useState(false)
+  const dataAddress = desktop.data_address ?? desktop.listen_address
 
   const handleCloseBehaviorChange = async (closeBehavior: CloseBehavior) => {
     setSavingCloseBehavior(true)
@@ -106,9 +107,7 @@ export function DesktopSettings({ desktop, onDesktopChange, onImported }: Deskto
           <div className="rounded-md border border-border bg-muted/20 p-3">
             <p className="text-sm font-medium">{t("settings.desktop.apiEndpoint")}</p>
             <p className="mt-1 select-all break-all font-mono text-xs text-muted-foreground">
-              {desktop.data_address ?? desktop.listen_address
-                ? `http://${desktop.data_address ?? desktop.listen_address}`
-                : "—"}
+              {dataAddress ? `http://${dataAddress}` : "—"}
             </p>
             <p className="mt-2 text-xs text-muted-foreground">{t("settings.desktop.apiEndpointHelp")}</p>
           </div>

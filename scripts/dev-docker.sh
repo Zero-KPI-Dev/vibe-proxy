@@ -83,7 +83,7 @@ func main() {
   }
 }
 GO
-/usr/local/go/bin/go run /tmp/vibe-proxy-admin-relay.go &
-relay_pid=$!
-trap "kill $relay_pid >/dev/null 2>&1 || true" EXIT INT TERM
-/usr/local/go/bin/go run ./cmd/vibe-proxy -config /tmp/vibe-proxy-docker.yaml'
+/usr/local/go/bin/go build -o /tmp/vibe-proxy-admin-relay /tmp/vibe-proxy-admin-relay.go
+/usr/local/go/bin/go build -o /tmp/vibe-proxy-dev ./cmd/vibe-proxy
+/tmp/vibe-proxy-admin-relay &
+exec /tmp/vibe-proxy-dev -config /tmp/vibe-proxy-docker.yaml'

@@ -223,6 +223,30 @@ func TestStartClosesDataListenerWhenControlBindFails(t *testing.T) {
 	listener.Close()
 }
 
+func TestUnexpectedControlServerStopTerminatesDataPlane(t *testing.T) {
+	app, err := Start(context.Background(), Options{ConfigPath: writeTestConfig(t)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dataAddress := app.Address()
+	if err := app.adminServer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-app.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("gateway remained half-running after the control server stopped")
+	}
+	if err := app.Wait(); err != nil {
+		t.Fatalf("unexpected terminal error: %v", err)
+	}
+	listener, listenErr := net.Listen("tcp", dataAddress)
+	if listenErr != nil {
+		t.Fatalf("data listener was not released after control stop: %v", listenErr)
+	}
+	listener.Close()
+}
+
 func TestPayloadRecorderClosesGracefullyWithGateway(t *testing.T) {
 	directory := t.TempDir()
 	databasePath := filepath.Join(directory, "observability.db")
