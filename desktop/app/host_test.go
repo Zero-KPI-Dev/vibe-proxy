@@ -111,6 +111,51 @@ func TestHostStartCreatesPrivateConfigAndBootstrapsRealGateway(t *testing.T) {
 	assertSecretsAbsentFromDesktopFiles(t, fixture.paths.DataDir, options.Runtime.AdminTokenOverride, nonce)
 }
 
+func TestHostStartUsesLoopbackURLsForWildcardListener(t *testing.T) {
+	fixture := newHostStartFixture(t)
+	fixture.startCapture.listenAddress = "0.0.0.0:0"
+
+	if err := fixture.host.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	options, gateway := fixture.startCapture.values()
+	wantAddress := browserAddress(gateway.Address())
+	if wantAddress == gateway.Address() {
+		t.Fatalf("browser address %q was not rewritten from wildcard listener", wantAddress)
+	}
+	response, err := (&http.Client{Timeout: time.Second}).Get("http://" + wantAddress + "/healthz")
+	if err != nil {
+		t.Fatalf("GET healthz through loopback address: %v", err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("GET healthz status = %d, want 200", response.StatusCode)
+	}
+	navigations := fixture.window.navigationTargets()
+	if len(navigations) != 1 {
+		t.Fatalf("Navigate calls = %v, want exactly one", navigations)
+	}
+	assertBrowserBootstrapTarget(t, navigations[0], wantAddress, options.Runtime.DesktopSessions)
+
+	if err := fixture.host.CopyOpenAIBaseURL(); err != nil {
+		t.Fatalf("CopyOpenAIBaseURL() error = %v", err)
+	}
+	if err := fixture.host.OpenControlPlaneInBrowser(); err != nil {
+		t.Fatalf("OpenControlPlaneInBrowser() error = %v", err)
+	}
+	fixture.system.mu.Lock()
+	defer fixture.system.mu.Unlock()
+	if got := fixture.system.copied; len(got) != 1 || got[0] != "http://"+wantAddress+"/v1" {
+		t.Fatalf("copied targets = %v, want loopback address", got)
+	}
+	if got := fixture.system.browsed; len(got) != 1 {
+		t.Fatalf("browser targets = %v, want exactly one", got)
+	} else {
+		assertBrowserBootstrapTarget(t, got[0], wantAddress, options.Runtime.DesktopSessions)
+	}
+}
+
 func TestHostStartNavigationFailureKeepsGatewayForBrowserFallback(t *testing.T) {
 	fixture := newHostStartFixture(t)
 	navigateErr := errors.New("webview navigation failed")
@@ -1178,17 +1223,22 @@ func newHostStartFixture(t *testing.T) *hostStartFixture {
 }
 
 type gatewayStartCapture struct {
-	mu      sync.Mutex
-	options gatewayapp.Options
-	app     *gatewayapp.App
+	mu            sync.Mutex
+	options       gatewayapp.Options
+	app           *gatewayapp.App
+	listenAddress string
 }
 
 func (c *gatewayStartCapture) start(ctx context.Context, options gatewayapp.Options) (*gatewayapp.App, error) {
 	c.mu.Lock()
 	c.options = cloneGatewayOptions(options)
 	c.mu.Unlock()
+	listenAddress := c.listenAddress
+	if listenAddress == "" {
+		listenAddress = "127.0.0.1:0"
+	}
 	options.Listen = func(_, _ string) (net.Listener, error) {
-		return net.Listen("tcp", "127.0.0.1:0")
+		return net.Listen("tcp", listenAddress)
 	}
 	app, err := gatewayapp.Start(ctx, options)
 	c.mu.Lock()
