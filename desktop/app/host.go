@@ -182,7 +182,10 @@ func (h *Host) Start(ctx context.Context) error {
 	if h.isShutdownRequested() {
 		return h.cleanupStartupGateway(errHostShuttingDown, gateway, sessions, passwordAuth)
 	}
-	target := "http://" + gateway.Address() + "/desktop/bootstrap/" + nonce
+	// Listener addresses such as 0.0.0.0 and [::] are valid bind targets but
+	// are not valid destinations for a browser or WebView. Keep the gateway
+	// bound to the configured interface while navigating through loopback.
+	target := "http://" + browserAddress(gateway.Address()) + "/desktop/bootstrap/" + nonce
 	if err := h.window.Navigate(target); err != nil {
 		if !h.isShutdownRequested() {
 			webViewErr := &webViewStartupError{address: gateway.Address(), err: err}
@@ -313,7 +316,7 @@ func (h *Host) browserControlPlaneURL() (string, error) {
 	if h.gateway == nil {
 		return "", errors.New("gateway is not running")
 	}
-	baseURL := "http://" + h.gateway.Address()
+	baseURL := "http://" + browserAddress(h.gateway.Address())
 	if h.passwordAuth == nil {
 		return "", errors.New("desktop management password is not available")
 	}
@@ -356,7 +359,7 @@ func (h *Host) gatewayBaseURL() (string, error) {
 	if h.gateway == nil {
 		return "", errors.New("gateway is not running")
 	}
-	return "http://" + h.gateway.Address(), nil
+	return "http://" + browserAddress(h.gateway.Address()), nil
 }
 
 func (h *Host) setStartupErrorStatus(err error) {
