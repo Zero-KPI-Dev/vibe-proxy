@@ -33,7 +33,7 @@ func ValidateRuntime(cfg *RuntimeConfig) []ValidationIssue {
 	}
 	dataPort, dataPortOK := validateListenAddress(&issues, "server.listen", cfg.Server.Listen, false)
 	adminPort, adminPortOK := validateListenAddress(&issues, "server.admin_listen", cfg.Server.AdminListen, true)
-	if dataPortOK && adminPortOK && dataPort == adminPort {
+	if dataPortOK && adminPortOK && dataPort != 0 && dataPort == adminPort {
 		issues = append(issues, issue("error", "server.admin_listen", "listener_port_conflict", "Data-plane and control-plane listeners must use different ports."))
 	}
 	if proxyURL := strings.TrimSpace(cfg.ModelCatalog.ProxyURL); proxyURL != "" && !isAbsoluteHTTPURL(proxyURL) {

@@ -82,8 +82,9 @@ Validation parses `admin_listen` as an IP socket address and checks:
 
 - host is a literal loopback IP;
 - port is present and valid, including `0` for tests;
-- its configured port differs from the data listener port, avoiding
-  wildcard/specific-address bind overlap across operating systems;
+- its configured non-zero port differs from the data listener port, avoiding
+  wildcard/specific-address bind overlap across operating systems; two `0`
+  ports are valid because the operating system assigns distinct sockets;
 - wildcard or LAN control addresses produce an error, not a warning.
 
 Hostnames such as `localhost` are intentionally rejected because their

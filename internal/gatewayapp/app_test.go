@@ -33,6 +33,14 @@ func TestStartServesHealthAndShutdownIsIdempotent(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d", resp.StatusCode)
 	}
+	adminResp, err := http.Get("http://" + app.AdminAddress() + "/healthz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer adminResp.Body.Close()
+	if adminResp.StatusCode != http.StatusOK || app.AdminAddress() == app.Address() {
+		t.Fatalf("admin health = %d, data=%q admin=%q", adminResp.StatusCode, app.Address(), app.AdminAddress())
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -47,6 +55,40 @@ func TestStartServesHealthAndShutdownIsIdempotent(t *testing.T) {
 		t.Fatalf("address was not released: %v", err)
 	}
 	listener.Close()
+	adminListener, err := net.Listen("tcp", app.AdminAddress())
+	if err != nil {
+		t.Fatalf("admin address was not released: %v", err)
+	}
+	adminListener.Close()
+}
+
+func TestStartIsolatesBoundDataAndControlListeners(t *testing.T) {
+	app, err := Start(context.Background(), Options{ConfigPath: writeTestConfig(t)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = app.Shutdown(ctx)
+	}()
+
+	assertStatus := func(base, target string, want int) {
+		t.Helper()
+		response, requestErr := http.Get("http://" + base + target)
+		if requestErr != nil {
+			t.Fatal(requestErr)
+		}
+		defer response.Body.Close()
+		if response.StatusCode != want {
+			t.Fatalf("GET %s%s = %d, want %d", base, target, response.StatusCode, want)
+		}
+	}
+
+	assertStatus(app.Address(), "/", http.StatusNotFound)
+	assertStatus(app.Address(), "/admin/config/snapshot", http.StatusNotFound)
+	assertStatus(app.AdminAddress(), "/", http.StatusOK)
+	assertStatus(app.AdminAddress(), "/v1/models", http.StatusNotFound)
 }
 
 func TestShutdownWaitsForInflightHandler(t *testing.T) {
@@ -145,9 +187,40 @@ func TestStartReportsListenerFailure(t *testing.T) {
 	if !errors.As(err, &startupErr) {
 		t.Fatalf("error = %v, want StartupError", err)
 	}
-	if startupErr.Stage != "listen" {
-		t.Fatalf("stage = %q, want listen", startupErr.Stage)
+	if startupErr.Stage != "data_listen" {
+		t.Fatalf("stage = %q, want data_listen", startupErr.Stage)
 	}
+}
+
+func TestStartClosesDataListenerWhenControlBindFails(t *testing.T) {
+	var dataAddress string
+	calls := 0
+	app, err := Start(context.Background(), Options{
+		ConfigPath: writeTestConfig(t),
+		Listen: func(network, address string) (net.Listener, error) {
+			calls++
+			if calls == 2 {
+				return nil, syscall.EADDRINUSE
+			}
+			listener, listenErr := net.Listen(network, address)
+			if listenErr == nil {
+				dataAddress = listener.Addr().String()
+			}
+			return listener, listenErr
+		},
+	})
+	if app != nil {
+		t.Fatalf("app = %#v, want nil", app)
+	}
+	var startupErr *StartupError
+	if !errors.As(err, &startupErr) || startupErr.Stage != "admin_listen" {
+		t.Fatalf("error = %v, want admin_listen StartupError", err)
+	}
+	listener, listenErr := net.Listen("tcp", dataAddress)
+	if listenErr != nil {
+		t.Fatalf("data listener was not released: %v", listenErr)
+	}
+	listener.Close()
 }
 
 func TestPayloadRecorderClosesGracefullyWithGateway(t *testing.T) {
@@ -155,7 +228,7 @@ func TestPayloadRecorderClosesGracefullyWithGateway(t *testing.T) {
 	databasePath := filepath.Join(directory, "observability.db")
 	configPath := filepath.Join(directory, "config.yaml")
 	config := "version: vibeproxy.io/v1alpha1\n" +
-		"server:\n  listen: 127.0.0.1:0\n" +
+		"server:\n  listen: 127.0.0.1:0\n  admin_listen: 127.0.0.1:0\n" +
 		"storage:\n  sqlite_path: " + filepath.ToSlash(databasePath) + "\n" +
 		"observability:\n  capture:\n    mode: structured\n  retention:\n    content_days: 1\n    max_content_storage_mb: 1\n" +
 		"models:\n  allow_raw: true\nproviders: {}\n"
@@ -211,7 +284,7 @@ func TestGatewayEnforcesConfiguredRetentionAtStartupAndPeriodically(t *testing.T
 
 	configPath := filepath.Join(directory, "config.yaml")
 	config := "version: vibeproxy.io/v1alpha1\n" +
-		"server:\n  listen: 127.0.0.1:0\n" +
+		"server:\n  listen: 127.0.0.1:0\n  admin_listen: 127.0.0.1:0\n" +
 		"storage:\n  sqlite_path: " + filepath.ToSlash(databasePath) + "\n  retention_days: 14\n" +
 		"observability:\n  retention:\n    summaries_days: 1\n    content_days: 1\n    max_content_storage_mb: 1\n" +
 		"models:\n  allow_raw: true\nproviders: {}\n"
@@ -296,7 +369,7 @@ func TestGatewayReloadUpdatesRetentionAndPayloadStoragePolicy(t *testing.T) {
 	writeConfig := func(summariesDays, contentDays, quotaMB int) {
 		t.Helper()
 		content := "version: vibeproxy.io/v1alpha1\n" +
-			"server:\n  listen: 127.0.0.1:0\n" +
+			"server:\n  listen: 127.0.0.1:0\n  admin_listen: 127.0.0.1:0\n" +
 			"storage:\n  sqlite_path: " + filepath.ToSlash(databasePath) + "\n  retention_days: 14\n" +
 			fmt.Sprintf("observability:\n  retention:\n    summaries_days: %d\n    content_days: %d\n    max_content_storage_mb: %d\n", summariesDays, contentDays, quotaMB) +
 			"models:\n  allow_raw: true\nproviders: {}\n"
@@ -326,7 +399,7 @@ func TestGatewayReloadUpdatesRetentionAndPayloadStoragePolicy(t *testing.T) {
 		t.Fatalf("startup policy unexpectedly removed summary: items=%d err=%v", len(page.Items), err)
 	}
 	writeConfig(1, 1, 1)
-	reloadRequest, err := http.NewRequest(http.MethodPost, "http://"+app.Address()+"/admin/config/reload", nil)
+	reloadRequest, err := http.NewRequest(http.MethodPost, "http://"+app.AdminAddress()+"/admin/config/reload", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -378,6 +451,7 @@ func writeTestConfig(t *testing.T) string {
 	config := "version: vibeproxy.io/v1alpha1\n" +
 		"server:\n" +
 		"  listen: 127.0.0.1:0\n" +
+		"  admin_listen: 127.0.0.1:0\n" +
 		"storage:\n" +
 		"  sqlite_path: " + filepath.ToSlash(filepath.Join(t.TempDir(), "vibe-proxy.db")) + "\n" +
 		"models:\n" +

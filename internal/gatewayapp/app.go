@@ -26,17 +26,19 @@ const defaultRetentionSweepInterval = time.Hour
 
 // App is a running gateway and the resources it owns.
 type App struct {
-	server   *http.Server
-	database *store.SQLite
-	recorder *telemetry.AsyncRecorder
+	server      *http.Server
+	adminServer *http.Server
+	database    *store.SQLite
+	recorder    *telemetry.AsyncRecorder
 
 	retentionCancel context.CancelFunc
 	retentionDone   chan struct{}
 	retentionPolicy *retentionPolicy
 
-	ready     chan struct{}
-	done      chan struct{}
-	serveDone chan struct{}
+	ready         chan struct{}
+	done          chan struct{}
+	serveDone     chan struct{}
+	serveDoneOnce sync.Once
 
 	shutdownOnce sync.Once
 	finishOnce   sync.Once
@@ -50,6 +52,7 @@ type App struct {
 
 	handlerMu       sync.Mutex
 	activeHandlers  int
+	serveRemaining  int
 	serveStopped    bool
 	handlersDrained chan struct{}
 	handlersOnce    sync.Once
@@ -90,8 +93,8 @@ func (p *retentionPolicy) current() (int, int64) {
 	return p.summaryDays, p.payloadQuotaBytes
 }
 
-// Start loads configuration, starts the HTTP gateway, and returns once its
-// listener has been bound.
+// Start loads configuration, starts the data and control HTTP servers, and
+// returns once both listeners have been bound.
 func Start(_ context.Context, options Options) (*App, error) {
 	cfg, err := config.LoadRuntime(options.ConfigPath)
 	if err != nil {
@@ -138,46 +141,58 @@ func Start(_ context.Context, options Options) (*App, error) {
 	recorder := telemetry.NewAsyncRecorder(db, telemetry.DefaultRecorderCapacity)
 	sink := metrics.MultiSink{recorder, prom, recent}
 	runtimeServer := runtime.NewWithOptions(options.ConfigPath, cfg, sink, prom, runtimeOptions)
-	httpServer := &http.Server{
+	dataServer := &http.Server{
 		Addr:         cfg.Server.Listen,
 		ReadTimeout:  cfg.Server.ReadTimeout.Duration,
 		WriteTimeout: cfg.Server.WriteTimeout.Duration,
 		IdleTimeout:  cfg.Server.IdleTimeout.Duration,
 	}
-	if httpServer.ReadTimeout == 0 {
-		httpServer.ReadTimeout = 30 * time.Second
+	if dataServer.ReadTimeout == 0 {
+		dataServer.ReadTimeout = 30 * time.Second
 	}
-	if httpServer.IdleTimeout == 0 {
-		httpServer.IdleTimeout = 120 * time.Second
+	if dataServer.IdleTimeout == 0 {
+		dataServer.IdleTimeout = 120 * time.Second
+	}
+	adminServer := &http.Server{
+		Addr:         cfg.Server.AdminListen,
+		ReadTimeout:  dataServer.ReadTimeout,
+		WriteTimeout: dataServer.WriteTimeout,
+		IdleTimeout:  dataServer.IdleTimeout,
 	}
 
 	listen := options.Listen
 	if listen == nil {
 		listen = net.Listen
 	}
-	listener, err := listen("tcp", cfg.Server.Listen)
+	dataListener, err := listen("tcp", cfg.Server.Listen)
 	if err != nil {
-		flushContext, cancel := context.WithTimeout(context.Background(), time.Second)
-		_ = recorder.Close(flushContext)
-		cancel()
-		_ = db.Close()
-		return nil, startupError("listen", cfg.Server.Listen, err)
+		closeStartupResources(recorder, db)
+		return nil, startupError("data_listen", cfg.Server.Listen, err)
+	}
+	adminListener, err := listen("tcp", cfg.Server.AdminListen)
+	if err != nil {
+		_ = dataListener.Close()
+		closeStartupResources(recorder, db)
+		return nil, startupError("admin_listen", cfg.Server.AdminListen, err)
 	}
 
 	app := &App{
-		server:          httpServer,
+		server:          dataServer,
+		adminServer:     adminServer,
 		database:        db,
 		recorder:        recorder,
 		ready:           make(chan struct{}),
 		done:            make(chan struct{}),
 		serveDone:       make(chan struct{}),
+		serveRemaining:  2,
 		handlersDrained: make(chan struct{}),
 		retentionDone:   make(chan struct{}),
 		retentionPolicy: policy,
 		status: Status{
-			State:     StateStarting,
-			Address:   listener.Addr().String(),
-			StartedAt: time.Now(),
+			State:        StateStarting,
+			Address:      dataListener.Addr().String(),
+			AdminAddress: adminListener.Addr().String(),
+			StartedAt:    time.Now(),
 		},
 	}
 	retentionContext, retentionCancel := context.WithCancel(context.Background())
@@ -187,11 +202,20 @@ func Start(_ context.Context, options Options) (*App, error) {
 		retentionInterval = defaultRetentionSweepInterval
 	}
 	go app.runRetention(retentionContext, retentionInterval)
-	httpServer.Handler = app.trackHandlers(runtimeServer.Routes())
+	dataServer.Handler = app.trackHandlers(runtimeServer.DataRoutes())
+	adminServer.Handler = app.trackHandlers(runtimeServer.ControlRoutes())
 	app.setState(StateRunning, nil)
 	close(app.ready)
-	go app.serve(listener)
+	go app.serve("data", dataServer, dataListener)
+	go app.serve("control", adminServer, adminListener)
 	return app, nil
+}
+
+func closeStartupResources(recorder *telemetry.AsyncRecorder, db *store.SQLite) {
+	flushContext, cancel := context.WithTimeout(context.Background(), time.Second)
+	_ = recorder.Close(flushContext)
+	cancel()
+	_ = db.Close()
 }
 
 // Ready closes once the listener has been bound and the app is running.
@@ -205,6 +229,13 @@ func (a *App) Address() string {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return a.status.Address
+}
+
+// AdminAddress returns the bound loopback control-plane listener address.
+func (a *App) AdminAddress() string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.status.AdminAddress
 }
 
 // Status returns an immutable lifecycle snapshot.
@@ -253,30 +284,39 @@ func (a *App) Shutdown(ctx context.Context) error {
 	}
 }
 
-func (a *App) serve(listener net.Listener) {
-	err := a.server.Serve(listener)
+func (a *App) serve(plane string, server *http.Server, listener net.Listener) {
+	err := server.Serve(listener)
 	if errors.Is(err, http.ErrServerClosed) {
 		err = nil
 	}
 
 	a.mu.Lock()
-	a.serveErr = err
+	if err != nil && a.serveErr == nil {
+		a.serveErr = fmt.Errorf("%s server: %w", plane, err)
+	}
 	shuttingDown := a.shuttingDown
 	if !shuttingDown {
 		a.finalizing = true
 	}
 	a.mu.Unlock()
-	a.markServeStopped()
-	close(a.serveDone)
 	if !shuttingDown {
+		_ = a.server.Close()
+		_ = a.adminServer.Close()
+	}
+	allStopped := a.markServeStopped()
+	if allStopped && !shuttingDown {
 		a.finish()
 	}
 }
 
 func (a *App) shutdown(ctx context.Context) {
-	shutdownErr := a.server.Shutdown(ctx)
+	errorsDone := make(chan error, 2)
+	go func() { errorsDone <- a.server.Shutdown(ctx) }()
+	go func() { errorsDone <- a.adminServer.Shutdown(ctx) }()
+	shutdownErr := errors.Join(<-errorsDone, <-errorsDone)
 	if shutdownErr != nil {
 		_ = a.server.Close()
+		_ = a.adminServer.Close()
 	}
 	<-a.serveDone
 
@@ -368,14 +408,24 @@ func (a *App) handlerFinished() {
 	}
 }
 
-func (a *App) markServeStopped() {
+func (a *App) markServeStopped() bool {
 	a.handlerMu.Lock()
-	a.serveStopped = true
-	shouldClose := a.activeHandlers == 0
+	if a.serveRemaining > 0 {
+		a.serveRemaining--
+	}
+	allStopped := a.serveRemaining == 0
+	if allStopped {
+		a.serveStopped = true
+	}
+	shouldClose := allStopped && a.activeHandlers == 0
 	a.handlerMu.Unlock()
 	if shouldClose {
 		a.handlersOnce.Do(func() { close(a.handlersDrained) })
 	}
+	if allStopped {
+		a.serveDoneOnce.Do(func() { close(a.serveDone) })
+	}
+	return allStopped
 }
 
 func (a *App) setState(state State, err error) {

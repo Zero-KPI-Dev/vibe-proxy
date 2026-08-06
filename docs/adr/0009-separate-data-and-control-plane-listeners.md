@@ -61,10 +61,11 @@ Additional invariants:
 1. `admin_listen` must use a literal loopback IP (`127.0.0.0/8` or `::1`) and a
    valid port. Wildcard addresses, hostnames, and non-loopback addresses are
    rejected during configuration validation.
-2. The two listeners must use different configured ports. This deliberately
-   avoids platform-dependent wildcard/specific-address bind overlap. Port `0`
-   remains valid for tests and embedding, and the application reports both
-   actual bound addresses.
+2. The two listeners must use different configured non-zero ports. This
+   deliberately avoids platform-dependent wildcard/specific-address bind
+   overlap. Port `0` remains valid for tests and embedding, where the operating
+   system assigns distinct ports, and the application reports both actual bound
+   addresses.
 3. Both listeners share one runtime, configuration snapshot, SQLite store,
    telemetry recorder, and retention worker. This is listener isolation, not a
    separate control-plane process.
