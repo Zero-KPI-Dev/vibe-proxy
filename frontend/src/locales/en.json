@@ -86,6 +86,7 @@
     "title": "Dashboard",
     "description": "Overview of your vibe-proxy runtime",
     "quickConnect": "Quick Connect",
+    "listenerRestartRequired": "Listener settings changed. The endpoints above remain the currently active addresses until vibe-proxy is restarted.",
     "openaiEndpoint": "OpenAI-compatible Endpoint",
     "anthropicEndpoint": "Anthropic Endpoint",
     "clientKeyPrefix": "Client Key (prefix)",

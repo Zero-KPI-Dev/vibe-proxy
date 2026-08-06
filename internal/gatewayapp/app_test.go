@@ -2,6 +2,7 @@ package gatewayapp
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -63,7 +64,10 @@ func TestStartServesHealthAndShutdownIsIdempotent(t *testing.T) {
 }
 
 func TestStartIsolatesBoundDataAndControlListeners(t *testing.T) {
-	app, err := Start(context.Background(), Options{ConfigPath: writeTestConfig(t)})
+	app, err := Start(context.Background(), Options{
+		ConfigPath: writeTestConfig(t),
+		Runtime:    runtimepkg.Options{AdminTokenOverride: "admin-token"},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,6 +93,30 @@ func TestStartIsolatesBoundDataAndControlListeners(t *testing.T) {
 	assertStatus(app.Address(), "/admin/config/snapshot", http.StatusNotFound)
 	assertStatus(app.AdminAddress(), "/", http.StatusOK)
 	assertStatus(app.AdminAddress(), "/v1/models", http.StatusNotFound)
+
+	request, err := http.NewRequest(http.MethodGet, "http://"+app.AdminAddress()+"/admin/config/snapshot", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Authorization", "Bearer admin-token")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	var snapshot struct {
+		Server struct {
+			EffectiveListen      string `json:"effective_listen"`
+			EffectiveAdminListen string `json:"effective_admin_listen"`
+			RestartRequired      bool   `json:"restart_required"`
+		} `json:"server"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Server.EffectiveListen != app.Address() || snapshot.Server.EffectiveAdminListen != app.AdminAddress() || snapshot.Server.RestartRequired {
+		t.Fatalf("listener snapshot = %+v, data=%q admin=%q", snapshot.Server, app.Address(), app.AdminAddress())
+	}
 }
 
 func TestShutdownWaitsForInflightHandler(t *testing.T) {

@@ -86,6 +86,7 @@
     "title": "概览",
     "description": "查看 vibe-proxy 的运行状态",
     "quickConnect": "快速接入",
+    "listenerRestartRequired": "监听地址已修改。重启 vibe-proxy 前，上方仍显示并使用当前实际生效的地址。",
     "openaiEndpoint": "OpenAI 兼容入口",
     "anthropicEndpoint": "Anthropic 入口",
     "clientKeyPrefix": "客户端密钥（前缀）",

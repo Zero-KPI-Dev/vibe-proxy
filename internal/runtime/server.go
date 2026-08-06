@@ -68,6 +68,14 @@ type Server struct {
 	passwordAuth       *auth.PasswordAuth
 	desktopController  desktopbridge.Controller
 	onConfigApplied    func(*config.RuntimeConfig)
+	listenerStatus     atomic.Value
+}
+
+type listenerStatus struct {
+	startupListen        string
+	startupAdminListen   string
+	effectiveListen      string
+	effectiveAdminListen string
 }
 
 // New builds a runtime server with the default options.
@@ -92,8 +100,30 @@ func NewWithOptions(cfgPath string, cfg *config.RuntimeConfig, sink telemetry.Ev
 		observability = provider.ObservabilityReader()
 	}
 	s := &Server{cfgPath: cfgPath, startedAt: time.Now(), authenticator: auth.NewAuthenticator(), httpClient: &http.Client{Timeout: 0}, ocrHTTPClient: &http.Client{}, builtinOCR: ocr.NewBuiltinProvider(), metrics: prom, sink: sink, recent: recent, observability: observability, catalog: modelcatalog.NewService(modelcatalog.Options{CachePath: modelCatalogCachePath(cfgPath, cfg)}), clientAdapters: []protocol.ClientAdapter{clientopenai.ChatAdapter{}, clientopenai.ResponsesAdapter{}, clientanthropic.MessagesAdapter{}}, providerAdapters: map[string]protocol.ProviderAdapter{"anthropic": provideranthropic.Provider{}, "openai-compatible": provideropenai.Provider{}}, adminTokenOverride: options.AdminTokenOverride, desktopSessions: options.DesktopSessions, passwordAuth: options.PasswordAuth, desktopController: options.DesktopController, onConfigApplied: options.OnConfigApplied}
+	s.listenerStatus.Store(listenerStatus{
+		startupListen:        cfg.Server.Listen,
+		startupAdminListen:   cfg.Server.AdminListen,
+		effectiveListen:      cfg.Server.Listen,
+		effectiveAdminListen: cfg.Server.AdminListen,
+	})
 	s.applyRuntimeConfig(cfg)
 	return s
+}
+
+// SetEffectiveListenerAddresses records the addresses of the sockets that were
+// actually bound at startup. Runtime config reloads do not rebind those sockets.
+func (s *Server) SetEffectiveListenerAddresses(dataAddress, adminAddress string) {
+	status := s.currentListenerStatus()
+	status.effectiveListen = dataAddress
+	status.effectiveAdminListen = adminAddress
+	s.listenerStatus.Store(status)
+}
+
+func (s *Server) currentListenerStatus() listenerStatus {
+	if status, ok := s.listenerStatus.Load().(listenerStatus); ok {
+		return status
+	}
+	return listenerStatus{}
 }
 
 func (s *Server) SetHTTPClient(client *http.Client) {
@@ -784,6 +814,9 @@ func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	snap := s.current()
+	listeners := s.currentListenerStatus()
+	restartRequired := snap.Config.Server.Listen != listeners.startupListen ||
+		snap.Config.Server.AdminListen != listeners.startupAdminListen
 	providers := []map[string]any{}
 	providerIDs := make([]string, 0, len(snap.Config.Providers))
 	for id := range snap.Config.Providers {
@@ -798,9 +831,12 @@ func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
 		"loaded_at": snap.LoadedAt,
-		"server": map[string]string{
-			"listen":       snap.Config.Server.Listen,
-			"admin_listen": snap.Config.Server.AdminListen,
+		"server": map[string]any{
+			"listen":                 snap.Config.Server.Listen,
+			"admin_listen":           snap.Config.Server.AdminListen,
+			"effective_listen":       listeners.effectiveListen,
+			"effective_admin_listen": listeners.effectiveAdminListen,
+			"restart_required":       restartRequired,
 		},
 		"providers":      providers,
 		"model_resolver": snap.Config.ModelResolver,

@@ -217,7 +217,11 @@ configure credentials or capability overrides.
 Use Docker:
 
 ```bash
-VIBE_PROXY_ADMIN_TOKEN='admin-token' ./scripts/dev-docker.sh configs/bootstrap.yaml
+./scripts/dev-docker.sh configs/bootstrap.yaml
 ```
 
 Open `http://127.0.0.1:8081/`.
+The launcher creates and prints a high-entropy admin token when
+`VIBE_PROXY_ADMIN_TOKEN` is not set. It also runs the container on a dedicated
+bridge with inter-container communication disabled so the local management
+relay is not reachable from unrelated containers.

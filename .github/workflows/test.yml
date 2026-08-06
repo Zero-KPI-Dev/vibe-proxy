@@ -10,6 +10,14 @@ permissions:
   contents: read
 
 jobs:
+  shell-contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Test Docker launcher security contracts
+        run: bash scripts/test-dev-docker.sh
+
   frontend-build:
     runs-on: ubuntu-latest
     steps:

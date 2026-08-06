@@ -175,6 +175,7 @@ func Start(_ context.Context, options Options) (*App, error) {
 		closeStartupResources(recorder, db)
 		return nil, startupError("admin_listen", cfg.Server.AdminListen, err)
 	}
+	runtimeServer.SetEffectiveListenerAddresses(dataListener.Addr().String(), adminListener.Addr().String())
 
 	app := &App{
 		server:          dataServer,

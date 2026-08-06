@@ -163,7 +163,7 @@ func TestDataAndControlRoutesAreIsolated(t *testing.T) {
 	}
 }
 
-func TestAdminSnapshotIncludesConfiguredListenerAddresses(t *testing.T) {
+func TestAdminSnapshotDistinguishesConfiguredAndEffectiveListenerAddresses(t *testing.T) {
 	cfg, err := config.CompileSimple(config.SimpleConfig{Server: config.ServerConfig{
 		Listen:      "0.0.0.0:9080",
 		AdminListen: "127.0.0.1:9081",
@@ -173,23 +173,54 @@ func TestAdminSnapshotIncludesConfiguredListenerAddresses(t *testing.T) {
 	}
 	testPromOnce.Do(func() { testProm = metrics.New() })
 	s := NewWithOptions("", cfg, metrics.MultiSink{}, testProm, Options{AdminTokenOverride: "admin-token"})
-	request := adminJSONRequest(http.MethodGet, "/admin/config/snapshot", "")
-	response := httptest.NewRecorder()
-	s.ControlRoutes().ServeHTTP(response, request)
-	if response.Code != http.StatusOK {
-		t.Fatalf("snapshot = %d: %s", response.Code, response.Body.String())
-	}
-	var payload struct {
+	s.SetEffectiveListenerAddresses("0.0.0.0:49080", "127.0.0.1:49081")
+
+	type snapshotPayload struct {
 		Server struct {
-			Listen      string `json:"listen"`
-			AdminListen string `json:"admin_listen"`
+			Listen               string `json:"listen"`
+			AdminListen          string `json:"admin_listen"`
+			EffectiveListen      string `json:"effective_listen"`
+			EffectiveAdminListen string `json:"effective_admin_listen"`
+			RestartRequired      bool   `json:"restart_required"`
 		} `json:"server"`
 	}
-	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+	readSnapshot := func() snapshotPayload {
+		t.Helper()
+		request := adminJSONRequest(http.MethodGet, "/admin/config/snapshot", "")
+		response := httptest.NewRecorder()
+		s.ControlRoutes().ServeHTTP(response, request)
+		if response.Code != http.StatusOK {
+			t.Fatalf("snapshot = %d: %s", response.Code, response.Body.String())
+		}
+		var payload snapshotPayload
+		if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+			t.Fatal(err)
+		}
+		return payload
+	}
+
+	payload := readSnapshot()
+	if payload.Server.Listen != "0.0.0.0:9080" || payload.Server.AdminListen != "127.0.0.1:9081" {
+		t.Fatalf("configured listener snapshot = %+v", payload.Server)
+	}
+	if payload.Server.EffectiveListen != "0.0.0.0:49080" || payload.Server.EffectiveAdminListen != "127.0.0.1:49081" || payload.Server.RestartRequired {
+		t.Fatalf("effective listener snapshot = %+v", payload.Server)
+	}
+
+	reloaded, err := config.CompileSimple(config.SimpleConfig{Server: config.ServerConfig{
+		Listen:      "0.0.0.0:9180",
+		AdminListen: "127.0.0.1:9181",
+	}})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if payload.Server.Listen != "0.0.0.0:9080" || payload.Server.AdminListen != "127.0.0.1:9081" {
-		t.Fatalf("listener snapshot = %+v", payload.Server)
+	s.applyRuntimeConfig(reloaded)
+	payload = readSnapshot()
+	if payload.Server.Listen != "0.0.0.0:9180" || payload.Server.AdminListen != "127.0.0.1:9181" {
+		t.Fatalf("reloaded listener config = %+v", payload.Server)
+	}
+	if payload.Server.EffectiveListen != "0.0.0.0:49080" || payload.Server.EffectiveAdminListen != "127.0.0.1:49081" || !payload.Server.RestartRequired {
+		t.Fatalf("listener reload state = %+v", payload.Server)
 	}
 }
 

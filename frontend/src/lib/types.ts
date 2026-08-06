@@ -48,6 +48,9 @@ export interface SnapshotResponse {
   server: {
     listen: string
     admin_listen: string
+    effective_listen: string
+    effective_admin_listen: string
+    restart_required: boolean
   }
   providers: ProviderConfig[]
   model_resolver: ModelResolverConfig

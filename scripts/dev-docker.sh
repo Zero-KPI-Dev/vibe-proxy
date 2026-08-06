@@ -4,14 +4,20 @@ set -euo pipefail
 CONFIG_PATH="${1:-configs/bootstrap.yaml}"
 PORT="${VIBE_PROXY_PORT:-8080}"
 ADMIN_PORT="${VIBE_PROXY_ADMIN_PORT:-8081}"
-ADMIN_TOKEN="${VIBE_PROXY_ADMIN_TOKEN:-admin-token}"
+ADMIN_TOKEN="${VIBE_PROXY_ADMIN_TOKEN:-}"
 CONTAINER_NAME="${VIBE_PROXY_CONTAINER:-vibe-proxy-dev}"
+NETWORK_NAME="${CONTAINER_NAME}-isolated-$$-${RANDOM}"
 GO_MOD_CACHE_VOLUME="${VIBE_PROXY_GOMODCACHE_VOLUME:-vibe-proxy-gomodcache}"
 GO_BUILD_CACHE_VOLUME="${VIBE_PROXY_GOCACHE_VOLUME:-vibe-proxy-gocache}"
 RUNTIME_CONFIG="${VIBE_PROXY_RUNTIME_CONFIG:-.vibe-proxy/runtime.yaml}"
 
 if ! command -v docker >/dev/null 2>&1; then
   echo "Docker is required to run vibe-proxy without a local Go installation." >&2
+  exit 1
+fi
+
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "Python 3 is required to prepare the Docker runtime configuration." >&2
   exit 1
 fi
 
@@ -43,10 +49,35 @@ elif 'server:\n' in text:
 open(path, 'w', encoding='utf-8').write(text)
 PY
 
+if [ -z "$ADMIN_TOKEN" ]; then
+  ADMIN_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
+  echo "Generated an ephemeral admin token for this run:"
+  echo "$ADMIN_TOKEN"
+  echo "Save it in Settings when opening the control plane in a browser."
+fi
+
 docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+
+# The relay must listen on a container interface for Docker's host port
+# forwarding to reach it. A dedicated bridge with inter-container
+# communication disabled prevents unrelated containers from reaching it.
+docker network create \
+  --driver bridge \
+  --opt com.docker.network.bridge.enable_icc=false \
+  "$NETWORK_NAME" >/dev/null
+
+cleanup() {
+  docker stop --time 2 "$CONTAINER_NAME" >/dev/null 2>&1 || true
+  docker rm "$CONTAINER_NAME" >/dev/null 2>&1 || true
+  docker network rm "$NETWORK_NAME" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 docker run --rm \
   --name "$CONTAINER_NAME" \
+  --network "$NETWORK_NAME" \
   -p "127.0.0.1:${PORT}:8080" \
   -p "127.0.0.1:${ADMIN_PORT}:18081" \
   -v "$PWD":/src \
