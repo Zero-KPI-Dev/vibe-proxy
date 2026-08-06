@@ -197,6 +197,34 @@ func compileTelemetryAgentProfiles(profiles []config.AgentProfileConfig) []telem
 
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
+	s.registerDataRoutes(mux)
+	s.registerControlRoutes(mux)
+	mux.Handle("/", s.spaRoutes())
+	return wrapRoutes(mux)
+}
+
+// DataRoutes exposes only the protocol-compatible LLM data plane and a minimal
+// health endpoint. Management and UI handlers are deliberately not mounted.
+func (s *Server) DataRoutes() http.Handler {
+	mux := http.NewServeMux()
+	s.registerDataRoutes(mux)
+	return wrapRoutes(mux)
+}
+
+// ControlRoutes exposes the loopback-only UI and management surface. Explicit
+// API-prefix 404 handlers prevent the SPA fallback from masquerading as a data
+// endpoint on the control-plane listener.
+func (s *Server) ControlRoutes() http.Handler {
+	mux := http.NewServeMux()
+	s.registerControlRoutes(mux)
+	mux.HandleFunc("/healthz", s.healthz)
+	mux.HandleFunc("/v1/", http.NotFound)
+	mux.HandleFunc("/anthropic/", http.NotFound)
+	mux.Handle("/", s.spaRoutes())
+	return wrapRoutes(mux)
+}
+
+func (s *Server) registerDataRoutes(mux *http.ServeMux) {
 
 	// Data-plane proxy endpoints
 	mux.HandleFunc("/v1/models", s.handleModels)
@@ -204,8 +232,11 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/v1/responses", s.handle)
 	mux.HandleFunc("/anthropic/v1/messages", s.handle)
 	mux.HandleFunc("/v1/messages", s.handle)
-	mux.Handle("/metrics", s.metrics.Handler())
 	mux.HandleFunc("/healthz", s.healthz)
+}
+
+func (s *Server) registerControlRoutes(mux *http.ServeMux) {
+	mux.Handle("/metrics", s.metrics.Handler())
 	mux.HandleFunc("/auth/status", s.authStatus)
 	mux.HandleFunc("/auth/setup", s.authSetup)
 	mux.HandleFunc("/auth/login", s.authLogin)
@@ -251,9 +282,9 @@ func (s *Server) Routes() http.Handler {
 	if s.desktopSessions != nil {
 		mux.HandleFunc(desktopBootstrapPrefix, s.desktopBootstrap)
 	}
+}
 
-	// SPA dashboard (must be last as catch-all)
-	mux.Handle("/", s.spaRoutes())
+func wrapRoutes(mux *http.ServeMux) http.Handler {
 	return limitBody(recordResponse(mux), 32<<20)
 }
 

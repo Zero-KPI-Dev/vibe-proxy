@@ -263,6 +263,9 @@ func applyServerDefaults(s *ServerConfig) {
 	if s.Listen == "" {
 		s.Listen = "127.0.0.1:8080"
 	}
+	if s.AdminListen == "" {
+		s.AdminListen = "127.0.0.1:8081"
+	}
 	if s.ReadTimeout.Duration == 0 {
 		s.ReadTimeout.Duration = 30 * time.Second
 	}

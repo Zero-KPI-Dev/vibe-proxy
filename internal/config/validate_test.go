@@ -8,6 +8,65 @@ import (
 	"github.com/a448582655/vibe-proxy/internal/upstreamauth"
 )
 
+func TestCompileSimpleDefaultsControlPlaneToLoopback(t *testing.T) {
+	cfg, err := CompileSimple(SimpleConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Server.Listen != "127.0.0.1:8080" || cfg.Server.AdminListen != "127.0.0.1:8081" {
+		t.Fatalf("server defaults = %+v", cfg.Server)
+	}
+}
+
+func TestValidateRuntimeAcceptsLoopbackControlPlane(t *testing.T) {
+	for _, address := range []string{"127.0.0.1:8081", "127.0.0.2:0", "[::1]:8081"} {
+		t.Run(address, func(t *testing.T) {
+			cfg, err := CompileSimple(SimpleConfig{Server: ServerConfig{Listen: "0.0.0.0:8080", AdminListen: address}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if issues := ValidateRuntime(cfg); HasErrors(issues) {
+				t.Fatalf("loopback address rejected: %+v", issues)
+			}
+		})
+	}
+}
+
+func TestValidateRuntimeRejectsUnsafeControlPlaneListener(t *testing.T) {
+	tests := []struct {
+		name    string
+		address string
+		code    string
+	}{
+		{name: "missing", address: " ", code: "missing_admin_listen"},
+		{name: "hostname", address: "localhost:8081", code: "admin_listen_not_loopback"},
+		{name: "ipv4 wildcard", address: "0.0.0.0:8081", code: "admin_listen_not_loopback"},
+		{name: "ipv6 wildcard", address: "[::]:8081", code: "admin_listen_not_loopback"},
+		{name: "lan", address: "192.168.1.10:8081", code: "admin_listen_not_loopback"},
+		{name: "missing port", address: "127.0.0.1", code: "invalid_listen_address"},
+		{name: "invalid port", address: "127.0.0.1:70000", code: "invalid_listen_port"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := &RuntimeConfig{Server: ServerConfig{Listen: "0.0.0.0:8080", AdminListen: test.address}}
+			issues := ValidateRuntime(cfg)
+			if !hasIssueCode(issues, test.code) {
+				t.Fatalf("missing %s for %q: %+v", test.code, test.address, issues)
+			}
+		})
+	}
+}
+
+func TestValidateRuntimeRejectsListenerPortConflict(t *testing.T) {
+	cfg, err := CompileSimple(SimpleConfig{Server: ServerConfig{Listen: "0.0.0.0:8080", AdminListen: "127.0.0.1:8080"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if issues := ValidateRuntime(cfg); !hasIssueCode(issues, "listener_port_conflict") {
+		t.Fatalf("missing listener conflict: %+v", issues)
+	}
+}
+
 func TestValidateRuntimeDetectsInvalidProviderAndAlias(t *testing.T) {
 	cfg := &RuntimeConfig{Providers: map[string]ProviderConfig{"bad": {Type: "weird", BaseURL: "not url"}}, ModelResolver: modelresolver.Config{Aliases: map[string]modelresolver.Alias{"x": {Provider: "missing", Model: "model"}}}}
 	issues := ValidateRuntime(cfg)

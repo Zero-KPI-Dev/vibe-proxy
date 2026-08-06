@@ -2,8 +2,11 @@ package config
 
 import (
 	"fmt"
+	"net"
+	"net/netip"
 	"net/url"
 	"path"
+	"strconv"
 	"strings"
 	"time"
 
@@ -27,6 +30,11 @@ func ValidateRuntime(cfg *RuntimeConfig) []ValidationIssue {
 	}
 	if cfg.Server.Listen == "" {
 		issues = append(issues, issue("error", "server.listen", "missing_listen", "Server listen address is required."))
+	}
+	dataPort, dataPortOK := validateListenAddress(&issues, "server.listen", cfg.Server.Listen, false)
+	adminPort, adminPortOK := validateListenAddress(&issues, "server.admin_listen", cfg.Server.AdminListen, true)
+	if dataPortOK && adminPortOK && dataPort == adminPort {
+		issues = append(issues, issue("error", "server.admin_listen", "listener_port_conflict", "Data-plane and control-plane listeners must use different ports."))
 	}
 	if proxyURL := strings.TrimSpace(cfg.ModelCatalog.ProxyURL); proxyURL != "" && !isAbsoluteHTTPURL(proxyURL) {
 		issues = append(issues, issue("error", "model_catalog.proxy_url", "invalid_proxy_url", "Model catalog proxy_url must be a valid absolute HTTP or HTTPS URL."))
@@ -139,6 +147,33 @@ func ValidateRuntime(cfg *RuntimeConfig) []ValidationIssue {
 	issues = append(issues, validateMultimodal(cfg.Multimodal)...)
 	issues = append(issues, validateVisionFallback(cfg)...)
 	return issues
+}
+
+func validateListenAddress(issues *[]ValidationIssue, configPath, raw string, loopbackOnly bool) (int, bool) {
+	if strings.TrimSpace(raw) == "" {
+		if loopbackOnly {
+			*issues = append(*issues, issue("error", configPath, "missing_admin_listen", "Control-plane listen address is required."))
+		}
+		return 0, false
+	}
+	host, portText, err := net.SplitHostPort(raw)
+	if err != nil {
+		*issues = append(*issues, issue("error", configPath, "invalid_listen_address", "Listen address must include a valid host and port."))
+		return 0, false
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil || port < 0 || port > 65535 {
+		*issues = append(*issues, issue("error", configPath, "invalid_listen_port", "Listen port must be between 0 and 65535."))
+		return 0, false
+	}
+	if loopbackOnly {
+		addr, err := netip.ParseAddr(host)
+		if err != nil || !addr.IsLoopback() {
+			*issues = append(*issues, issue("error", configPath, "admin_listen_not_loopback", "Control-plane listen address must use a literal loopback IP."))
+			return 0, false
+		}
+	}
+	return port, true
 }
 
 func validateObservability(cfg ObservabilityConfig) []ValidationIssue {
