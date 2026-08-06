@@ -2,7 +2,7 @@
 
 GitHub Releases provide both the `vibe-proxy` CLI server and a native **Vibe
 Proxy Desktop** shell for Windows and macOS. Linux uses the CLI plus the
-browser-based control plane at `http://127.0.0.1:8080/`.
+browser-based control plane at `http://127.0.0.1:8081/`.
 
 The first public build is the `v0.1.0-rc.1` release candidate. Use it for
 cross-platform acceptance before treating it as a stable deployment.
@@ -148,14 +148,14 @@ export VIBE_PROXY_ADMIN_TOKEN='choose-a-local-admin-token'
 /usr/bin/vibe-proxy -config ./bootstrap.yaml
 ```
 
-Open `http://127.0.0.1:8080/` in a browser on the same machine. A headless Linux
+Open `http://127.0.0.1:8081/` in a browser on the same machine. A headless Linux
 host can expose the control plane through an SSH tunnel:
 
 ```bash
-ssh -L 8080:127.0.0.1:8080 user@linux-host
+ssh -L 8081:127.0.0.1:8081 user@linux-host
 ```
 
-Then open `http://127.0.0.1:8080/` on the local computer. Stop the CLI service
+Then open `http://127.0.0.1:8081/` on the local computer. Stop the CLI service
 with `Ctrl+C`.
 
 ## First-Run Security
@@ -198,7 +198,7 @@ Linux systems:
 2. Run `vibe-proxy --version` and confirm the release tag and commit are shown.
 3. Start the desktop app, create the first-run management password, and confirm
    the native window enters the control plane.
-4. Open `http://127.0.0.1:8080/` in a regular browser, sign in with the
+4. Open `http://127.0.0.1:8081/` in a regular browser, sign in with the
    management password, and confirm that an incorrect password is rejected.
 5. Add and test a provider without editing YAML.
 6. Fetch and select provider models.

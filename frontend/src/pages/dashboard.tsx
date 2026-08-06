@@ -41,6 +41,30 @@ function CopyBox({ label, value }: { label: string; value: string }) {
   )
 }
 
+function dataPlaneOrigin(listen?: string): string {
+  const fallback = "http://127.0.0.1:8080"
+  if (!listen) return fallback
+  let host = ""
+  let port = ""
+  if (listen.startsWith("[")) {
+    const closingBracket = listen.indexOf("]")
+    if (closingBracket < 0 || listen[closingBracket + 1] !== ":") return fallback
+    host = listen.slice(1, closingBracket)
+    port = listen.slice(closingBracket + 2)
+  } else {
+    const separator = listen.lastIndexOf(":")
+    if (separator < 0) return fallback
+    host = listen.slice(0, separator)
+    port = listen.slice(separator + 1)
+  }
+  if (!/^\d+$/.test(port)) return fallback
+  if (!host || host === "0.0.0.0" || host === "::") {
+    host = window.location.hostname || "127.0.0.1"
+  }
+  const formattedHost = host.includes(":") ? `[${host}]` : host
+  return `http://${formattedHost}:${port}`
+}
+
 export function DashboardPage() {
   const { t } = useTranslation()
   const { data: snapshot, isLoading: loadingProviders } = useProviders()
@@ -56,7 +80,7 @@ export function DashboardPage() {
   const firstClientKey = clientKeys?.keys?.[0]
   const firstKeyPrefix = firstClientKey?.key_prefix
   const hasClientKey = Boolean(firstClientKey)
-  const localOrigin = window.location.origin
+  const apiOrigin = dataPlaneOrigin(snapshot?.server?.listen)
 
   return (
     <div className="space-y-6">
@@ -79,11 +103,11 @@ export function DashboardPage() {
           <div className="grid gap-3 sm:grid-cols-3">
             <CopyBox
               label={t("dashboard.openaiEndpoint")}
-              value={`${localOrigin}/v1`}
+              value={`${apiOrigin}/v1`}
             />
             <CopyBox
               label={t("dashboard.anthropicEndpoint")}
-              value={`${localOrigin}/anthropic`}
+              value={`${apiOrigin}/anthropic`}
             />
             <CopyBox
               label={

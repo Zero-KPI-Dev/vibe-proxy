@@ -45,6 +45,9 @@ func TestHostStartCreatesPrivateConfigAndBootstrapsRealGateway(t *testing.T) {
 	if cfg.Server.Listen != "127.0.0.1:8080" {
 		t.Fatalf("config listen = %q, want 127.0.0.1:8080", cfg.Server.Listen)
 	}
+	if cfg.Server.AdminListen != "127.0.0.1:8081" {
+		t.Fatalf("config admin listen = %q, want 127.0.0.1:8081", cfg.Server.AdminListen)
+	}
 	if cfg.Storage.SQLitePath != fixture.paths.DatabasePath {
 		t.Fatalf("config sqlite path = %q, want %q", cfg.Storage.SQLitePath, fixture.paths.DatabasePath)
 	}
@@ -77,7 +80,7 @@ func TestHostStartCreatesPrivateConfigAndBootstrapsRealGateway(t *testing.T) {
 	if len(navigations) != 1 {
 		t.Fatalf("Navigate calls = %v, want exactly one", navigations)
 	}
-	prefix := "http://" + gateway.Address() + "/desktop/bootstrap/"
+	prefix := "http://" + gateway.AdminAddress() + "/desktop/bootstrap/"
 	if !strings.HasPrefix(navigations[0], prefix) {
 		t.Fatalf("navigation = %q, want prefix %q", navigations[0], prefix)
 	}
@@ -104,6 +107,9 @@ func TestHostStartCreatesPrivateConfigAndBootstrapsRealGateway(t *testing.T) {
 	if snapshot.ListenAddress != gateway.Address() {
 		t.Fatalf("snapshot listen = %q, want %q", snapshot.ListenAddress, gateway.Address())
 	}
+	if snapshot.DataAddress != gateway.Address() || snapshot.AdminAddress != gateway.AdminAddress() {
+		t.Fatalf("desktop endpoint snapshot = %+v", snapshot)
+	}
 	if got := fixture.tray.statusValues(); len(got) != 2 || got[0] != "Starting" || got[1] != "Running on "+gateway.Address() {
 		t.Fatalf("tray statuses = %v", got)
 	}
@@ -120,11 +126,11 @@ func TestHostStartUsesLoopbackURLsForWildcardListener(t *testing.T) {
 	}
 
 	options, gateway := fixture.startCapture.values()
-	wantAddress := browserAddress(gateway.Address())
-	if wantAddress == gateway.Address() {
-		t.Fatalf("browser address %q was not rewritten from wildcard listener", wantAddress)
+	wantDataAddress := browserAddress(gateway.Address())
+	if wantDataAddress == gateway.Address() {
+		t.Fatalf("browser address %q was not rewritten from wildcard listener", wantDataAddress)
 	}
-	response, err := (&http.Client{Timeout: time.Second}).Get("http://" + wantAddress + "/healthz")
+	response, err := (&http.Client{Timeout: time.Second}).Get("http://" + wantDataAddress + "/healthz")
 	if err != nil {
 		t.Fatalf("GET healthz through loopback address: %v", err)
 	}
@@ -136,7 +142,7 @@ func TestHostStartUsesLoopbackURLsForWildcardListener(t *testing.T) {
 	if len(navigations) != 1 {
 		t.Fatalf("Navigate calls = %v, want exactly one", navigations)
 	}
-	assertBrowserBootstrapTarget(t, navigations[0], wantAddress, options.Runtime.DesktopSessions)
+	assertBrowserBootstrapTarget(t, navigations[0], gateway.AdminAddress(), options.Runtime.DesktopSessions)
 
 	if err := fixture.host.CopyOpenAIBaseURL(); err != nil {
 		t.Fatalf("CopyOpenAIBaseURL() error = %v", err)
@@ -146,13 +152,13 @@ func TestHostStartUsesLoopbackURLsForWildcardListener(t *testing.T) {
 	}
 	fixture.system.mu.Lock()
 	defer fixture.system.mu.Unlock()
-	if got := fixture.system.copied; len(got) != 1 || got[0] != "http://"+wantAddress+"/v1" {
+	if got := fixture.system.copied; len(got) != 1 || got[0] != "http://"+wantDataAddress+"/v1" {
 		t.Fatalf("copied targets = %v, want loopback address", got)
 	}
 	if got := fixture.system.browsed; len(got) != 1 {
 		t.Fatalf("browser targets = %v, want exactly one", got)
 	} else {
-		assertBrowserBootstrapTarget(t, got[0], wantAddress, options.Runtime.DesktopSessions)
+		assertBrowserBootstrapTarget(t, got[0], gateway.AdminAddress(), options.Runtime.DesktopSessions)
 	}
 }
 
@@ -192,11 +198,11 @@ func TestHostStartNavigationFailureKeepsGatewayForBrowserFallback(t *testing.T) 
 	}
 	fixture.system.mu.Lock()
 	defer fixture.system.mu.Unlock()
-	base := "http://" + gateway.Address()
+	base := "http://" + gateway.AdminAddress()
 	if got := fixture.system.browsed; len(got) != 2 {
 		t.Fatalf("browser targets = %v, want first-run bootstrap and password login targets", got)
 	} else {
-		assertBrowserBootstrapTarget(t, got[0], gateway.Address(), options.Runtime.DesktopSessions)
+		assertBrowserBootstrapTarget(t, got[0], gateway.AdminAddress(), options.Runtime.DesktopSessions)
 		if got[1] != base+"/" {
 			t.Fatalf("post-setup browser target = %q, want %q", got[1], base+"/")
 		}
@@ -997,12 +1003,12 @@ func TestHostControllerAndTrayOperationsUseAllowListedTargets(t *testing.T) {
 
 	fixture.system.mu.Lock()
 	defer fixture.system.mu.Unlock()
-	base := "http://" + gateway.Address()
+	dataBase := "http://" + gateway.Address()
 	if got := fixture.system.browsed; len(got) != 1 {
 		t.Fatalf("browser targets = %v, want exactly one", got)
 	}
-	assertBrowserBootstrapTarget(t, fixture.system.browsed[0], gateway.Address(), options.Runtime.DesktopSessions)
-	if got := fixture.system.copied; len(got) != 2 || got[0] != base+"/v1" || got[1] != base+"/anthropic" {
+	assertBrowserBootstrapTarget(t, fixture.system.browsed[0], gateway.AdminAddress(), options.Runtime.DesktopSessions)
+	if got := fixture.system.copied; len(got) != 2 || got[0] != dataBase+"/v1" || got[1] != dataBase+"/anthropic" {
 		t.Fatalf("copied targets = %v", got)
 	}
 	if got := fixture.system.directories; len(got) != 2 || got[0] != fixture.paths.LogDir || got[1] != fixture.paths.DataDir {
@@ -1101,7 +1107,7 @@ func startBlockingOpenDataRequest(t *testing.T, fixture *hostStartFixture, gatew
 		defer close(requestDone)
 		request, err := http.NewRequest(
 			http.MethodPost,
-			"http://"+gateway.Address()+"/admin/desktop/open-data-dir",
+			"http://"+gateway.AdminAddress()+"/admin/desktop/open-data-dir",
 			nil,
 		)
 		if err != nil {
@@ -1233,12 +1239,17 @@ func (c *gatewayStartCapture) start(ctx context.Context, options gatewayapp.Opti
 	c.mu.Lock()
 	c.options = cloneGatewayOptions(options)
 	c.mu.Unlock()
-	listenAddress := c.listenAddress
-	if listenAddress == "" {
-		listenAddress = "127.0.0.1:0"
+	dataListenAddress := c.listenAddress
+	if dataListenAddress == "" {
+		dataListenAddress = "127.0.0.1:0"
 	}
+	listenCall := 0
 	options.Listen = func(_, _ string) (net.Listener, error) {
-		return net.Listen("tcp", listenAddress)
+		listenCall++
+		if listenCall == 1 {
+			return net.Listen("tcp", dataListenAddress)
+		}
+		return net.Listen("tcp", "127.0.0.1:0")
 	}
 	app, err := gatewayapp.Start(ctx, options)
 	c.mu.Lock()

@@ -45,6 +45,10 @@ export interface ProviderFormData {
 
 export interface SnapshotResponse {
   loaded_at: string
+  server: {
+    listen: string
+    admin_listen: string
+  }
   providers: ProviderConfig[]
   model_resolver: ModelResolverConfig
 }
@@ -508,6 +512,8 @@ export interface DesktopSnapshot {
   platform?: "windows" | "darwin"
   close_behavior?: CloseBehavior
   listen_address?: string
+  data_address?: string
+  admin_address?: string
   data_dir?: string
   log_dir?: string
   owns_gateway?: boolean

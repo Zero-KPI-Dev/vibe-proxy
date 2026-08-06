@@ -794,7 +794,15 @@ func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 		providers = append(providers, map[string]any{"id": id, "type": p.Type, "base_url": p.BaseURL, "catalog_provider": p.CatalogProvider, "default_capabilities": p.DefaultCapabilities, "model_capabilities": p.ModelCapabilities, "models": p.Models, "max_concurrency": p.MaxConcurrency, "auth_type": authType, "api_key_source": keySource, "api_key_env": keyEnv})
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"loaded_at": snap.LoadedAt, "providers": providers, "model_resolver": snap.Config.ModelResolver})
+	json.NewEncoder(w).Encode(map[string]any{
+		"loaded_at": snap.LoadedAt,
+		"server": map[string]string{
+			"listen":       snap.Config.Server.Listen,
+			"admin_listen": snap.Config.Server.AdminListen,
+		},
+		"providers":      providers,
+		"model_resolver": snap.Config.ModelResolver,
+	})
 }
 
 func providerAuthMeta(p config.ProviderConfig) (authType string, keySource string, keyEnv string) {

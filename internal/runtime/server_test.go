@@ -163,6 +163,36 @@ func TestDataAndControlRoutesAreIsolated(t *testing.T) {
 	}
 }
 
+func TestAdminSnapshotIncludesConfiguredListenerAddresses(t *testing.T) {
+	cfg, err := config.CompileSimple(config.SimpleConfig{Server: config.ServerConfig{
+		Listen:      "0.0.0.0:9080",
+		AdminListen: "127.0.0.1:9081",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	testPromOnce.Do(func() { testProm = metrics.New() })
+	s := NewWithOptions("", cfg, metrics.MultiSink{}, testProm, Options{AdminTokenOverride: "admin-token"})
+	request := adminJSONRequest(http.MethodGet, "/admin/config/snapshot", "")
+	response := httptest.NewRecorder()
+	s.ControlRoutes().ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("snapshot = %d: %s", response.Code, response.Body.String())
+	}
+	var payload struct {
+		Server struct {
+			Listen      string `json:"listen"`
+			AdminListen string `json:"admin_listen"`
+		} `json:"server"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Server.Listen != "0.0.0.0:9080" || payload.Server.AdminListen != "127.0.0.1:9081" {
+		t.Fatalf("listener snapshot = %+v", payload.Server)
+	}
+}
+
 func TestRuntimeRecordsPayloadStagesAndIgnoresRecorderFailure(t *testing.T) {
 	tests := []struct {
 		name       string

@@ -89,12 +89,14 @@ VIBE_PROXY_ADMIN_TOKEN='admin-token' ./scripts/dev-docker.sh configs/bootstrap.y
 Then open:
 
 ```text
-http://127.0.0.1:8080/
+http://127.0.0.1:8081/
 ```
 
 Stop with `Ctrl+C`.
 
-The Docker launcher rewrites the in-container listen address to `0.0.0.0:8080` so `http://127.0.0.1:8080/` works from your Mac.
+The Docker launcher publishes the data plane on `127.0.0.1:8080` and relays the
+container's loopback-only control plane to `127.0.0.1:8081` on the host. The
+management relay is never published on a wildcard host address.
 
 The Docker launcher uses named Docker volumes for Go module and build caches, so dependencies are downloaded only the first time unless the cache is cleared.
 

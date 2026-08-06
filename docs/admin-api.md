@@ -161,7 +161,7 @@ another machine and import it from Settings, or upload it directly:
 ```bash
 curl -H "Authorization: Bearer $VIBE_PROXY_ADMIN_TOKEN" \
   -F "catalog=@api.json;type=application/json" \
-  http://127.0.0.1:8080/admin/model-catalog/import
+  http://127.0.0.1:8081/admin/model-catalog/import
 ```
 
 The file is limited to 10 MB and is parsed before it replaces the active catalog. An

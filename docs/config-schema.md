@@ -28,6 +28,7 @@ version: vibeproxy.io/v1alpha1
 
 server:
   listen: 127.0.0.1:8080
+  admin_listen: 127.0.0.1:8081
 
 # Optional. Leave empty to use HTTP_PROXY / HTTPS_PROXY from the process.
 model_catalog:
@@ -58,6 +59,12 @@ models:
 ```
 
 This should be enough for most local users.
+
+`server.listen` is the Agent-facing data plane and may use a LAN or wildcard
+address when other machines need access. `server.admin_listen` serves the UI,
+Admin API, authentication, desktop bootstrap, and metrics. It defaults to
+`127.0.0.1:8081` and must remain a literal loopback address. The two non-zero
+ports must differ, and changing either listener requires an application restart.
 
 ## Model Capability Catalog
 

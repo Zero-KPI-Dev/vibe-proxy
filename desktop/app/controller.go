@@ -31,15 +31,18 @@ func (c *desktopController) Snapshot() desktopbridge.Snapshot {
 	ownsGateway := c.host.ownsGateway
 	c.host.lifecycleMu.RUnlock()
 
-	var listenAddress string
+	var dataAddress, adminAddress string
 	if gateway != nil {
-		listenAddress = gateway.Address()
+		dataAddress = gateway.Address()
+		adminAddress = gateway.AdminAddress()
 	}
 	return desktopbridge.Snapshot{
 		Available:     true,
 		Platform:      runtime.GOOS,
 		CloseBehavior: closeBehavior,
-		ListenAddress: listenAddress,
+		ListenAddress: dataAddress,
+		DataAddress:   dataAddress,
+		AdminAddress:  adminAddress,
 		DataDir:       c.host.paths.DataDir,
 		LogDir:        c.host.paths.LogDir,
 		OwnsGateway:   ownsGateway,

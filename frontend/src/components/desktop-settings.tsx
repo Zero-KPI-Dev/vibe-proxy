@@ -103,6 +103,25 @@ export function DesktopSettings({ desktop, onDesktopChange, onImported }: Deskto
         </div>
 
         <div className="grid gap-4 sm:grid-cols-2">
+          <div className="rounded-md border border-border bg-muted/20 p-3">
+            <p className="text-sm font-medium">{t("settings.desktop.apiEndpoint")}</p>
+            <p className="mt-1 select-all break-all font-mono text-xs text-muted-foreground">
+              {desktop.data_address ?? desktop.listen_address
+                ? `http://${desktop.data_address ?? desktop.listen_address}`
+                : "—"}
+            </p>
+            <p className="mt-2 text-xs text-muted-foreground">{t("settings.desktop.apiEndpointHelp")}</p>
+          </div>
+          <div className="rounded-md border border-border bg-muted/20 p-3">
+            <p className="text-sm font-medium">{t("settings.desktop.adminEndpoint")}</p>
+            <p className="mt-1 select-all break-all font-mono text-xs text-muted-foreground">
+              {desktop.admin_address ? `http://${desktop.admin_address}` : "—"}
+            </p>
+            <p className="mt-2 text-xs text-muted-foreground">{t("settings.desktop.adminEndpointHelp")}</p>
+          </div>
+        </div>
+
+        <div className="grid gap-4 sm:grid-cols-2">
           <div className="space-y-1">
             <p className="text-sm font-medium">{t("settings.desktop.dataDirectory")}</p>
             <p className="select-all break-all font-mono text-xs text-muted-foreground">{desktop.data_dir ?? "—"}</p>
