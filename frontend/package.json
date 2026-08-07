@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "test": "npm run test:i18n && npm run test:auth-flow && npm run test:playground && npm run test:runtime-status && npm run test:desktop-settings && npm run test:model-catalog && npm run test:ocr-fallback && npm run test:observability && npm run test:layout",
+    "test": "npm run test:i18n && npm run test:auth-flow && npm run test:playground && npm run test:runtime-status && npm run test:listener-url && npm run test:desktop-settings && npm run test:model-catalog && npm run test:ocr-fallback && npm run test:observability && npm run test:layout",
     "test:auth-flow": "node ./scripts/check-auth-flow.mjs",
     "test:desktop-settings": "node ./scripts/check-desktop-settings.mjs",
     "test:model-catalog": "node ./scripts/check-model-catalog.mjs",
@@ -16,6 +16,7 @@
     "test:i18n": "node ./scripts/check-i18n.mjs",
     "test:playground": "node ./scripts/check-playground.mjs",
     "test:runtime-status": "node ./scripts/check-runtime-status.mjs",
+    "test:listener-url": "node ./scripts/check-listener-url.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

@@ -58,14 +58,6 @@ fi
 
 docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
 
-# The relay must listen on a container interface for Docker's host port
-# forwarding to reach it. A dedicated bridge with inter-container
-# communication disabled prevents unrelated containers from reaching it.
-docker network create \
-  --driver bridge \
-  --opt com.docker.network.bridge.enable_icc=false \
-  "$NETWORK_NAME" >/dev/null
-
 cleanup() {
   docker stop --time 2 "$CONTAINER_NAME" >/dev/null 2>&1 || true
   docker rm "$CONTAINER_NAME" >/dev/null 2>&1 || true
@@ -74,6 +66,14 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
+
+# The relay must listen on a container interface for Docker's host port
+# forwarding to reach it. A dedicated bridge with inter-container
+# communication disabled prevents unrelated containers from reaching it.
+docker network create \
+  --driver bridge \
+  --opt com.docker.network.bridge.enable_icc=false \
+  "$NETWORK_NAME" >/dev/null
 
 docker run --rm \
   --name "$CONTAINER_NAME" \
