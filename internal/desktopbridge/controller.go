@@ -14,7 +14,9 @@ type Snapshot struct {
 	Available     bool          `json:"available"`
 	Platform      string        `json:"platform"`
 	CloseBehavior CloseBehavior `json:"close_behavior"`
-	ListenAddress string        `json:"listen_address"`
+	ListenAddress string        `json:"listen_address"` // Deprecated compatibility alias for DataAddress.
+	DataAddress   string        `json:"data_address"`
+	AdminAddress  string        `json:"admin_address"`
 	DataDir       string        `json:"data_dir"`
 	LogDir        string        `json:"log_dir"`
 	OwnsGateway   bool          `json:"owns_gateway"`

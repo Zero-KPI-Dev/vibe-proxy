@@ -37,7 +37,8 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	log.Printf("vibe-proxy listening on %s", app.Address())
+	log.Printf("vibe-proxy data plane listening on %s", app.Address())
+	log.Printf("vibe-proxy local control plane listening on %s", app.AdminAddress())
 
 	select {
 	case <-signalCtx.Done():

@@ -182,13 +182,12 @@ func (h *Host) Start(ctx context.Context) error {
 	if h.isShutdownRequested() {
 		return h.cleanupStartupGateway(errHostShuttingDown, gateway, sessions, passwordAuth)
 	}
-	// Listener addresses such as 0.0.0.0 and [::] are valid bind targets but
-	// are not valid destinations for a browser or WebView. Keep the gateway
-	// bound to the configured interface while navigating through loopback.
-	target := "http://" + browserAddress(gateway.Address()) + "/desktop/bootstrap/" + nonce
+	// The control plane has its own enforced loopback listener. Never navigate
+	// the WebView through the independently configurable data-plane listener.
+	target := "http://" + browserAddress(gateway.AdminAddress()) + "/desktop/bootstrap/" + nonce
 	if err := h.window.Navigate(target); err != nil {
 		if !h.isShutdownRequested() {
-			webViewErr := &webViewStartupError{address: gateway.Address(), err: err}
+			webViewErr := &webViewStartupError{address: gateway.AdminAddress(), err: err}
 			h.writeStartupErrorLog(webViewErr)
 			h.tray.SetStatus("Running; desktop window unavailable")
 			return webViewErr
@@ -316,7 +315,7 @@ func (h *Host) browserControlPlaneURL() (string, error) {
 	if h.gateway == nil {
 		return "", errors.New("gateway is not running")
 	}
-	baseURL := "http://" + browserAddress(h.gateway.Address())
+	baseURL := "http://" + browserAddress(h.gateway.AdminAddress())
 	if h.passwordAuth == nil {
 		return "", errors.New("desktop management password is not available")
 	}
@@ -389,7 +388,7 @@ func ensureFirstRunConfig(paths Paths) error {
 
 	bootstrap := config.SimpleConfig{
 		Version:    "vibeproxy.io/v1alpha1",
-		Server:     config.ServerConfig{Listen: "127.0.0.1:8080"},
+		Server:     config.ServerConfig{Listen: "127.0.0.1:8080", AdminListen: "127.0.0.1:8081"},
 		Storage:    config.StorageConfig{SQLitePath: paths.DatabasePath, RetentionDays: 14},
 		ClientKeys: []config.ClientKeyConfig{},
 		Providers:  map[string]config.ProviderConfig{},

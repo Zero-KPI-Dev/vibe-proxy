@@ -42,6 +42,7 @@ type Config struct {
 
 type ServerConfig struct {
 	Listen       string   `yaml:"listen"`
+	AdminListen  string   `yaml:"admin_listen"`
 	ReadTimeout  Duration `yaml:"read_timeout"`
 	WriteTimeout Duration `yaml:"write_timeout"`
 	IdleTimeout  Duration `yaml:"idle_timeout"`
@@ -120,6 +121,9 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.Server.Listen == "" {
 		cfg.Server.Listen = ":8080"
+	}
+	if cfg.Server.AdminListen == "" {
+		cfg.Server.AdminListen = "127.0.0.1:8081"
 	}
 	if cfg.Storage.SQLitePath == "" {
 		cfg.Storage.SQLitePath = "./vibe-proxy.db"

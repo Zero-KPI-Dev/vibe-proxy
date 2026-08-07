@@ -73,6 +73,7 @@ version: vibeproxy.io/v1alpha1
 
 server:
   listen: 127.0.0.1:8080
+  admin_listen: 127.0.0.1:8081
 
 providers:
   anthropic:
@@ -143,10 +144,10 @@ available from the system tray/menu bar, and stores its state in the normal
 per-user application-data directory.
 
 Linux uses the CLI installed from a DEB plus the browser-based control plane at
-`http://127.0.0.1:8080/`; a native Linux GUI is not required.
+`http://127.0.0.1:8081/`; a native Linux GUI is not required.
 
 Download the matching Windows setup EXE, macOS desktop DMG, or Linux DEB from
-[GitHub Releases](https://github.com/a448582655/vibe-proxy/releases).
+[GitHub Releases](https://github.com/Zero-KPI-Dev/vibe-proxy/releases).
 Desktop builds are initially published as unsigned release candidates for
 cross-platform acceptance rather than as stable releases.
 
@@ -203,7 +204,7 @@ go run ./cmd/vibe-proxy -config configs/bootstrap.yaml
 Then open:
 
 ```text
-http://127.0.0.1:8080/
+http://127.0.0.1:8081/
 ```
 
 The server can start without providers so the control plane remains reachable.
@@ -216,7 +217,11 @@ configure credentials or capability overrides.
 Use Docker:
 
 ```bash
-VIBE_PROXY_ADMIN_TOKEN='admin-token' ./scripts/dev-docker.sh configs/bootstrap.yaml
+./scripts/dev-docker.sh configs/bootstrap.yaml
 ```
 
-Open `http://127.0.0.1:8080/`.
+Open `http://127.0.0.1:8081/`.
+The launcher creates and prints a high-entropy admin token when
+`VIBE_PROXY_ADMIN_TOKEN` is not set. It also runs the container on a dedicated
+bridge with inter-container communication disabled so the local management
+relay is not reachable from unrelated containers.

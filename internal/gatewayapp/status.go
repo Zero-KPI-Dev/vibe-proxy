@@ -18,10 +18,11 @@ const (
 
 // Status is an immutable snapshot of gateway lifecycle state.
 type Status struct {
-	State     State
-	Address   string
-	StartedAt time.Time
-	LastError string
+	State        State
+	Address      string
+	AdminAddress string
+	StartedAt    time.Time
+	LastError    string
 }
 
 // StartupError identifies the startup stage that failed.
@@ -39,8 +40,10 @@ func (e *StartupError) Error() string {
 		return fmt.Sprintf("invalid config: %v", e.Err)
 	case "database":
 		return fmt.Sprintf("open sqlite: %v", e.Err)
-	case "listen":
+	case "listen", "data_listen":
 		return fmt.Sprintf("listen %s: %v", e.Address, e.Err)
+	case "admin_listen":
+		return fmt.Sprintf("listen for local control plane on %s: %v", e.Address, e.Err)
 	default:
 		return fmt.Sprintf("gateway startup %s: %v", e.Stage, e.Err)
 	}

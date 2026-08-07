@@ -83,18 +83,23 @@ Each phase should:
 If Go is not installed locally, start the control plane with Docker:
 
 ```bash
-VIBE_PROXY_ADMIN_TOKEN='admin-token' ./scripts/dev-docker.sh configs/bootstrap.yaml
+./scripts/dev-docker.sh configs/bootstrap.yaml
 ```
 
 Then open:
 
 ```text
-http://127.0.0.1:8080/
+http://127.0.0.1:8081/
 ```
 
 Stop with `Ctrl+C`.
 
-The Docker launcher rewrites the in-container listen address to `0.0.0.0:8080` so `http://127.0.0.1:8080/` works from your Mac.
+The Docker launcher publishes the data plane on `127.0.0.1:8080` and relays the
+container's loopback-only control plane to `127.0.0.1:8081` on the host. When
+`VIBE_PROXY_ADMIN_TOKEN` is unset, it prints a newly generated high-entropy
+token for that run. The container uses a dedicated bridge with inter-container
+communication disabled, so unrelated containers cannot directly access the
+management relay.
 
 The Docker launcher uses named Docker volumes for Go module and build caches, so dependencies are downloaded only the first time unless the cache is cleared.
 

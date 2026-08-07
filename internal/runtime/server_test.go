@@ -122,6 +122,108 @@ func TestRuntimeHealthzReportsStableServerStartTime(t *testing.T) {
 	}
 }
 
+func TestDataAndControlRoutesAreIsolated(t *testing.T) {
+	s := newTestServer(t, func(r *http.Request) (*http.Response, error) {
+		return jsonResponse(http.StatusOK, `{}`), nil
+	})
+
+	data := s.DataRoutes()
+	for _, target := range []string{"/admin/config/snapshot", "/auth/status", "/metrics", "/desktop/bootstrap/nonce", "/"} {
+		response := httptest.NewRecorder()
+		data.ServeHTTP(response, httptest.NewRequest(http.MethodGet, target, nil))
+		if response.Code != http.StatusNotFound {
+			t.Fatalf("data route %s = %d, want 404", target, response.Code)
+		}
+	}
+	health := httptest.NewRecorder()
+	data.ServeHTTP(health, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	if health.Code != http.StatusOK {
+		t.Fatalf("data health = %d: %s", health.Code, health.Body.String())
+	}
+	models := httptest.NewRecorder()
+	data.ServeHTTP(models, httptest.NewRequest(http.MethodGet, "/v1/models", nil))
+	if models.Code == http.StatusNotFound {
+		t.Fatal("data listener did not mount /v1/models")
+	}
+
+	control := s.ControlRoutes()
+	for _, target := range []string{"/v1", "/v1/models", "/v1/chat/completions", "/v1/responses", "/v1/messages", "/anthropic", "/anthropic/v1/messages"} {
+		response := httptest.NewRecorder()
+		control.ServeHTTP(response, httptest.NewRequest(http.MethodGet, target, nil))
+		if response.Code != http.StatusNotFound {
+			t.Fatalf("control route %s = %d, want 404", target, response.Code)
+		}
+	}
+	for _, target := range []string{"/", "/auth/status", "/metrics", "/healthz"} {
+		response := httptest.NewRecorder()
+		control.ServeHTTP(response, httptest.NewRequest(http.MethodGet, target, nil))
+		if response.Code == http.StatusNotFound {
+			t.Fatalf("control listener did not mount %s", target)
+		}
+	}
+}
+
+func TestAdminSnapshotDistinguishesConfiguredAndEffectiveListenerAddresses(t *testing.T) {
+	cfg, err := config.CompileSimple(config.SimpleConfig{Server: config.ServerConfig{
+		Listen:      "0.0.0.0:9080",
+		AdminListen: "127.0.0.1:9081",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	testPromOnce.Do(func() { testProm = metrics.New() })
+	s := NewWithOptions("", cfg, metrics.MultiSink{}, testProm, Options{AdminTokenOverride: "admin-token"})
+	s.SetEffectiveListenerAddresses("0.0.0.0:49080", "127.0.0.1:49081")
+
+	type snapshotPayload struct {
+		Server struct {
+			Listen               string `json:"listen"`
+			AdminListen          string `json:"admin_listen"`
+			EffectiveListen      string `json:"effective_listen"`
+			EffectiveAdminListen string `json:"effective_admin_listen"`
+			RestartRequired      bool   `json:"restart_required"`
+		} `json:"server"`
+	}
+	readSnapshot := func() snapshotPayload {
+		t.Helper()
+		request := adminJSONRequest(http.MethodGet, "/admin/config/snapshot", "")
+		response := httptest.NewRecorder()
+		s.ControlRoutes().ServeHTTP(response, request)
+		if response.Code != http.StatusOK {
+			t.Fatalf("snapshot = %d: %s", response.Code, response.Body.String())
+		}
+		var payload snapshotPayload
+		if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+			t.Fatal(err)
+		}
+		return payload
+	}
+
+	payload := readSnapshot()
+	if payload.Server.Listen != "0.0.0.0:9080" || payload.Server.AdminListen != "127.0.0.1:9081" {
+		t.Fatalf("configured listener snapshot = %+v", payload.Server)
+	}
+	if payload.Server.EffectiveListen != "0.0.0.0:49080" || payload.Server.EffectiveAdminListen != "127.0.0.1:49081" || payload.Server.RestartRequired {
+		t.Fatalf("effective listener snapshot = %+v", payload.Server)
+	}
+
+	reloaded, err := config.CompileSimple(config.SimpleConfig{Server: config.ServerConfig{
+		Listen:      "0.0.0.0:9180",
+		AdminListen: "127.0.0.1:9181",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.applyRuntimeConfig(reloaded)
+	payload = readSnapshot()
+	if payload.Server.Listen != "0.0.0.0:9180" || payload.Server.AdminListen != "127.0.0.1:9181" {
+		t.Fatalf("reloaded listener config = %+v", payload.Server)
+	}
+	if payload.Server.EffectiveListen != "0.0.0.0:49080" || payload.Server.EffectiveAdminListen != "127.0.0.1:49081" || !payload.Server.RestartRequired {
+		t.Fatalf("listener reload state = %+v", payload.Server)
+	}
+}
+
 func TestRuntimeRecordsPayloadStagesAndIgnoresRecorderFailure(t *testing.T) {
 	tests := []struct {
 		name       string

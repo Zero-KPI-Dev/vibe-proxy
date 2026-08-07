@@ -10,6 +10,9 @@ func TestCompileSimpleConfig(t *testing.T) {
 	if cfg.Server.Listen != "127.0.0.1:8080" {
 		t.Fatalf("unexpected listen: %s", cfg.Server.Listen)
 	}
+	if cfg.Server.AdminListen != "127.0.0.1:8081" {
+		t.Fatalf("unexpected admin listen: %s", cfg.Server.AdminListen)
+	}
 	if cfg.Providers["anthropic"].Auth.Type != "api_key_header" {
 		t.Fatalf("unexpected anthropic auth: %+v", cfg.Providers["anthropic"].Auth)
 	}

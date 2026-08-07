@@ -70,6 +70,7 @@ Retrospective ADRs must distinguish the original decision date from the recordin
 | [ADR-0006](0006-installer-oriented-release-artifacts.md) | Publish an installer-oriented cross-platform artifact matrix | Accepted | 2026-08-02 |
 | [ADR-0007](0007-local-first-observability-trace-model.md) | Adopt a local-first observability trace and session model | Accepted | 2026-08-03 |
 | [ADR-0008](0008-vision-assist-before-primary-response.md) | Use Vision as bounded evidence assistance before the primary response | Accepted | 2026-08-03 |
+| [ADR-0009](0009-separate-data-and-control-plane-listeners.md) | Separate public data-plane and loopback control-plane listeners | Accepted | 2026-08-06 |
 
 ## Template
 

@@ -68,6 +68,14 @@ type Server struct {
 	passwordAuth       *auth.PasswordAuth
 	desktopController  desktopbridge.Controller
 	onConfigApplied    func(*config.RuntimeConfig)
+	listenerStatus     atomic.Value
+}
+
+type listenerStatus struct {
+	startupListen        string
+	startupAdminListen   string
+	effectiveListen      string
+	effectiveAdminListen string
 }
 
 // New builds a runtime server with the default options.
@@ -92,8 +100,30 @@ func NewWithOptions(cfgPath string, cfg *config.RuntimeConfig, sink telemetry.Ev
 		observability = provider.ObservabilityReader()
 	}
 	s := &Server{cfgPath: cfgPath, startedAt: time.Now(), authenticator: auth.NewAuthenticator(), httpClient: &http.Client{Timeout: 0}, ocrHTTPClient: &http.Client{}, builtinOCR: ocr.NewBuiltinProvider(), metrics: prom, sink: sink, recent: recent, observability: observability, catalog: modelcatalog.NewService(modelcatalog.Options{CachePath: modelCatalogCachePath(cfgPath, cfg)}), clientAdapters: []protocol.ClientAdapter{clientopenai.ChatAdapter{}, clientopenai.ResponsesAdapter{}, clientanthropic.MessagesAdapter{}}, providerAdapters: map[string]protocol.ProviderAdapter{"anthropic": provideranthropic.Provider{}, "openai-compatible": provideropenai.Provider{}}, adminTokenOverride: options.AdminTokenOverride, desktopSessions: options.DesktopSessions, passwordAuth: options.PasswordAuth, desktopController: options.DesktopController, onConfigApplied: options.OnConfigApplied}
+	s.listenerStatus.Store(listenerStatus{
+		startupListen:        cfg.Server.Listen,
+		startupAdminListen:   cfg.Server.AdminListen,
+		effectiveListen:      cfg.Server.Listen,
+		effectiveAdminListen: cfg.Server.AdminListen,
+	})
 	s.applyRuntimeConfig(cfg)
 	return s
+}
+
+// SetEffectiveListenerAddresses records the addresses of the sockets that were
+// actually bound at startup. Runtime config reloads do not rebind those sockets.
+func (s *Server) SetEffectiveListenerAddresses(dataAddress, adminAddress string) {
+	status := s.currentListenerStatus()
+	status.effectiveListen = dataAddress
+	status.effectiveAdminListen = adminAddress
+	s.listenerStatus.Store(status)
+}
+
+func (s *Server) currentListenerStatus() listenerStatus {
+	if status, ok := s.listenerStatus.Load().(listenerStatus); ok {
+		return status
+	}
+	return listenerStatus{}
 }
 
 func (s *Server) SetHTTPClient(client *http.Client) {
@@ -197,6 +227,36 @@ func compileTelemetryAgentProfiles(profiles []config.AgentProfileConfig) []telem
 
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
+	s.registerDataRoutes(mux)
+	s.registerControlRoutes(mux)
+	mux.Handle("/", s.spaRoutes())
+	return wrapRoutes(mux)
+}
+
+// DataRoutes exposes only the protocol-compatible LLM data plane and a minimal
+// health endpoint. Management and UI handlers are deliberately not mounted.
+func (s *Server) DataRoutes() http.Handler {
+	mux := http.NewServeMux()
+	s.registerDataRoutes(mux)
+	return wrapRoutes(mux)
+}
+
+// ControlRoutes exposes the loopback-only UI and management surface. Explicit
+// API-prefix 404 handlers prevent the SPA fallback from masquerading as a data
+// endpoint on the control-plane listener.
+func (s *Server) ControlRoutes() http.Handler {
+	mux := http.NewServeMux()
+	s.registerControlRoutes(mux)
+	mux.HandleFunc("/healthz", s.healthz)
+	mux.HandleFunc("/v1", http.NotFound)
+	mux.HandleFunc("/v1/", http.NotFound)
+	mux.HandleFunc("/anthropic", http.NotFound)
+	mux.HandleFunc("/anthropic/", http.NotFound)
+	mux.Handle("/", s.spaRoutes())
+	return wrapRoutes(mux)
+}
+
+func (s *Server) registerDataRoutes(mux *http.ServeMux) {
 
 	// Data-plane proxy endpoints
 	mux.HandleFunc("/v1/models", s.handleModels)
@@ -204,8 +264,11 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/v1/responses", s.handle)
 	mux.HandleFunc("/anthropic/v1/messages", s.handle)
 	mux.HandleFunc("/v1/messages", s.handle)
-	mux.Handle("/metrics", s.metrics.Handler())
 	mux.HandleFunc("/healthz", s.healthz)
+}
+
+func (s *Server) registerControlRoutes(mux *http.ServeMux) {
+	mux.Handle("/metrics", s.metrics.Handler())
 	mux.HandleFunc("/auth/status", s.authStatus)
 	mux.HandleFunc("/auth/setup", s.authSetup)
 	mux.HandleFunc("/auth/login", s.authLogin)
@@ -251,9 +314,9 @@ func (s *Server) Routes() http.Handler {
 	if s.desktopSessions != nil {
 		mux.HandleFunc(desktopBootstrapPrefix, s.desktopBootstrap)
 	}
+}
 
-	// SPA dashboard (must be last as catch-all)
-	mux.Handle("/", s.spaRoutes())
+func wrapRoutes(mux *http.ServeMux) http.Handler {
 	return limitBody(recordResponse(mux), 32<<20)
 }
 
@@ -751,6 +814,9 @@ func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	snap := s.current()
+	listeners := s.currentListenerStatus()
+	restartRequired := snap.Config.Server.Listen != listeners.startupListen ||
+		snap.Config.Server.AdminListen != listeners.startupAdminListen
 	providers := []map[string]any{}
 	providerIDs := make([]string, 0, len(snap.Config.Providers))
 	for id := range snap.Config.Providers {
@@ -763,7 +829,18 @@ func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 		providers = append(providers, map[string]any{"id": id, "type": p.Type, "base_url": p.BaseURL, "catalog_provider": p.CatalogProvider, "default_capabilities": p.DefaultCapabilities, "model_capabilities": p.ModelCapabilities, "models": p.Models, "max_concurrency": p.MaxConcurrency, "auth_type": authType, "api_key_source": keySource, "api_key_env": keyEnv})
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"loaded_at": snap.LoadedAt, "providers": providers, "model_resolver": snap.Config.ModelResolver})
+	json.NewEncoder(w).Encode(map[string]any{
+		"loaded_at": snap.LoadedAt,
+		"server": map[string]any{
+			"listen":                 snap.Config.Server.Listen,
+			"admin_listen":           snap.Config.Server.AdminListen,
+			"effective_listen":       listeners.effectiveListen,
+			"effective_admin_listen": listeners.effectiveAdminListen,
+			"restart_required":       restartRequired,
+		},
+		"providers":      providers,
+		"model_resolver": snap.Config.ModelResolver,
+	})
 }
 
 func providerAuthMeta(p config.ProviderConfig) (authType string, keySource string, keyEnv string) {

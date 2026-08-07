@@ -38,7 +38,7 @@ Characteristics:
 - single process
 - local SQLite storage
 - local config file plus lightweight UI
-- listens on `127.0.0.1` by default
+- exposes separate data and control listeners, both on `127.0.0.1` by default
 - provider secrets from env vars or local encrypted store
 - simple client token or local-only access
 - focused on agent compatibility and debugging
@@ -343,6 +343,9 @@ Responsible for local UI, config management, validation, and hot reload.
 v0.1:
 
 - same process as data plane
+- separate HTTP listener restricted to a loopback IP
+- explicit route allowlists keep UI, Admin API, auth, desktop bootstrap, and
+  metrics off the Agent-facing data listener
 - local dashboard
 - config reload
 - provider connectivity test

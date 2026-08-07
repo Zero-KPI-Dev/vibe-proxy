@@ -1,5 +1,5 @@
 import { useState } from "react"
-import { Activity, Server, Brain, Database, Copy, Check, KeyRound } from "lucide-react"
+import { Activity, Server, Brain, Database, Copy, Check, KeyRound, AlertTriangle } from "lucide-react"
 import { StatsCard } from "@/components/stats-card"
 import { HealthBadge } from "@/components/health-badge"
 import { RequestTable } from "@/components/request-table"
@@ -14,6 +14,7 @@ import { useMetricsSummary } from "@/hooks/use-metrics"
 import { useProviderHealth } from "@/hooks/use-metrics"
 import { useClientKeys } from "@/hooks/use-client-keys"
 import { cn } from "@/lib/utils"
+import { dataPlaneOrigin } from "@/lib/listener-url"
 import { useTranslation } from "react-i18next"
 
 function CopyBox({ label, value }: { label: string; value: string }) {
@@ -56,7 +57,7 @@ export function DashboardPage() {
   const firstClientKey = clientKeys?.keys?.[0]
   const firstKeyPrefix = firstClientKey?.key_prefix
   const hasClientKey = Boolean(firstClientKey)
-  const localOrigin = window.location.origin
+  const apiOrigin = dataPlaneOrigin(snapshot?.server?.effective_listen, window.location.hostname)
 
   return (
     <div className="space-y-6">
@@ -79,11 +80,11 @@ export function DashboardPage() {
           <div className="grid gap-3 sm:grid-cols-3">
             <CopyBox
               label={t("dashboard.openaiEndpoint")}
-              value={`${localOrigin}/v1`}
+              value={`${apiOrigin}/v1`}
             />
             <CopyBox
               label={t("dashboard.anthropicEndpoint")}
-              value={`${localOrigin}/anthropic`}
+              value={`${apiOrigin}/anthropic`}
             />
             <CopyBox
               label={
@@ -102,6 +103,12 @@ export function DashboardPage() {
               }
             />
           </div>
+          {snapshot?.server?.restart_required && (
+            <div className="flex items-start gap-2 rounded-lg border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-sm text-yellow-700 dark:text-yellow-300">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>{t("dashboard.listenerRestartRequired")}</span>
+            </div>
+          )}
         </CardContent>
       </Card>
 
