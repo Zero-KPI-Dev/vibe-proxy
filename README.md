@@ -136,6 +136,15 @@ canonical structures and do not infer semantic equivalence. External OTLP or
 hosted observability export is not required and, if added later, will remain an
 explicit opt-in.
 
+### Optional Prometheus and Grafana
+
+The embedded dashboard remains SQLite-backed and requires no external services.
+For users who already run an observability stack, vibe-proxy also exposes
+low-cardinality operational metrics from the loopback control plane and ships a
+same-host Prometheus scrape example plus an importable Grafana dashboard. See
+[`docs/prometheus-grafana.md`](docs/prometheus-grafana.md) for metric semantics,
+cache-ratio formulas, the network boundary, and setup instructions.
+
 ## Download a Release
 
 Windows and macOS users can choose the **Vibe Proxy Desktop** application. It

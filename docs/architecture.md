@@ -327,6 +327,7 @@ Current sinks and query surfaces:
 
 - embedded SQLite as the Local Mode source of truth;
 - an in-memory recent-request view;
+- an authenticated, bounded in-memory SSE lifecycle stream for live UI updates;
 - low-cardinality Prometheus metrics;
 - authenticated Requests, Sessions, detail, timeline, content deletion, and diff
   Admin APIs and UI.
@@ -335,6 +336,10 @@ High-cardinality request, trace, Session, project, and Agent identifiers are not
 Prometheus labels. Future OpenTelemetry, Langfuse, JSONL, or analytics export must
 remain optional, disabled by default, and require an independent content-export
 opt-in rather than weakening local capture policy.
+
+Prometheus and Grafana are optional integrations rather than bundled runtime
+components. The metrics contract, same-host scrape example, and versioned
+dashboard are documented in [`prometheus-grafana.md`](prometheus-grafana.md).
 
 ### 9. Control Plane
 

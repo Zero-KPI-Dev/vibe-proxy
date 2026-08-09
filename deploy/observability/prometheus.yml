@@ -1,0 +1,11 @@
+global:
+  scrape_interval: 5s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: vibe-proxy
+    metrics_path: /metrics
+    static_configs:
+      # /metrics is intentionally available only on the loopback control plane.
+      # Change this port if server.admin_listen differs from 127.0.0.1:8081.
+      - targets: ["127.0.0.1:8081"]

@@ -205,9 +205,24 @@ GET    /admin/observability/requests
 GET    /admin/observability/requests/{request_id}
 GET    /admin/observability/requests/{request_id}/diff
 DELETE /admin/observability/requests/{request_id}/content
+GET    /admin/observability/live
 GET    /admin/observability/sessions
 GET    /admin/observability/sessions/{session_id}
+GET    /admin/metrics/summary
+GET    /admin/metrics/history?range=1h|6h|24h|7d
 ```
+
+`/admin/observability/live` is an authenticated Server-Sent Events stream of
+bounded request lifecycle summaries. It supports `Last-Event-ID` replay and
+never includes captured request or response content. Event names are
+`request.started`, `request.updated`, `request.first_token`,
+`request.progress`, `request.finished`, and `request.failed`.
+
+Prometheus exposition is available separately at `GET /metrics`. It is mounted
+only on the loopback control-plane listener and intentionally does not use
+high-cardinality request, Agent, Session, project, or client-key labels. See
+[`prometheus-grafana.md`](prometheus-grafana.md) for the metric contract and
+Grafana integration.
 
 The trace envelope is created before authentication and parsing, so rejected or
 malformed requests can still receive a request and trace identity. A successful
