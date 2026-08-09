@@ -143,6 +143,35 @@ func (t *Tracker) MarkToken(text string) {
 	}
 }
 
+func (t *Tracker) Checkpoint(phase RequestPhase) {
+	if t.sink == nil {
+		return
+	}
+	PublishRequestUpdate(t.sink, t.Snapshot(), phase)
+}
+
+// StreamProgress updates live request state from the protocol-neutral stream
+// engine without importing stream-engine types into telemetry.
+func (t *Tracker) StreamProgress(firstTokenAt time.Time, outputTokens int64, usage types.Usage) {
+	t.mu.Lock()
+	if !firstTokenAt.IsZero() {
+		first := firstTokenAt
+		t.Event.FirstTokenAt = &first
+		t.Event.TTFTMillis = first.Sub(t.Event.StartedAt).Milliseconds()
+	}
+	if usage.PromptTokens > 0 || usage.CompletionTokens > 0 || usage.TotalTokens > 0 {
+		t.Event.Usage = usage
+	}
+	if outputTokens > t.Event.Usage.CompletionTokens {
+		t.Event.Usage.CompletionTokens = outputTokens
+	}
+	event := t.Event
+	t.mu.Unlock()
+	if t.sink != nil && !firstTokenAt.IsZero() {
+		t.sink.Token(event)
+	}
+}
+
 func (t *Tracker) Finish(status int, usage types.Usage, errCode string) Event {
 	now := time.Now()
 	t.mu.Lock()

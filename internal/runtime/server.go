@@ -61,6 +61,7 @@ type Server struct {
 	sink               telemetry.EventSink
 	recent             *telemetry.RecentStore
 	observability      telemetry.ObservabilityReader
+	live               telemetry.LiveEventSource
 	catalog            *modelcatalog.Service
 	semaphore          sync.Map
 	adminTokenOverride string
@@ -99,7 +100,14 @@ func NewWithOptions(cfgPath string, cfg *config.RuntimeConfig, sink telemetry.Ev
 	if provider, ok := sink.(telemetry.ObservabilityReaderProvider); ok {
 		observability = provider.ObservabilityReader()
 	}
-	s := &Server{cfgPath: cfgPath, startedAt: time.Now(), authenticator: auth.NewAuthenticator(), httpClient: &http.Client{Timeout: 0}, ocrHTTPClient: &http.Client{}, builtinOCR: ocr.NewBuiltinProvider(), metrics: prom, sink: sink, recent: recent, observability: observability, catalog: modelcatalog.NewService(modelcatalog.Options{CachePath: modelCatalogCachePath(cfgPath, cfg)}), clientAdapters: []protocol.ClientAdapter{clientopenai.ChatAdapter{}, clientopenai.ResponsesAdapter{}, clientanthropic.MessagesAdapter{}}, providerAdapters: map[string]protocol.ProviderAdapter{"anthropic": provideranthropic.Provider{}, "openai-compatible": provideropenai.Provider{}}, adminTokenOverride: options.AdminTokenOverride, desktopSessions: options.DesktopSessions, passwordAuth: options.PasswordAuth, desktopController: options.DesktopController, onConfigApplied: options.OnConfigApplied}
+	var live telemetry.LiveEventSource
+	if source, ok := sink.(telemetry.LiveEventSource); ok {
+		live = source
+	}
+	if provider, ok := sink.(telemetry.LiveEventSourceProvider); ok {
+		live = provider.LiveEventSource()
+	}
+	s := &Server{cfgPath: cfgPath, startedAt: time.Now(), authenticator: auth.NewAuthenticator(), httpClient: &http.Client{Timeout: 0}, ocrHTTPClient: &http.Client{}, builtinOCR: ocr.NewBuiltinProvider(), metrics: prom, sink: sink, recent: recent, observability: observability, live: live, catalog: modelcatalog.NewService(modelcatalog.Options{CachePath: modelCatalogCachePath(cfgPath, cfg)}), clientAdapters: []protocol.ClientAdapter{clientopenai.ChatAdapter{}, clientopenai.ResponsesAdapter{}, clientanthropic.MessagesAdapter{}}, providerAdapters: map[string]protocol.ProviderAdapter{"anthropic": provideranthropic.Provider{}, "openai-compatible": provideropenai.Provider{}}, adminTokenOverride: options.AdminTokenOverride, desktopSessions: options.DesktopSessions, passwordAuth: options.PasswordAuth, desktopController: options.DesktopController, onConfigApplied: options.OnConfigApplied}
 	s.listenerStatus.Store(listenerStatus{
 		startupListen:        cfg.Server.Listen,
 		startupAdminListen:   cfg.Server.AdminListen,
@@ -306,6 +314,7 @@ func (s *Server) registerControlRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/admin/requests/recent", s.adminRecentRequests)
 	mux.HandleFunc("/admin/observability/requests", s.adminObservabilityRequests)
 	mux.HandleFunc("/admin/observability/requests/", s.adminObservabilityRequest)
+	mux.HandleFunc("/admin/observability/live", s.adminObservabilityLive)
 	mux.HandleFunc("/admin/observability/sessions", s.adminObservabilitySessions)
 	mux.HandleFunc("/admin/observability/sessions/", s.adminObservabilitySession)
 	mux.HandleFunc("/admin/metrics/summary", s.adminMetricsSummary)
@@ -458,6 +467,7 @@ func (s *Server) handleWithClient(w http.ResponseWriter, r *http.Request, truste
 	}
 	tracker.Event.PrincipalName = client.Name
 	tracker.Event.ClientName = client.Name
+	tracker.Checkpoint(telemetry.RequestPhaseAuthenticated)
 	if effectiveCaptureMode == telemetry.CaptureModeStructured || effectiveCaptureMode == telemetry.CaptureModeRaw {
 		body, readErr := io.ReadAll(io.LimitReader(r.Body, (32<<20)+1))
 		if readErr != nil {
@@ -483,6 +493,7 @@ func (s *Server) handleWithClient(w http.ResponseWriter, r *http.Request, truste
 	creq.SessionID = identity.SessionID
 	tracker.Event.VirtualModel = creq.RequestedModel
 	tracker.Event.RequestShape = telemetry.SummarizeRequestShape(creq)
+	tracker.Checkpoint(telemetry.RequestPhaseParsed)
 	recordCaptureValue(telemetry.PayloadStageCanonicalRequest, creq)
 	if !auth.ModelAllowed(client.AllowedModels, creq.RequestedModel) {
 		finishError(ir.GatewayError{StatusCode: 403, Kind: "permission_error", Code: "model_not_allowed", Message: "This API key is not allowed to use the requested model."})
@@ -510,6 +521,7 @@ func (s *Server) handleWithClient(w http.ResponseWriter, r *http.Request, truste
 		return
 	}
 	tracker.Event.ProtocolOut = string(providerAdapter.Protocol())
+	tracker.Checkpoint(telemetry.RequestPhaseRouted)
 	originalTarget := target
 	prepared, err := snap.Preprocessors.Prepare(r.Context(), creq, preprocess.RouteContext{
 		Target:              target,
@@ -560,6 +572,7 @@ func (s *Server) handleWithClient(w http.ResponseWriter, r *http.Request, truste
 	tracker.Event.ProtocolOut = string(providerAdapter.Protocol())
 	tracker.Event.Transformation = transformationSummary(prepared.Decisions, originalTarget, target)
 	applyTransformationHeaders(w, tracker.Event.Transformation)
+	tracker.Checkpoint(telemetry.RequestPhasePreprocessing)
 	if !s.acquire(target.ProviderID, providerCfg.MaxConcurrency) {
 		ge := ir.GatewayError{StatusCode: 429, Kind: "rate_limit_error", Code: "provider_busy", Message: "Selected provider is busy.", RetryAfter: "1"}
 		tracker.Finish(ge.StatusCode, types.Usage{}, ge.Code)
@@ -588,6 +601,7 @@ func (s *Server) handleWithClient(w http.ResponseWriter, r *http.Request, truste
 	}
 	upstreamObservation := telemetry.NewObservation(uuid.NewString(), requestID, identity.TraceID, identity.SpanID, "upstream", "provider.http", time.Now().UTC())
 	upstreamObservation.Attributes = map[string]any{"provider": target.ProviderID, "model": target.Model, "protocol": providerAdapter.Protocol()}
+	tracker.Checkpoint(telemetry.RequestPhaseUpstreamStarted)
 	observationFinished := false
 	finishUpstreamObservation := func(status, errorCode string) {
 		if observationFinished {
@@ -620,6 +634,7 @@ func (s *Server) handleWithClient(w http.ResponseWriter, r *http.Request, truste
 			streamStatsMu.Lock()
 			streamStats = stats
 			streamStatsMu.Unlock()
+			tracker.StreamProgress(stats.FirstTokenAt, stats.OutputTokenCount, toTelemetryUsage(stats.Usage))
 		})
 		streamAccumulator := telemetry.NewStreamAccumulator(target.Model, snap.CapturePolicy.CaptureReasoning)
 		canonicalEvents := streamAccumulator.Wrap(ctx, tracked)

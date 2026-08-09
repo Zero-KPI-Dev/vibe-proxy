@@ -76,6 +76,28 @@ func (m MultiSink) Token(e telemetry.Event) {
 	}
 }
 
+func (m MultiSink) RequestUpdated(e telemetry.Event, phase telemetry.RequestPhase) {
+	for _, sink := range m {
+		if updater, ok := sink.(telemetry.RequestUpdateSink); ok {
+			updater.RequestUpdated(e, phase)
+		}
+	}
+}
+
+func (m MultiSink) LiveEventSource() telemetry.LiveEventSource {
+	for _, sink := range m {
+		if source, ok := sink.(telemetry.LiveEventSource); ok {
+			return source
+		}
+		if provider, ok := sink.(telemetry.LiveEventSourceProvider); ok {
+			if source := provider.LiveEventSource(); source != nil {
+				return source
+			}
+		}
+	}
+	return nil
+}
+
 func (m MultiSink) RecordPayload(snapshot telemetry.PayloadSnapshot) error {
 	var firstErr error
 	for _, sink := range m {

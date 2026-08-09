@@ -128,7 +128,7 @@ func TestDataAndControlRoutesAreIsolated(t *testing.T) {
 	})
 
 	data := s.DataRoutes()
-	for _, target := range []string{"/admin/config/snapshot", "/auth/status", "/metrics", "/desktop/bootstrap/nonce", "/"} {
+	for _, target := range []string{"/admin/config/snapshot", "/admin/observability/live", "/auth/status", "/metrics", "/desktop/bootstrap/nonce", "/"} {
 		response := httptest.NewRecorder()
 		data.ServeHTTP(response, httptest.NewRequest(http.MethodGet, target, nil))
 		if response.Code != http.StatusNotFound {

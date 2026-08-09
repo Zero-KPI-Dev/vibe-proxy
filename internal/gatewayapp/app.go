@@ -138,8 +138,9 @@ func Start(_ context.Context, options Options) (*App, error) {
 
 	prom := sharedPrometheus()
 	recent := telemetry.NewRecentStore(200)
+	live := telemetry.NewLiveBroker(telemetry.LiveBrokerOptions{})
 	recorder := telemetry.NewAsyncRecorder(db, telemetry.DefaultRecorderCapacity)
-	sink := metrics.MultiSink{recorder, prom, recent}
+	sink := metrics.MultiSink{recorder, prom, recent, live}
 	runtimeServer := runtime.NewWithOptions(options.ConfigPath, cfg, sink, prom, runtimeOptions)
 	dataServer := &http.Server{
 		Addr:         cfg.Server.Listen,
