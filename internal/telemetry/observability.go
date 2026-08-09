@@ -32,11 +32,14 @@ type MetricPoint struct {
 	Timestamp        time.Time `json:"timestamp"`
 	Requests         int64     `json:"requests"`
 	Errors           int64     `json:"errors"`
+	TTFTAvg          float64   `json:"ttft_avg"`
 	TTFTP50          int64     `json:"ttft_p50"`
 	TTFTP95          int64     `json:"ttft_p95"`
 	TTFTP99          int64     `json:"ttft_p99"`
+	TPOTAvg          float64   `json:"tpot_avg"`
 	TPOTP50          float64   `json:"tpot_p50"`
 	TPOTP95          float64   `json:"tpot_p95"`
+	TPSAvg           float64   `json:"tps_avg"`
 	TPSP50           float64   `json:"tps_p50"`
 	TPSP95           float64   `json:"tps_p95"`
 	TokensPrompt     int64     `json:"tokens_prompt"`

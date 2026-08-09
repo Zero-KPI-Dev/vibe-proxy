@@ -369,11 +369,14 @@ export interface MetricPoint {
   timestamp: string
   requests: number
   errors: number
+  ttft_avg: number
   ttft_p50: number
   ttft_p95: number
   ttft_p99: number
+  tpot_avg: number
   tpot_p50: number
   tpot_p95: number
+  tps_avg: number
   tps_p50: number
   tps_p95: number
   tokens_prompt: number

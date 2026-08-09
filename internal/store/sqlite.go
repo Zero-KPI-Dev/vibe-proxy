@@ -542,11 +542,14 @@ ORDER BY started_at ASC
 	points := make([]telemetry.MetricPoint, 0, len(keys))
 	for _, key := range keys {
 		current := aggregates[key]
+		current.point.TTFTAvg = averageInt64(current.ttft)
 		current.point.TTFTP50 = percentileInt64(current.ttft, 0.50)
 		current.point.TTFTP95 = percentileInt64(current.ttft, 0.95)
 		current.point.TTFTP99 = percentileInt64(current.ttft, 0.99)
+		current.point.TPOTAvg = averageFloat64(current.tpot)
 		current.point.TPOTP50 = percentileFloat64(current.tpot, 0.50)
 		current.point.TPOTP95 = percentileFloat64(current.tpot, 0.95)
+		current.point.TPSAvg = averageFloat64(current.tps)
 		current.point.TPSP50 = percentileFloat64(current.tps, 0.50)
 		current.point.TPSP95 = percentileFloat64(current.tps, 0.95)
 		if current.cachePromptTokens > 0 {
@@ -558,6 +561,28 @@ ORDER BY started_at ASC
 		points = append(points, current.point)
 	}
 	return points, nil
+}
+
+func averageInt64(values []int64) float64 {
+	if len(values) == 0 {
+		return 0
+	}
+	var total float64
+	for _, value := range values {
+		total += float64(value)
+	}
+	return total / float64(len(values))
+}
+
+func averageFloat64(values []float64) float64 {
+	if len(values) == 0 {
+		return 0
+	}
+	var total float64
+	for _, value := range values {
+		total += value
+	}
+	return total / float64(len(values))
 }
 
 func percentileInt64(values []int64, percentile float64) int64 {

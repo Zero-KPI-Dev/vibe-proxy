@@ -87,9 +87,9 @@ through **Dashboards → New → Import**, then select your Prometheus data sour
 The dashboard contains:
 
 - request and error rates;
-- TTFT P50/P95/P99;
-- TPOT P50/P95;
-- TPS P50/P95;
+- TTFT average and P50/P95/P99;
+- TPOT average and P50/P95;
+- TPS average and P50/P95;
 - prompt and completion token throughput;
 - cache read/write volume, token-weighted hit ratio, and telemetry coverage;
 - model and provider-channel filters.

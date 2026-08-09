@@ -30,6 +30,25 @@ import { Activity, Gauge, Coins, BarChart3, Database, Zap } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { ObservabilityNav } from "@/components/observability-nav"
 
+const metricTooltipStyle = {
+  background: "#0d0f14",
+  border: "1px solid #222631",
+  borderRadius: "8px",
+  color: "#f5f7fb",
+}
+
+function formatMetricValue(value: number, locale: string, unit: string, maximumFractionDigits = 2) {
+  const numeric = Number(value)
+  if (!Number.isFinite(numeric)) return "—"
+  const formatted = numeric.toLocaleString(locale, { maximumFractionDigits })
+  return unit ? `${formatted} ${unit}` : formatted
+}
+
+function formatMetricTimestamp(value: string, locale: string) {
+  const timestamp = new Date(value)
+  return Number.isNaN(timestamp.getTime()) ? value : timestamp.toLocaleString(locale)
+}
+
 export function ObservabilityPage() {
   const { t, i18n } = useTranslation()
   const [range, setRange] = useState("1h")
@@ -182,7 +201,7 @@ export function ObservabilityPage() {
             <Card>
               <CardHeader>
                 <CardTitle className="text-base">{t("observability.tpotTitle")}</CardTitle>
-                <CardDescription>{t("observability.percentiles", { range: rangeLabels[range] })}</CardDescription>
+                <CardDescription>{t("observability.distribution", { range: rangeLabels[range] })}</CardDescription>
               </CardHeader>
               <CardContent>
                 {isLoading ? <Skeleton className="h-[280px] w-full" /> : points.length === 0 ? (
@@ -193,8 +212,13 @@ export function ObservabilityPage() {
                       <CartesianGrid strokeDasharray="3 3" stroke="#222631" />
                       <XAxis dataKey="timestamp" tick={{ fontSize: 12, fill: "#8b93a7" }} tickFormatter={(value: string) => new Date(value).toLocaleTimeString(i18n.language, { hour: "2-digit", minute: "2-digit" })} />
                       <YAxis tick={{ fontSize: 12, fill: "#8b93a7" }} label={{ value: "ms/token", angle: -90, position: "insideLeft", fill: "#8b93a7" }} />
-                      <Tooltip contentStyle={{ background: "#0d0f14", border: "1px solid #222631", borderRadius: "8px", color: "#f5f7fb" }} />
+                      <Tooltip
+                        formatter={(value: number) => formatMetricValue(value, i18n.language, "ms/token")}
+                        labelFormatter={(value: string) => formatMetricTimestamp(value, i18n.language)}
+                        contentStyle={metricTooltipStyle}
+                      />
                       <Legend />
+                      <Line type="monotone" dataKey="tpot_avg" stroke="#a78bfa" name={t("observability.average")} strokeWidth={2} dot={false} />
                       <Line type="monotone" dataKey="tpot_p50" stroke="#38bdf8" name="P50" strokeWidth={2} dot={false} />
                       <Line type="monotone" dataKey="tpot_p95" stroke="#f59e0b" name="P95" strokeWidth={2} dot={false} />
                     </LineChart>
@@ -205,7 +229,7 @@ export function ObservabilityPage() {
             <Card>
               <CardHeader>
                 <CardTitle className="text-base">{t("observability.tpsTitle")}</CardTitle>
-                <CardDescription>{t("observability.percentiles", { range: rangeLabels[range] })}</CardDescription>
+                <CardDescription>{t("observability.distribution", { range: rangeLabels[range] })}</CardDescription>
               </CardHeader>
               <CardContent>
                 {isLoading ? <Skeleton className="h-[280px] w-full" /> : points.length === 0 ? (
@@ -216,10 +240,15 @@ export function ObservabilityPage() {
                       <CartesianGrid strokeDasharray="3 3" stroke="#222631" />
                       <XAxis dataKey="timestamp" tick={{ fontSize: 12, fill: "#8b93a7" }} tickFormatter={(value: string) => new Date(value).toLocaleTimeString(i18n.language, { hour: "2-digit", minute: "2-digit" })} />
                       <YAxis tick={{ fontSize: 12, fill: "#8b93a7" }} label={{ value: "token/s", angle: -90, position: "insideLeft", fill: "#8b93a7" }} />
-                      <Tooltip contentStyle={{ background: "#0d0f14", border: "1px solid #222631", borderRadius: "8px", color: "#f5f7fb" }} />
+                      <Tooltip
+                        formatter={(value: number) => formatMetricValue(value, i18n.language, "token/s")}
+                        labelFormatter={(value: string) => formatMetricTimestamp(value, i18n.language)}
+                        contentStyle={metricTooltipStyle}
+                      />
                       <Legend />
-                      <Line type="monotone" dataKey="tps_p50" stroke="#22c55e" name="P50" strokeWidth={2} dot={false} />
-                      <Line type="monotone" dataKey="tps_p95" stroke="#a78bfa" name="P95" strokeWidth={2} dot={false} />
+                      <Line type="monotone" dataKey="tps_avg" stroke="#a78bfa" name={t("observability.average")} strokeWidth={2} dot={false} />
+                      <Line type="monotone" dataKey="tps_p50" stroke="#38bdf8" name="P50" strokeWidth={2} dot={false} />
+                      <Line type="monotone" dataKey="tps_p95" stroke="#f59e0b" name="P95" strokeWidth={2} dot={false} />
                     </LineChart>
                   </ResponsiveContainer>
                 )}
@@ -232,7 +261,7 @@ export function ObservabilityPage() {
           <Card>
             <CardHeader>
               <CardTitle className="text-base">{t("observability.latencyTitle")}</CardTitle>
-              <CardDescription>{t("observability.percentiles", { range: rangeLabels[range] })}</CardDescription>
+              <CardDescription>{t("observability.distribution", { range: rangeLabels[range] })}</CardDescription>
             </CardHeader>
             <CardContent>
               {isLoading ? (
@@ -258,14 +287,12 @@ export function ObservabilityPage() {
                       label={{ value: "ms", angle: -90, position: "insideLeft", fill: "#8b93a7" }}
                     />
                     <Tooltip
-                      contentStyle={{
-                        background: "#0d0f14",
-                        border: "1px solid #222631",
-                        borderRadius: "8px",
-                        color: "#f5f7fb",
-                      }}
+                      formatter={(value: number) => formatMetricValue(value, i18n.language, "ms", 1)}
+                      labelFormatter={(value: string) => formatMetricTimestamp(value, i18n.language)}
+                      contentStyle={metricTooltipStyle}
                     />
                     <Legend />
+                    <Line type="monotone" dataKey="ttft_avg" stroke="#a78bfa" name={t("observability.average")} strokeWidth={2} dot={false} />
                     <Line type="monotone" dataKey="ttft_p50" stroke="#22c55e" name="P50" strokeWidth={2} dot={false} />
                     <Line type="monotone" dataKey="ttft_p95" stroke="#f59e0b" name="P95" strokeWidth={2} dot={false} />
                     <Line type="monotone" dataKey="ttft_p99" stroke="#fb7185" name="P99" strokeWidth={2} dot={false} />

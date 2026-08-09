@@ -117,8 +117,10 @@ view show:
 - OCR and Vision cache state separately from provider prompt cache.
 
 Overview aggregation adds time-bucketed cache-read/write token volume and the
-weighted cache ratio. TPOT receives its own chart instead of being collected but
-hidden behind TTFT.
+weighted cache ratio. TTFT, TPOT, and TPS charts show the arithmetic average of
+reported request samples alongside percentile distributions; unavailable values
+are excluded rather than counted as zero. TPOT receives its own chart instead of
+being collected but hidden behind TTFT.
 
 ## Prometheus and Grafana
 
@@ -161,4 +163,3 @@ payloads through the authenticated detail API.
 6. Replace platform icon assets after small-size visual verification.
 7. Run Go unit/race tests, frontend contract/build tests, and local end-to-end
    validation before merge.
-

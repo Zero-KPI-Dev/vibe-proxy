@@ -42,6 +42,15 @@ func TestExternalObservabilityArtifactsMatchMetricContract(t *testing.T) {
 			t.Errorf("Grafana dashboard does not query %s", metric)
 		}
 	}
+	for _, averageMetric := range []string{
+		"vibe_proxy_ttft_seconds_sum",
+		"vibe_proxy_tpot_seconds_sum",
+		"vibe_proxy_tps_sum",
+	} {
+		if !strings.Contains(dashboardSource, averageMetric) {
+			t.Errorf("Grafana dashboard does not expose the average for %s", averageMetric)
+		}
+	}
 	for _, forbiddenLabel := range []string{"request_id=", "session_id=", "agent_id=", "principal_name=", "client_key"} {
 		if strings.Contains(dashboardSource, forbiddenLabel) {
 			t.Errorf("Grafana dashboard uses forbidden high-cardinality label %q", forbiddenLabel)

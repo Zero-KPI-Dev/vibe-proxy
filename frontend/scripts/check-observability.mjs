@@ -66,9 +66,12 @@ assert.match(table, /agent_id[\s\S]*principal_name/, "request rows must keep Age
 assert.match(table, /client_key_prefix/, "request rows must identify the client key without exposing the secret")
 assert.match(table, /cache_metrics_reported[\s\S]*cache_hit_ratio/, "request rows must distinguish unreported cache data from a zero hit ratio")
 assert.match(details, /vibe-proxy-playground[\s\S]*playgroundAgent/, "the built-in playground must have an explicit Agent identity")
-for (const metric of ["tpot_p50", "tpot_p95", "tps_p50", "tps_p95", "cache_hit_ratio", "cache_coverage"]) {
+for (const metric of ["ttft_avg", "tpot_avg", "tpot_p50", "tpot_p95", "tps_avg", "tps_p50", "tps_p95", "cache_hit_ratio", "cache_coverage"]) {
   assert.ok(metrics.includes(metric), `metrics UI must render ${metric}`)
 }
+assert.match(metrics, /formatMetricValue[\s\S]*maximumFractionDigits/,
+  "floating-point chart values must use bounded locale-aware precision")
+assert.match(metrics, /formatMetricTimestamp/, "metric tooltips must localize timestamps")
 
 const captureStates = ["not_captured", "captured", "redacted", "truncated", "expired", "dropped", "missing"]
 for (const state of captureStates) {

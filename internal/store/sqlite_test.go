@@ -550,10 +550,10 @@ func TestSQLiteProvidesPersistedObservability(t *testing.T) {
 	if len(points) != 2 {
 		t.Fatalf("expected two metric buckets, got %+v", points)
 	}
-	if points[0].Requests != 1 || points[0].Errors != 0 || points[0].TTFTP50 != 120 || points[0].TPOTP50 != 10 || points[0].TPSP50 != 24 || points[0].TokensCacheRead != 8 || points[0].TokensCacheWrite != 1 || points[0].CacheHitRatio != 0.8 || points[0].CacheCoverage != 1 {
+	if points[0].Requests != 1 || points[0].Errors != 0 || points[0].TTFTAvg != 120 || points[0].TTFTP50 != 120 || points[0].TPOTAvg != 10 || points[0].TPOTP50 != 10 || points[0].TPSAvg != 24 || points[0].TPSP50 != 24 || points[0].TokensCacheRead != 8 || points[0].TokensCacheWrite != 1 || points[0].CacheHitRatio != 0.8 || points[0].CacheCoverage != 1 {
 		t.Fatalf("unexpected first point: %+v", points[0])
 	}
-	if points[1].Requests != 1 || points[1].Errors != 1 || points[1].TTFTP95 != 320 || points[1].TPOTP95 != 30 || points[1].TPSP95 != 8 || points[1].CacheCoverage != 0 {
+	if points[1].Requests != 1 || points[1].Errors != 1 || points[1].TTFTAvg != 320 || points[1].TTFTP95 != 320 || points[1].TPOTAvg != 30 || points[1].TPOTP95 != 30 || points[1].TPSAvg != 8 || points[1].TPSP95 != 8 || points[1].CacheCoverage != 0 {
 		t.Fatalf("unexpected second point: %+v", points[1])
 	}
 
@@ -566,6 +566,18 @@ func TestSQLiteProvidesPersistedObservability(t *testing.T) {
 	}
 	if recent[0].Transformation == nil || recent[0].Transformation.MultimodalRoute != "vision_fallback" {
 		t.Fatalf("missing persisted transformation: %+v", recent[0])
+	}
+}
+
+func TestMetricAverageHelpers(t *testing.T) {
+	if got := averageInt64([]int64{100, 300}); got != 200 {
+		t.Fatalf("unexpected int64 average: %v", got)
+	}
+	if got := averageFloat64([]float64{10, 30}); got != 20 {
+		t.Fatalf("unexpected float64 average: %v", got)
+	}
+	if averageInt64(nil) != 0 || averageFloat64(nil) != 0 {
+		t.Fatal("empty metric averages must be zero")
 	}
 }
 
