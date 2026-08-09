@@ -185,8 +185,7 @@ func (a *OpenAIToAnthropic) unaryAnthropicAsOpenAI(upstream *http.Response, clie
 			text.WriteString(c.Text)
 		}
 	}
-	usage := types.Usage{PromptTokens: ar.Usage.InputTokens, CompletionTokens: ar.Usage.OutputTokens, CacheReadTokens: ar.Usage.CacheReadInputTokens, CacheWriteTokens: ar.Usage.CacheCreationInputTokens}
-	usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+	usage := usageFromAnthropic(ar.Usage)
 	resp := map[string]any{"id": "chatcmpl-" + tracker.Event.RequestID, "object": "chat.completion", "created": time.Now().Unix(), "model": req.VirtualModel, "choices": []any{map[string]any{"index": 0, "message": map[string]any{"role": "assistant", "content": text.String()}, "finish_reason": "stop"}}, "usage": map[string]any{"prompt_tokens": usage.PromptTokens, "completion_tokens": usage.CompletionTokens, "total_tokens": usage.TotalTokens}}
 	client.Header().Set("Content-Type", "application/json")
 	client.WriteHeader(http.StatusOK)
@@ -290,13 +289,28 @@ func parseAnthropicUsage(raw json.RawMessage) types.Usage {
 	return usageFromAnthropic(u)
 }
 func usageFromAnthropic(u anthropicUsage) types.Usage {
-	r := types.Usage{PromptTokens: u.InputTokens, CompletionTokens: u.OutputTokens, CacheReadTokens: u.CacheReadInputTokens, CacheWriteTokens: u.CacheCreationInputTokens}
+	cacheRead := pointerValue(u.CacheReadInputTokens)
+	cacheWrite := pointerValue(u.CacheCreationInputTokens)
+	cacheReported := u.CacheReadInputTokens != nil || u.CacheCreationInputTokens != nil
+	r := types.Usage{
+		PromptTokens:         u.InputTokens + cacheRead + cacheWrite,
+		CompletionTokens:     u.OutputTokens,
+		CacheReadTokens:      cacheRead,
+		CacheWriteTokens:     cacheWrite,
+		CacheMetricsReported: cacheReported,
+	}
 	r.TotalTokens = r.PromptTokens + r.CompletionTokens
-	denom := r.CacheReadTokens + r.CacheWriteTokens
-	if denom > 0 {
-		r.CacheHitRatio = float64(r.CacheReadTokens) / float64(denom)
+	if cacheReported && r.PromptTokens > 0 {
+		r.CacheHitRatio = float64(r.CacheReadTokens) / float64(r.PromptTokens)
 	}
 	return r
+}
+
+func pointerValue(value *int64) int64 {
+	if value == nil {
+		return 0
+	}
+	return *value
 }
 func mergeUsage(a, b types.Usage) types.Usage {
 	if b.PromptTokens != 0 {
@@ -310,6 +324,12 @@ func mergeUsage(a, b types.Usage) types.Usage {
 	}
 	if b.CacheWriteTokens != 0 {
 		a.CacheWriteTokens = b.CacheWriteTokens
+	}
+	if b.CacheMetricsReported {
+		a.CacheMetricsReported = true
+	}
+	if b.CacheHitRatio != 0 || b.CacheMetricsReported {
+		a.CacheHitRatio = b.CacheHitRatio
 	}
 	a.TotalTokens = a.PromptTokens + a.CompletionTokens
 	return a
@@ -450,8 +470,8 @@ type anthropicResponse struct {
 	Usage   anthropicUsage `json:"usage"`
 }
 type anthropicUsage struct {
-	InputTokens              int64 `json:"input_tokens"`
-	OutputTokens             int64 `json:"output_tokens"`
-	CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
-	CacheCreationInputTokens int64 `json:"cache_creation_input_tokens"`
+	InputTokens              int64  `json:"input_tokens"`
+	OutputTokens             int64  `json:"output_tokens"`
+	CacheReadInputTokens     *int64 `json:"cache_read_input_tokens"`
+	CacheCreationInputTokens *int64 `json:"cache_creation_input_tokens"`
 }

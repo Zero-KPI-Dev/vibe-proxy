@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/a448582655/vibe-proxy/internal/auth"
 	"github.com/a448582655/vibe-proxy/internal/config"
 	"github.com/a448582655/vibe-proxy/internal/metrics"
 	"github.com/a448582655/vibe-proxy/internal/modelcapability"
@@ -453,7 +454,7 @@ func TestRuntimeTracksIdentityAndRequestShape(t *testing.T) {
 	if event.RequestID == "" || event.RequestID != w.Header().Get("X-Vibe-Proxy-Request-ID") || event.TraceID != "4bf92f3577b34da6a3ce929d0e0e4736" {
 		t.Fatalf("request and trace identity missing: %+v", event)
 	}
-	if event.PrincipalName != "test" || event.ClientName != "test" || event.AgentID != "codex" || event.SessionID != "session-42" || event.ProjectID != "vibe-proxy" {
+	if event.PrincipalType != auth.PrincipalTypeClientKey || event.PrincipalName != "test" || event.ClientKeyPrefix != "vibe-local-d" || event.ClientName != "test" || event.AgentID != "codex" || event.SessionID != "session-42" || event.ProjectID != "vibe-proxy" {
 		t.Fatalf("principal or caller identity missing: %+v", event)
 	}
 	if event.InitialProvider != "mockai" || event.InitialModel != "raw-chat" || event.ChannelID != "mockai" || event.UpstreamModel != "raw-chat" {
@@ -632,7 +633,7 @@ func TestRuntimeAdminPlaygroundUsesFullPipelineWithoutDataPlaneKey(t *testing.T)
 			sawRejectedPublicRequest = true
 			continue
 		}
-		if event.ClientName != "admin-playground" || !requestIDs[event.RequestID] {
+		if event.PrincipalType != auth.PrincipalTypeInternal || event.ClientName != "admin-playground" || event.AgentID != "vibe-proxy-playground" || event.AgentName != "Vibe Proxy Playground" || event.AgentSource != "internal" || !requestIDs[event.RequestID] {
 			t.Fatalf("admin playground request was not tracked correctly: %+v", events)
 		}
 		adminEvents++
@@ -1484,7 +1485,7 @@ func adminJSONRequest(method, target, body string) *http.Request {
 
 func newTestServer(t *testing.T, rt roundTrip) *Server {
 	t.Helper()
-	cfg, err := config.CompileSimple(config.SimpleConfig{ClientKeys: []config.ClientKeyConfig{{Name: "test", KeyHash: "$2a$10$AXRkz.6y44ygdJFk6L1/IO0aRVp9zRMfXDJoBCBsroxVac/Lovvz6", Enabled: true, AllowedModels: []string{"*"}, RPM: 1000}}, Providers: map[string]config.ProviderConfig{"anthropic": {Type: "anthropic", BaseURL: "https://mock.anthropic", Auth: upstreamauth.Profile{Type: "api_key_header", Header: "x-api-key", Value: "literal:test-anthropic-key"}, Models: []string{"claude-raw"}}, "mockai": {Type: "openai-compatible", BaseURL: "https://mock.openai/v1", Auth: upstreamauth.Profile{Type: "none"}, Models: []string{"raw-chat"}}}, Models: config.ModelsConfig{AllowRaw: true, Aliases: map[string]string{"vibe-coder": "anthropic/claude-raw", "vibe-fast": "mockai/raw-chat"}}})
+	cfg, err := config.CompileSimple(config.SimpleConfig{ClientKeys: []config.ClientKeyConfig{{Name: "test", KeyHash: "$2a$10$AXRkz.6y44ygdJFk6L1/IO0aRVp9zRMfXDJoBCBsroxVac/Lovvz6", KeyPrefix: "vibe-local-d", Enabled: true, AllowedModels: []string{"*"}, RPM: 1000}}, Providers: map[string]config.ProviderConfig{"anthropic": {Type: "anthropic", BaseURL: "https://mock.anthropic", Auth: upstreamauth.Profile{Type: "api_key_header", Header: "x-api-key", Value: "literal:test-anthropic-key"}, Models: []string{"claude-raw"}}, "mockai": {Type: "openai-compatible", BaseURL: "https://mock.openai/v1", Auth: upstreamauth.Profile{Type: "none"}, Models: []string{"raw-chat"}}}, Models: config.ModelsConfig{AllowRaw: true, Aliases: map[string]string{"vibe-coder": "anthropic/claude-raw", "vibe-fast": "mockai/raw-chat"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1505,7 +1506,7 @@ func newObservabilityTestServer(t *testing.T, sink telemetry.EventSink, rt round
 				HeaderAllowlist:  []string{"user-agent", "authorization"},
 			},
 		},
-		ClientKeys: []config.ClientKeyConfig{{Name: "test", KeyHash: "$2a$10$AXRkz.6y44ygdJFk6L1/IO0aRVp9zRMfXDJoBCBsroxVac/Lovvz6", Enabled: true, AllowedModels: []string{"*"}, RPM: 1000}},
+		ClientKeys: []config.ClientKeyConfig{{Name: "test", KeyHash: "$2a$10$AXRkz.6y44ygdJFk6L1/IO0aRVp9zRMfXDJoBCBsroxVac/Lovvz6", KeyPrefix: "vibe-local-d", Enabled: true, AllowedModels: []string{"*"}, RPM: 1000}},
 		Providers:  map[string]config.ProviderConfig{"mockai": {Type: "openai-compatible", BaseURL: "https://mock.openai/v1", Auth: upstreamauth.Profile{Type: "none"}, Models: []string{"raw-chat"}}},
 		Models:     config.ModelsConfig{AllowRaw: true, Aliases: map[string]string{"vibe-fast": "mockai/raw-chat"}},
 	})

@@ -378,10 +378,23 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
-	s.handleWithClient(w, r, nil)
+	s.handleWithInvocation(w, r, nil)
 }
 
-func (s *Server) handleWithClient(w http.ResponseWriter, r *http.Request, trustedClient *auth.Client) {
+type trustedAgentIdentity struct {
+	ID         string
+	Name       string
+	Version    string
+	Source     string
+	Confidence string
+}
+
+type trustedInvocation struct {
+	Client auth.Client
+	Agent  trustedAgentIdentity
+}
+
+func (s *Server) handleWithInvocation(w http.ResponseWriter, r *http.Request, trusted *trustedInvocation) {
 	snap := s.current()
 	clientAdapter := s.detectClientAdapter(r)
 	if clientAdapter == nil {
@@ -390,6 +403,13 @@ func (s *Server) handleWithClient(w http.ResponseWriter, r *http.Request, truste
 	}
 	requestID := uuid.NewString()
 	identity := telemetry.ExtractRequestIdentity(r, nil, snap.AgentProfiles)
+	if trusted != nil && trusted.Agent.ID != "" {
+		identity.AgentID = trusted.Agent.ID
+		identity.AgentName = trusted.Agent.Name
+		identity.AgentVersion = trusted.Agent.Version
+		identity.AgentSource = trusted.Agent.Source
+		identity.AgentConfidence = trusted.Agent.Confidence
+	}
 	tracker := telemetry.NewTracker(telemetry.Event{
 		RequestID:       requestID,
 		TraceID:         identity.TraceID,
@@ -455,8 +475,8 @@ func (s *Server) handleWithClient(w http.ResponseWriter, r *http.Request, truste
 		return
 	}
 	var client auth.Client
-	if trustedClient != nil {
-		client = *trustedClient
+	if trusted != nil {
+		client = trusted.Client
 	} else {
 		var gerr *types.GatewayError
 		client, gerr = s.authenticator.AuthenticateDataPlane(r, snap.Config.ClientKeys)
@@ -465,7 +485,9 @@ func (s *Server) handleWithClient(w http.ResponseWriter, r *http.Request, truste
 			return
 		}
 	}
+	tracker.Event.PrincipalType = client.PrincipalType
 	tracker.Event.PrincipalName = client.Name
+	tracker.Event.ClientKeyPrefix = client.KeyPrefix
 	tracker.Event.ClientName = client.Name
 	tracker.Checkpoint(telemetry.RequestPhaseAuthenticated)
 	if effectiveCaptureMode == telemetry.CaptureModeStructured || effectiveCaptureMode == telemetry.CaptureModeRaw {
@@ -630,12 +652,15 @@ func (s *Server) handleWithClient(w http.ResponseWriter, r *http.Request, truste
 		}
 		var streamStats streamengine.Stats
 		var streamStatsMu sync.Mutex
-		tracked := streamengine.Track(ctx, events, func(stats streamengine.Stats) {
+		updateStreamStats := func(stats streamengine.Stats) {
 			streamStatsMu.Lock()
 			streamStats = stats
 			streamStatsMu.Unlock()
+		}
+		tracked := streamengine.TrackWithProgress(ctx, events, func(stats streamengine.Stats) {
+			updateStreamStats(stats)
 			tracker.StreamProgress(stats.FirstTokenAt, stats.OutputTokenCount, toTelemetryUsage(stats.Usage))
-		})
+		}, updateStreamStats)
 		streamAccumulator := telemetry.NewStreamAccumulator(target.Model, snap.CapturePolicy.CaptureReasoning)
 		canonicalEvents := streamAccumulator.Wrap(ctx, tracked)
 		if err := clientAdapter.EncodeStream(ctx, w, canonicalEvents); err != nil {
@@ -757,8 +782,13 @@ func (s *Server) adminPlayground(targetPath string) http.HandlerFunc {
 		clonedURL := *r.URL
 		clonedURL.Path = targetPath
 		clone.URL = &clonedURL
-		client := auth.Client{Name: "admin-playground", AllowedModels: []string{"*"}}
-		s.handleWithClient(w, clone, &client)
+		invocation := &trustedInvocation{
+			Client: auth.Client{PrincipalType: auth.PrincipalTypeInternal, Name: "admin-playground", AllowedModels: []string{"*"}},
+			Agent: trustedAgentIdentity{
+				ID: "vibe-proxy-playground", Name: "Vibe Proxy Playground", Source: "internal", Confidence: "explicit",
+			},
+		}
+		s.handleWithInvocation(w, clone, invocation)
 	}
 }
 
@@ -1173,7 +1203,7 @@ func toIRError(e types.GatewayError) ir.GatewayError {
 	return ir.GatewayError{StatusCode: e.StatusCode, Kind: e.Type, Code: e.Code, Message: e.Message, RetryAfter: e.RetryAfter}
 }
 func toTelemetryUsage(u ir.Usage) types.Usage {
-	return types.Usage{PromptTokens: u.PromptTokens, CompletionTokens: u.CompletionTokens, TotalTokens: u.TotalTokens, CacheReadTokens: u.CacheReadTokens, CacheWriteTokens: u.CacheWriteTokens, CacheHitRatio: u.CacheHitRatio}
+	return types.Usage{PromptTokens: u.PromptTokens, CompletionTokens: u.CompletionTokens, TotalTokens: u.TotalTokens, CacheReadTokens: u.CacheReadTokens, CacheWriteTokens: u.CacheWriteTokens, CacheMetricsReported: u.CacheMetricsReported, CacheHitRatio: u.CacheHitRatio}
 }
 
 var _ = upstreamauth.Profile{}

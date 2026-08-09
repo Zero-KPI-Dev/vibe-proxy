@@ -42,6 +42,29 @@ func TestTrackRecordsTokenAndUsage(t *testing.T) {
 	}
 }
 
+func TestTrackWithProgressReportsFirstTokenBeforeCompletion(t *testing.T) {
+	in := make(chan ir.StreamEvent, 3)
+	in <- ir.StreamEvent{Type: ir.EventContentDelta, Delta: ir.ContentBlock{Type: ir.ContentText, Text: "hi"}}
+	in <- ir.StreamEvent{Type: ir.EventUsageDelta, Usage: &ir.Usage{PromptTokens: 4, CompletionTokens: 1, TotalTokens: 5}}
+	in <- ir.StreamEvent{Type: ir.EventMessageDone}
+	close(in)
+	progress := []Stats{}
+	finished := 0
+	out := TrackWithProgress(context.Background(), in, func(stats Stats) {
+		progress = append(progress, stats)
+	}, func(Stats) {
+		finished++
+	})
+	for range out {
+	}
+	if len(progress) < 1 || progress[0].FirstTokenAt.IsZero() || progress[0].CompletedAt.IsZero() == false {
+		t.Fatalf("unexpected progress callbacks: %+v", progress)
+	}
+	if finished != 1 {
+		t.Fatalf("completion callback invoked %d times", finished)
+	}
+}
+
 func TestAccumulateStreamToUnary(t *testing.T) {
 	in := make(chan ir.StreamEvent, 4)
 	in <- ir.StreamEvent{Type: ir.EventContentDelta, Delta: ir.ContentBlock{Type: ir.ContentText, Text: "he"}}

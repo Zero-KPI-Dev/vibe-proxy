@@ -125,14 +125,15 @@ type Response struct {
 }
 
 type Usage struct {
-	PromptTokens     int64           `json:"prompt_tokens"`
-	CompletionTokens int64           `json:"completion_tokens"`
-	TotalTokens      int64           `json:"total_tokens"`
-	ReasoningTokens  int64           `json:"reasoning_tokens"`
-	CacheReadTokens  int64           `json:"cache_read_tokens"`
-	CacheWriteTokens int64           `json:"cache_write_tokens"`
-	CacheHitRatio    float64         `json:"cache_hit_ratio"`
-	ProviderRaw      json.RawMessage `json:"provider_raw,omitempty"`
+	PromptTokens         int64           `json:"prompt_tokens"`
+	CompletionTokens     int64           `json:"completion_tokens"`
+	TotalTokens          int64           `json:"total_tokens"`
+	ReasoningTokens      int64           `json:"reasoning_tokens"`
+	CacheReadTokens      int64           `json:"cache_read_tokens"`
+	CacheWriteTokens     int64           `json:"cache_write_tokens"`
+	CacheMetricsReported bool            `json:"cache_metrics_reported"`
+	CacheHitRatio        float64         `json:"cache_hit_ratio"`
+	ProviderRaw          json.RawMessage `json:"provider_raw,omitempty"`
 }
 
 type StreamEventType string

@@ -12,11 +12,20 @@ var ErrRequestNotFound = errors.New("observability request not found")
 
 type MetricsSummary struct {
 	TotalRequests int64 `json:"total_requests"`
+	TodayRequests int64 `json:"today_requests"`
 	TodayTokens   struct {
 		Prompt     int64 `json:"prompt"`
 		Completion int64 `json:"completion"`
 		Total      int64 `json:"total"`
+		CacheRead  int64 `json:"cache_read"`
+		CacheWrite int64 `json:"cache_write"`
 	} `json:"today_tokens"`
+	PromptCache struct {
+		ReportedRequests     int64   `json:"reported_requests"`
+		EligiblePromptTokens int64   `json:"eligible_prompt_tokens"`
+		WeightedHitRatio     float64 `json:"weighted_hit_ratio"`
+		ReportingCoverage    float64 `json:"reporting_coverage"`
+	} `json:"prompt_cache"`
 }
 
 type MetricPoint struct {
@@ -30,6 +39,10 @@ type MetricPoint struct {
 	TPOTP95          float64   `json:"tpot_p95"`
 	TokensPrompt     int64     `json:"tokens_prompt"`
 	TokensCompletion int64     `json:"tokens_completion"`
+	TokensCacheRead  int64     `json:"tokens_cache_read"`
+	TokensCacheWrite int64     `json:"tokens_cache_write"`
+	CacheHitRatio    float64   `json:"cache_hit_ratio"`
+	CacheCoverage    float64   `json:"cache_coverage"`
 }
 
 type RequestQuery struct {

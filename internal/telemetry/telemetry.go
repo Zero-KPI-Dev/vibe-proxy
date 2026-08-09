@@ -24,7 +24,9 @@ type Event struct {
 	SessionKind       string                 `json:"session_kind,omitempty"`
 	SessionPath       string                 `json:"session_path,omitempty"`
 	ParentRequestID   string                 `json:"parent_request_id,omitempty"`
+	PrincipalType     string                 `json:"principal_type,omitempty"`
 	PrincipalName     string                 `json:"principal_name,omitempty"`
+	ClientKeyPrefix   string                 `json:"client_key_prefix,omitempty"`
 	ClientName        string                 `json:"client_name"`
 	AgentID           string                 `json:"agent_id"`
 	AgentName         string                 `json:"agent_name,omitempty"`

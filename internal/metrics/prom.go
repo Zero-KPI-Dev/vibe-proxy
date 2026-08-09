@@ -14,6 +14,7 @@ type Prometheus struct {
 	requests *prometheus.CounterVec
 	ttft     *prometheus.HistogramVec
 	tokens   *prometheus.CounterVec
+	cache    *prometheus.CounterVec
 	tpot     *prometheus.HistogramVec
 	tps      *prometheus.HistogramVec
 }
@@ -23,10 +24,11 @@ func New() *Prometheus {
 		requests: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "vibe_proxy_requests_total", Help: "Total gateway requests."}, []string{"model", "channel", "status"}),
 		ttft:     prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "vibe_proxy_ttft_seconds", Help: "Time to first token.", Buckets: []float64{0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10}}, []string{"model", "channel"}),
 		tokens:   prometheus.NewCounterVec(prometheus.CounterOpts{Name: "vibe_proxy_tokens_total", Help: "Token counts."}, []string{"model", "channel", "kind"}),
+		cache:    prometheus.NewCounterVec(prometheus.CounterOpts{Name: "vibe_proxy_prompt_cache_requests_total", Help: "Requests by prompt-cache telemetry state."}, []string{"model", "channel", "state"}),
 		tpot:     prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "vibe_proxy_tpot_seconds", Help: "Average time per output token."}, []string{"model", "channel"}),
 		tps:      prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "vibe_proxy_tps", Help: "Output token throughput."}, []string{"model", "channel"}),
 	}
-	prometheus.MustRegister(p.requests, p.ttft, p.tokens, p.tpot, p.tps)
+	prometheus.MustRegister(p.requests, p.ttft, p.tokens, p.cache, p.tpot, p.tps)
 	return p
 }
 
@@ -50,6 +52,14 @@ func (p *Prometheus) RequestFinished(e telemetry.Event) {
 	p.tokens.WithLabelValues(e.VirtualModel, e.ChannelID, "completion").Add(float64(e.Usage.CompletionTokens))
 	p.tokens.WithLabelValues(e.VirtualModel, e.ChannelID, "cache_read").Add(float64(e.Usage.CacheReadTokens))
 	p.tokens.WithLabelValues(e.VirtualModel, e.ChannelID, "cache_write").Add(float64(e.Usage.CacheWriteTokens))
+	if e.Usage.CacheMetricsReported {
+		p.cache.WithLabelValues(e.VirtualModel, e.ChannelID, "reported").Inc()
+		if e.Usage.CacheReadTokens > 0 {
+			p.cache.WithLabelValues(e.VirtualModel, e.ChannelID, "read").Inc()
+		}
+	} else {
+		p.cache.WithLabelValues(e.VirtualModel, e.ChannelID, "not_reported").Inc()
+	}
 }
 
 type MultiSink []telemetry.EventSink

@@ -219,7 +219,19 @@ func lastContent(resp *ir.Response) []ir.ContentBlock {
 	return resp.Messages[len(resp.Messages)-1].Content
 }
 func usage(u ir.Usage) map[string]any {
-	return map[string]any{"input_tokens": u.PromptTokens, "output_tokens": u.CompletionTokens, "cache_read_input_tokens": u.CacheReadTokens, "cache_creation_input_tokens": u.CacheWriteTokens}
+	inputTokens := u.PromptTokens
+	if u.CacheMetricsReported {
+		inputTokens -= u.CacheReadTokens + u.CacheWriteTokens
+		if inputTokens < 0 {
+			inputTokens = 0
+		}
+	}
+	result := map[string]any{"input_tokens": inputTokens, "output_tokens": u.CompletionTokens}
+	if u.CacheMetricsReported {
+		result["cache_read_input_tokens"] = u.CacheReadTokens
+		result["cache_creation_input_tokens"] = u.CacheWriteTokens
+	}
+	return result
 }
 func stopReason(s string) string {
 	if s == "" {

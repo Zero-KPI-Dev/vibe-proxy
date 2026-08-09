@@ -14,10 +14,17 @@ import (
 )
 
 type Client struct {
+	PrincipalType string
 	Name          string
+	KeyPrefix     string
 	AllowedModels []string
 	RPM           int
 }
+
+const (
+	PrincipalTypeClientKey = "client_key"
+	PrincipalTypeInternal  = "internal"
+)
 
 type Limiter struct {
 	mu       sync.Mutex
@@ -84,7 +91,7 @@ func (a *Authenticator) AuthenticateDataPlane(r *http.Request, keys []config.Cli
 			if !lim.Allow() {
 				return Client{}, &types.GatewayError{StatusCode: http.StatusTooManyRequests, Type: "rate_limit_error", Code: "rate_limit_exceeded", Message: "Rate limit exceeded.", RetryAfter: "60"}
 			}
-			return Client{Name: k.Name, AllowedModels: k.AllowedModels, RPM: k.RPM}, nil
+			return Client{PrincipalType: PrincipalTypeClientKey, Name: k.Name, KeyPrefix: k.KeyPrefix, AllowedModels: k.AllowedModels, RPM: k.RPM}, nil
 		}
 	}
 	return Client{}, &types.GatewayError{StatusCode: http.StatusUnauthorized, Type: "authentication_error", Code: "invalid_api_key", Message: "Invalid API key."}

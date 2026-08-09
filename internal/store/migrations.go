@@ -17,6 +17,7 @@ var sqliteMigrations = []migration{
 	{version: 2, apply: addTraceObservabilitySchema},
 	{version: 3, apply: addHTTPContextSchema},
 	{version: 4, apply: addPayloadCaptureMetadataSchema},
+	{version: 5, apply: addPrincipalAndCacheMetricSchema},
 }
 
 func (s *SQLite) migrate() error {
@@ -256,6 +257,30 @@ func addPayloadCaptureMetadataSchema(tx *sql.Tx) error {
 		}
 		if _, err := tx.Exec(`ALTER TABLE payload_snapshots ADD COLUMN ` + column.name + ` ` + column.definition); err != nil {
 			return fmt.Errorf("add payload_snapshots.%s: %w", column.name, err)
+		}
+	}
+	return nil
+}
+
+func addPrincipalAndCacheMetricSchema(tx *sql.Tx) error {
+	existing, err := tableColumns(tx, "request_logs")
+	if err != nil {
+		return err
+	}
+	columns := []struct {
+		name       string
+		definition string
+	}{
+		{name: "principal_type", definition: "TEXT"},
+		{name: "client_key_prefix", definition: "TEXT"},
+		{name: "cache_metrics_reported", definition: "INTEGER NOT NULL DEFAULT 0"},
+	}
+	for _, column := range columns {
+		if existing[column.name] {
+			continue
+		}
+		if _, err := tx.Exec(`ALTER TABLE request_logs ADD COLUMN ` + column.name + ` ` + column.definition); err != nil {
+			return fmt.Errorf("add request_logs.%s: %w", column.name, err)
 		}
 	}
 	return nil

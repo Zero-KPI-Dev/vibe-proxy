@@ -124,7 +124,7 @@ func TestSQLiteMigrationsCreateTraceSchema(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = sqlite.Close() })
 
-	assertMigrationVersions(t, sqlite.db, []int{1, 2, 3, 4})
+	assertMigrationVersions(t, sqlite.db, []int{1, 2, 3, 4, 5})
 	assertTableColumns(t, sqlite.db, "request_logs", []string{
 		"transformation_json",
 		"trace_id",
@@ -136,6 +136,9 @@ func TestSQLiteMigrationsCreateTraceSchema(t *testing.T) {
 		"session_path",
 		"parent_request_id",
 		"principal_name",
+		"principal_type",
+		"client_key_prefix",
+		"cache_metrics_reported",
 		"agent_id",
 		"agent_name",
 		"agent_version",
@@ -165,7 +168,7 @@ func TestSQLiteMigrationsCreateTraceSchema(t *testing.T) {
 		t.Fatalf("reopening a migrated database must be idempotent: %v", err)
 	}
 	defer reopened.Close()
-	assertMigrationVersions(t, reopened.db, []int{1, 2, 3, 4})
+	assertMigrationVersions(t, reopened.db, []int{1, 2, 3, 4, 5})
 }
 
 func assertMigrationVersions(t *testing.T, db *sql.DB, want []int) {
@@ -429,7 +432,9 @@ func TestSQLitePersistsIdentityAndRequestShape(t *testing.T) {
 		SessionKind:       "coding",
 		SessionPath:       "/implementation/store",
 		ParentRequestID:   "identity-0",
+		PrincipalType:     "client_key",
 		PrincipalName:     "local-user",
+		ClientKeyPrefix:   "vibe_1234567",
 		ClientName:        "local-user",
 		AgentID:           "codex",
 		AgentName:         "Codex CLI",
@@ -468,7 +473,7 @@ func TestSQLitePersistsIdentityAndRequestShape(t *testing.T) {
 		t.Fatalf("unexpected events: %+v", recent)
 	}
 	got := recent[0]
-	if got.TraceID == "" || got.SessionID != "session-1" || got.PrincipalName != "local-user" || got.AgentID != "codex" || got.ProjectID != "vibe-proxy" {
+	if got.TraceID == "" || got.SessionID != "session-1" || got.PrincipalType != "client_key" || got.PrincipalName != "local-user" || got.ClientKeyPrefix != "vibe_1234567" || got.AgentID != "codex" || got.ProjectID != "vibe-proxy" {
 		t.Fatalf("identity was not persisted: %+v", got)
 	}
 	if got.HTTPMethod != http.MethodPost || got.HTTPPath != "/v1/chat/completions" || got.DurationMillis != 50 || got.InitialProvider != "mockai" || got.FinishReason != "stop" {
@@ -501,7 +506,7 @@ func TestSQLiteProvidesPersistedObservability(t *testing.T) {
 		TTFTMillis:    120,
 		TPOTMillis:    10,
 		StatusCode:    200,
-		Usage:         types.Usage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15},
+		Usage:         types.Usage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15, CacheReadTokens: 8, CacheWriteTokens: 1, CacheMetricsReported: true, CacheHitRatio: 0.8},
 	})
 	store.RequestFinished(telemetry.Event{
 		RequestID:     "request-2",
@@ -523,9 +528,16 @@ func TestSQLiteProvidesPersistedObservability(t *testing.T) {
 		t.Fatal(err)
 	}
 	if summary.TotalRequests != 2 ||
+		summary.TodayRequests != 2 ||
 		summary.TodayTokens.Prompt != 30 ||
 		summary.TodayTokens.Completion != 13 ||
-		summary.TodayTokens.Total != 43 {
+		summary.TodayTokens.Total != 43 ||
+		summary.TodayTokens.CacheRead != 8 ||
+		summary.TodayTokens.CacheWrite != 1 ||
+		summary.PromptCache.ReportedRequests != 1 ||
+		summary.PromptCache.EligiblePromptTokens != 10 ||
+		summary.PromptCache.WeightedHitRatio != 0.8 ||
+		summary.PromptCache.ReportingCoverage != 0.5 {
 		t.Fatalf("unexpected summary: %+v", summary)
 	}
 
@@ -536,10 +548,10 @@ func TestSQLiteProvidesPersistedObservability(t *testing.T) {
 	if len(points) != 2 {
 		t.Fatalf("expected two metric buckets, got %+v", points)
 	}
-	if points[0].Requests != 1 || points[0].Errors != 0 || points[0].TTFTP50 != 120 {
+	if points[0].Requests != 1 || points[0].Errors != 0 || points[0].TTFTP50 != 120 || points[0].TokensCacheRead != 8 || points[0].TokensCacheWrite != 1 || points[0].CacheHitRatio != 0.8 || points[0].CacheCoverage != 1 {
 		t.Fatalf("unexpected first point: %+v", points[0])
 	}
-	if points[1].Requests != 1 || points[1].Errors != 1 || points[1].TTFTP95 != 320 {
+	if points[1].Requests != 1 || points[1].Errors != 1 || points[1].TTFTP95 != 320 || points[1].CacheCoverage != 0 {
 		t.Fatalf("unexpected second point: %+v", points[1])
 	}
 

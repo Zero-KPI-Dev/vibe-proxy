@@ -431,6 +431,13 @@ func (s *Server) adminMetricsSummary(w http.ResponseWriter, r *http.Request) {
 	var promptTokens int64
 	var completionTokens int64
 	var totalTokens int64
+	var cacheReadTokens int64
+	var cacheWriteTokens int64
+	var todayRequests int64
+	var cacheReportedRequests int64
+	var cacheEligiblePromptTokens int64
+	var cacheWeightedHitRatio float64
+	var cacheReportingCoverage float64
 	if s.observability != nil {
 		now := time.Now().UTC()
 		todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
@@ -440,18 +447,34 @@ func (s *Server) adminMetricsSummary(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		totalRequests = summary.TotalRequests
+		todayRequests = summary.TodayRequests
 		promptTokens = summary.TodayTokens.Prompt
 		completionTokens = summary.TodayTokens.Completion
 		totalTokens = summary.TodayTokens.Total
+		cacheReadTokens = summary.TodayTokens.CacheRead
+		cacheWriteTokens = summary.TodayTokens.CacheWrite
+		cacheReportedRequests = summary.PromptCache.ReportedRequests
+		cacheEligiblePromptTokens = summary.PromptCache.EligiblePromptTokens
+		cacheWeightedHitRatio = summary.PromptCache.WeightedHitRatio
+		cacheReportingCoverage = summary.PromptCache.ReportingCoverage
 	}
 	s.writeJSON(w, map[string]any{
 		"total_requests":   totalRequests,
+		"today_requests":   todayRequests,
 		"active_providers": totalProviders,
 		"total_models":     totalModels,
 		"today_tokens": map[string]int64{
-			"prompt":     promptTokens,
-			"completion": completionTokens,
-			"total":      totalTokens,
+			"prompt":      promptTokens,
+			"completion":  completionTokens,
+			"total":       totalTokens,
+			"cache_read":  cacheReadTokens,
+			"cache_write": cacheWriteTokens,
+		},
+		"prompt_cache": map[string]any{
+			"reported_requests":      cacheReportedRequests,
+			"eligible_prompt_tokens": cacheEligiblePromptTokens,
+			"weighted_hit_ratio":     cacheWeightedHitRatio,
+			"reporting_coverage":     cacheReportingCoverage,
 		},
 	})
 }
