@@ -18,6 +18,7 @@ import { NAV_ITEMS } from "@/lib/constants"
 import { Button } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
 import { HealthBadge } from "@/components/health-badge"
+import { BrandMark } from "@/components/brand-mark"
 
 const iconMap: Record<string, React.ReactNode> = {
   LayoutDashboard: <LayoutDashboard className="h-4 w-4" />,
@@ -45,7 +46,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
       >
         <div className="flex h-full flex-col">
           <div className="flex h-14 items-center gap-3 px-4 border-b border-border">
-            <div className="h-7 w-7 rounded-lg bg-gradient-to-br from-[#9b8cff] to-[#38bdf8] shrink-0" />
+            <BrandMark className="h-7 w-7" />
             <div className="font-semibold">vibe-proxy</div>
           </div>
 

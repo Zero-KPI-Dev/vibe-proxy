@@ -13,6 +13,7 @@ import {
   ShieldCheck,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { BrandMark } from "@/components/brand-mark"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -37,11 +38,7 @@ function Brand() {
   const { t } = useTranslation()
   return (
     <div className="flex items-center justify-center gap-3">
-      <div className="relative h-10 w-10 overflow-hidden rounded-xl bg-gradient-to-br from-[#9b8cff] to-[#38bdf8] shadow-lg shadow-primary/20">
-        <div className="absolute inset-[1px] rounded-[11px] bg-background/15" />
-        <div className="absolute left-2 top-2 h-2 w-2 rounded-full bg-white/90" />
-        <div className="absolute bottom-2 right-2 h-3 w-3 rounded-full border-2 border-white/90" />
-      </div>
+      <BrandMark className="h-10 w-10 shadow-lg" />
       <div className="text-left">
         <div className="text-lg font-semibold tracking-tight">vibe-proxy</div>
         <div className="text-[11px] uppercase tracking-[0.22em] text-muted-foreground">{t("auth.tagline")}</div>

@@ -51,13 +51,13 @@ export function RequestTable({ events, openDetails = false, liveByRequest = new 
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead>{t("observability.columns.time")}</TableHead>
-            <TableHead>{t("observability.columns.agent")}</TableHead>
-            <TableHead>{t("observability.columns.principal")}</TableHead>
-            <TableHead>{t("observability.columns.route")}</TableHead>
-            <TableHead>{t("observability.columns.status")}</TableHead>
-            <TableHead>{t("observability.columns.performance")}</TableHead>
-            <TableHead>{t("observability.columns.tokens")}</TableHead>
+            <TableHead className="px-2">{t("observability.columns.time")}</TableHead>
+            <TableHead className="px-2">{t("observability.columns.agent")}</TableHead>
+            <TableHead className="px-2">{t("observability.columns.principal")}</TableHead>
+            <TableHead className="px-2">{t("observability.columns.route")}</TableHead>
+            <TableHead className="px-2">{t("observability.columns.status")}</TableHead>
+            <TableHead className="px-2">{t("observability.columns.performance")}</TableHead>
+            <TableHead className="px-2">{t("observability.columns.tokens")}</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -82,26 +82,26 @@ export function RequestTable({ events, openDetails = false, liveByRequest = new 
                 if (keyboardEvent.key === "Enter" || keyboardEvent.key === " ") open(event)
               }}
             >
-              <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
+              <TableCell className="whitespace-nowrap px-2 py-3 text-xs text-muted-foreground">
                 {new Date(event.started_at).toLocaleString(i18n.language, {
                   month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit",
                 })}
                 {active && <p className="mt-1 font-medium text-emerald-500">{formatDuration(duration)}</p>}
               </TableCell>
-              <TableCell>
-                <div className="min-w-28">
+              <TableCell className="px-2 py-3">
+                <div className="min-w-24">
                   <p className="font-medium">{agentName}</p>
                   {event.agent_id && event.agent_id !== "unknown" && event.agent_id !== "vibe-proxy-playground" && <p className="font-mono text-xs text-muted-foreground">{event.agent_id}</p>}
                 </div>
               </TableCell>
-              <TableCell>
-                <div className="min-w-32 text-sm">
+              <TableCell className="px-2 py-3">
+                <div className="min-w-28 text-sm">
                   <p className="font-medium">{sourceName}</p>
                   {event.client_key_prefix && <p className="font-mono text-xs text-muted-foreground">{event.client_key_prefix}...</p>}
                 </div>
               </TableCell>
-              <TableCell>
-                <div className="min-w-40">
+              <TableCell className="px-2 py-3">
+                <div className="min-w-36">
                   <p className="font-mono text-xs">{event.upstream_model || event.virtual_model || "—"}</p>
                   <p className="mt-1 text-xs text-muted-foreground">
                     {event.channel_id || "—"}
@@ -109,8 +109,8 @@ export function RequestTable({ events, openDetails = false, liveByRequest = new 
                   </p>
                 </div>
               </TableCell>
-              <TableCell>
-                <div className="flex flex-wrap items-center gap-1.5">
+              <TableCell className="px-2 py-3">
+                <div className="flex min-w-[5.5rem] flex-col items-start gap-1.5">
                   {active ? <Badge variant="secondary" className="gap-1.5"><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500" />{t(`observability.live.phases.${live?.phase ?? "received"}`)}</Badge> : statusBadge(event.status_code)}
                   {event.transformation?.multimodal_route === "ocr_fallback" && (
                     <Badge variant="warning">{t("requestTable.ocrFallback")}</Badge>
@@ -121,8 +121,8 @@ export function RequestTable({ events, openDetails = false, liveByRequest = new 
                   {!active && <CaptureStateBadge state={event.capture_status || "not_captured"} />}
                 </div>
               </TableCell>
-              <TableCell>
-                <div className="min-w-32 text-xs tabular-nums">
+              <TableCell className="px-2 py-3">
+                <div className="min-w-28 text-xs tabular-nums">
                   <p>{t("observability.performance.total")} {formatDuration(duration)}</p>
                   <p className="mt-1 text-muted-foreground">
                     TTFT {event.ttft_ms && event.ttft_ms > 0 ? formatDuration(event.ttft_ms) : "—"}
@@ -130,8 +130,8 @@ export function RequestTable({ events, openDetails = false, liveByRequest = new 
                   </p>
                 </div>
               </TableCell>
-              <TableCell>
-                <div className="min-w-32 text-xs tabular-nums">
+              <TableCell className="px-2 py-3">
+                <div className="min-w-28 text-xs tabular-nums">
                   <p>{(event.usage?.total_tokens ?? 0).toLocaleString(i18n.language)} Token</p>
                   {event.usage?.cache_metrics_reported ? (
                     <p className="mt-1 font-medium text-emerald-600 dark:text-emerald-400">
