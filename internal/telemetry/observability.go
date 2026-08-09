@@ -37,6 +37,8 @@ type MetricPoint struct {
 	TTFTP99          int64     `json:"ttft_p99"`
 	TPOTP50          float64   `json:"tpot_p50"`
 	TPOTP95          float64   `json:"tpot_p95"`
+	TPSP50           float64   `json:"tps_p50"`
+	TPSP95           float64   `json:"tps_p95"`
 	TokensPrompt     int64     `json:"tokens_prompt"`
 	TokensCompletion int64     `json:"tokens_completion"`
 	TokensCacheRead  int64     `json:"tokens_cache_read"`

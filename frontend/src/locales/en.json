@@ -478,7 +478,7 @@
     },
     "requests": {
       "title": "Requests",
-      "description": "Search local gateway requests, routing decisions, capture states, Agents, and principals.",
+      "description": "Watch and search local gateway requests, routing, call sources, Agents, and performance.",
       "results": "Requests · {{count}} loaded",
       "empty": "No matching requests",
       "emptyDescription": "Send a model request or adjust the filters."
@@ -497,7 +497,7 @@
       "search": "Search",
       "searchPlaceholder": "Request ID, trace ID, Session, Agent, or model",
       "agent": "Agent ID",
-      "principal": "Authenticated principal",
+      "principal": "Call source",
       "session": "Session ID",
       "project": "Project ID",
       "model": "Model",
@@ -509,12 +509,13 @@
       "to": "To",
       "all": "All",
       "apply": "Apply filters",
-      "reset": "Reset"
+      "reset": "Reset",
+      "advanced": "Advanced filters"
     },
     "columns": {
       "time": "Time",
       "agent": "Agent",
-      "principal": "Principal",
+      "principal": "Call source",
       "model": "Model",
       "provider": "Provider",
       "status": "Status",
@@ -525,7 +526,9 @@
       "requests": "Requests",
       "errors": "Errors",
       "updated": "Updated",
-      "step": "Step"
+      "step": "Step",
+      "route": "Route",
+      "performance": "Performance"
     },
     "captureStates": {
       "not_captured": "Not captured",
@@ -619,7 +622,54 @@
     },
     "loadMore": "Load more",
     "loadFailed": "Unable to load observability data",
-    "unclassified": "Unclassified"
+    "unclassified": "Unclassified",
+    "generation": "Generation",
+    "tpotTitle": "Time per output token (TPOT)",
+    "tpsTitle": "Generation throughput (TPS)",
+    "live": {
+      "connecting": "Connecting live stream",
+      "live": "Live requests connected",
+      "reconnecting": "Reconnecting",
+      "paused": "Live updates paused",
+      "error": "Live connection error",
+      "active": "{{count}} in progress",
+      "pending": "{{count}} new while paused",
+      "pause": "Pause",
+      "resume": "Resume",
+      "phases": {
+        "received": "Received",
+        "authenticated": "Authenticated",
+        "parsed": "Parsed",
+        "routed": "Routed",
+        "preprocessing": "Preprocessing",
+        "upstream_started": "Waiting upstream",
+        "streaming": "Generating",
+        "completed": "Completed"
+      }
+    },
+    "identity": {
+      "playgroundAgent": "Vibe Proxy Playground",
+      "playgroundSource": "Built-in Playground",
+      "unknownSource": "Unknown call source"
+    },
+    "performance": {
+      "total": "Total"
+    },
+    "cache": {
+      "title": "Prompt Cache",
+      "hit": "{{ratio}}% cached",
+      "notReported": "Cache not reported",
+      "notReportedHelp": "The upstream did not provide Prompt Cache usage",
+      "read": "Cache read",
+      "write": "Cache write",
+      "readTokens": "Cache read today",
+      "weightedRatio": "Token-weighted hit ratio",
+      "coverage": "Cache metric coverage",
+      "ratioTitle": "Cache ratio and reporting coverage",
+      "ratioDescription": "Hit ratio is token-weighted; coverage shows whether upstreams reported cache usage.",
+      "volumeTitle": "Cache token volume",
+      "noData": "No Prompt Cache metrics are available for this period."
+    }
   },
   "settings": {
     "title": "Settings",

@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useId, useState } from "react"
-import { Filter, RotateCcw, Search } from "lucide-react"
+import { Filter, RotateCcw, Search, SlidersHorizontal } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
@@ -39,8 +39,15 @@ function rfc3339(value: string): string | undefined {
 export function RequestFilters({ value, onChange }: RequestFiltersProps) {
   const { t } = useTranslation()
   const [draft, setDraft] = useState<RequestQueryFilters>(value)
+  const advancedCount = Object.entries(draft).filter(
+    ([key, filterValue]) => !["q", "status_class"].includes(key) && Boolean(filterValue),
+  ).length
+  const [advancedOpen, setAdvancedOpen] = useState(advancedCount > 0)
 
   useEffect(() => setDraft(value), [value])
+  useEffect(() => {
+    if (advancedCount > 0) setAdvancedOpen(true)
+  }, [advancedCount])
 
   const update = (key: keyof RequestQueryFilters, next: string) => {
     setDraft((current) => ({ ...current, [key]: next }))
@@ -59,7 +66,6 @@ export function RequestFilters({ value, onChange }: RequestFiltersProps) {
     setDraft({})
     onChange({})
   }
-
   return (
     <Card>
       <CardContent className="p-4">
@@ -78,6 +84,20 @@ export function RequestFilters({ value, onChange }: RequestFiltersProps) {
                 />
               </div>
             </div>
+            <div className="w-full space-y-1.5 lg:w-40">
+              <FilterSelect
+                label={t("observability.filters.status")}
+                value={draft.status_class ?? "all"}
+                onChange={(next) => update("status_class", next === "all" ? "" : next)}
+                options={[
+                  ["all", t("observability.filters.all")],
+                  ["2", "2xx"],
+                  ["3", "3xx"],
+                  ["4", "4xx"],
+                  ["5", "5xx"],
+                ]}
+              />
+            </div>
             <Button type="submit">
               <Filter className="h-4 w-4" />
               {t("observability.filters.apply")}
@@ -88,56 +108,55 @@ export function RequestFilters({ value, onChange }: RequestFiltersProps) {
             </Button>
           </div>
 
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            <FilterInput label={t("observability.filters.agent")} value={draft.agent_id} onChange={(next) => update("agent_id", next)} />
-            <FilterInput label={t("observability.filters.principal")} value={draft.principal_name} onChange={(next) => update("principal_name", next)} />
-            <FilterInput label={t("observability.filters.session")} value={draft.session_id} onChange={(next) => update("session_id", next)} />
-            <FilterInput label={t("observability.filters.project")} value={draft.project_id} onChange={(next) => update("project_id", next)} />
-            <FilterInput label={t("observability.filters.model")} value={draft.model} onChange={(next) => update("model", next)} />
-            <FilterInput label={t("observability.filters.provider")} value={draft.provider} onChange={(next) => update("provider", next)} />
+          <details
+            className="group rounded-lg border border-border bg-muted/20 px-3 py-2"
+            open={advancedOpen}
+            onToggle={(event) => setAdvancedOpen(event.currentTarget.open)}
+          >
+            <summary className="flex cursor-pointer list-none items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground">
+              <SlidersHorizontal className="h-4 w-4" />
+              {t("observability.filters.advanced")}
+              {advancedCount > 0 && <span className="rounded-full bg-primary/10 px-2 py-0.5 text-xs text-primary">{advancedCount}</span>}
+            </summary>
+            <div className="mt-3 grid gap-3 border-t border-border pt-3 sm:grid-cols-2 xl:grid-cols-4">
+              <FilterInput label={t("observability.filters.agent")} value={draft.agent_id} onChange={(next) => update("agent_id", next)} />
+              <FilterInput label={t("observability.filters.principal")} value={draft.principal_name} onChange={(next) => update("principal_name", next)} />
+              <FilterInput label={t("observability.filters.session")} value={draft.session_id} onChange={(next) => update("session_id", next)} />
+              <FilterInput label={t("observability.filters.project")} value={draft.project_id} onChange={(next) => update("project_id", next)} />
+              <FilterInput label={t("observability.filters.model")} value={draft.model} onChange={(next) => update("model", next)} />
+              <FilterInput label={t("observability.filters.provider")} value={draft.provider} onChange={(next) => update("provider", next)} />
 
-            <FilterSelect
-              label={t("observability.filters.protocol")}
-              value={draft.protocol ?? "all"}
-              onChange={(next) => update("protocol", next === "all" ? "" : next)}
-              options={[
-                ["all", t("observability.filters.all")],
-                ["openai_chat", "OpenAI Chat"],
-                ["openai_responses", "OpenAI Responses"],
-                ["anthropic_messages", "Anthropic Messages"],
-              ]}
-            />
-            <FilterSelect
-              label={t("observability.filters.status")}
-              value={draft.status_class ?? "all"}
-              onChange={(next) => update("status_class", next === "all" ? "" : next)}
-              options={[
-                ["all", t("observability.filters.all")],
-                ["2", "2xx"],
-                ["3", "3xx"],
-                ["4", "4xx"],
-                ["5", "5xx"],
-              ]}
-            />
-            <FilterSelect
-              label={t("observability.filters.capture")}
-              value={draft.capture_status || "all"}
-              onChange={(next) => update("capture_status", next === "all" ? "" : next)}
-              options={[
-                ["all", t("observability.filters.all")],
-                ...captureStates.map((state) => [state, t(`observability.captureStates.${state}`)] as [string, string]),
-              ]}
-            />
+              <FilterSelect
+                label={t("observability.filters.protocol")}
+                value={draft.protocol ?? "all"}
+                onChange={(next) => update("protocol", next === "all" ? "" : next)}
+                options={[
+                  ["all", t("observability.filters.all")],
+                  ["openai_chat", "OpenAI Chat"],
+                  ["openai_responses", "OpenAI Responses"],
+                  ["anthropic_messages", "Anthropic Messages"],
+                ]}
+              />
+              <FilterSelect
+                label={t("observability.filters.capture")}
+                value={draft.capture_status || "all"}
+                onChange={(next) => update("capture_status", next === "all" ? "" : next)}
+                options={[
+                  ["all", t("observability.filters.all")],
+                  ...captureStates.map((state) => [state, t(`observability.captureStates.${state}`)] as [string, string]),
+                ]}
+              />
 
-            <div className="space-y-1.5">
-              <Label htmlFor="request-from">{t("observability.filters.from")}</Label>
-              <Input id="request-from" type="datetime-local" value={localDateTime(draft.from)} onChange={(event) => update("from", event.target.value)} />
+              <div className="space-y-1.5">
+                <Label htmlFor="request-from">{t("observability.filters.from")}</Label>
+                <Input id="request-from" type="datetime-local" value={localDateTime(draft.from)} onChange={(event) => update("from", event.target.value)} />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="request-to">{t("observability.filters.to")}</Label>
+                <Input id="request-to" type="datetime-local" value={localDateTime(draft.to)} onChange={(event) => update("to", event.target.value)} />
+              </div>
             </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="request-to">{t("observability.filters.to")}</Label>
-              <Input id="request-to" type="datetime-local" value={localDateTime(draft.to)} onChange={(event) => update("to", event.target.value)} />
-            </div>
-          </div>
+          </details>
         </form>
       </CardContent>
     </Card>

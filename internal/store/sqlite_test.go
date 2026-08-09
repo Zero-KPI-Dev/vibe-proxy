@@ -505,6 +505,7 @@ func TestSQLiteProvidesPersistedObservability(t *testing.T) {
 		CompletedAt:   &finishedOne,
 		TTFTMillis:    120,
 		TPOTMillis:    10,
+		TPS:           24,
 		StatusCode:    200,
 		Usage:         types.Usage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15, CacheReadTokens: 8, CacheWriteTokens: 1, CacheMetricsReported: true, CacheHitRatio: 0.8},
 	})
@@ -516,6 +517,7 @@ func TestSQLiteProvidesPersistedObservability(t *testing.T) {
 		CompletedAt:   &finishedTwo,
 		TTFTMillis:    320,
 		TPOTMillis:    30,
+		TPS:           8,
 		StatusCode:    502,
 		Usage:         types.Usage{PromptTokens: 20, CompletionTokens: 8, TotalTokens: 28},
 		Transformation: &telemetry.TransformationSummary{
@@ -548,10 +550,10 @@ func TestSQLiteProvidesPersistedObservability(t *testing.T) {
 	if len(points) != 2 {
 		t.Fatalf("expected two metric buckets, got %+v", points)
 	}
-	if points[0].Requests != 1 || points[0].Errors != 0 || points[0].TTFTP50 != 120 || points[0].TokensCacheRead != 8 || points[0].TokensCacheWrite != 1 || points[0].CacheHitRatio != 0.8 || points[0].CacheCoverage != 1 {
+	if points[0].Requests != 1 || points[0].Errors != 0 || points[0].TTFTP50 != 120 || points[0].TPOTP50 != 10 || points[0].TPSP50 != 24 || points[0].TokensCacheRead != 8 || points[0].TokensCacheWrite != 1 || points[0].CacheHitRatio != 0.8 || points[0].CacheCoverage != 1 {
 		t.Fatalf("unexpected first point: %+v", points[0])
 	}
-	if points[1].Requests != 1 || points[1].Errors != 1 || points[1].TTFTP95 != 320 || points[1].CacheCoverage != 0 {
+	if points[1].Requests != 1 || points[1].Errors != 1 || points[1].TTFTP95 != 320 || points[1].TPOTP95 != 30 || points[1].TPSP95 != 8 || points[1].CacheCoverage != 0 {
 		t.Fatalf("unexpected second point: %+v", points[1])
 	}
 

@@ -22,13 +22,11 @@ import {
   CardDescription,
 } from "@/components/ui/card"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
-import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
 import { EmptyState } from "@/components/empty-state"
 import { TIME_RANGES } from "@/lib/constants"
 import { cn } from "@/lib/utils"
-import { Activity, Gauge, Coins, AlertTriangle, BarChart3 } from "lucide-react"
-import type { MetricPoint } from "@/lib/types"
+import { Activity, Gauge, Coins, BarChart3, Database, Zap } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { ObservabilityNav } from "@/components/observability-nav"
 
@@ -76,7 +74,7 @@ export function ObservabilityPage() {
         <ObservabilityNav />
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
         <MetricCard
           label={t("observability.totalRequests")}
           value={summary?.total_requests ?? 0}
@@ -96,10 +94,22 @@ export function ObservabilityPage() {
           icon={<Coins className="h-4 w-4" />}
         />
         <MetricCard
-          label={t("observability.totalToday")}
-          value={summary?.today_tokens?.total ?? 0}
+          label={t("observability.cache.weightedRatio")}
+          value={`${Math.round((summary?.prompt_cache?.weighted_hit_ratio ?? 0) * 100)}%`}
           loading={loadingSummary}
           icon={<BarChart3 className="h-4 w-4" />}
+        />
+        <MetricCard
+          label={t("observability.cache.readTokens")}
+          value={summary?.today_tokens?.cache_read ?? 0}
+          loading={loadingSummary}
+          icon={<Database className="h-4 w-4" />}
+        />
+        <MetricCard
+          label={t("observability.cache.coverage")}
+          value={`${Math.round((summary?.prompt_cache?.reporting_coverage ?? 0) * 100)}%`}
+          loading={loadingSummary}
+          icon={<Zap className="h-4 w-4" />}
         />
       </div>
 
@@ -107,7 +117,9 @@ export function ObservabilityPage() {
         <TabsList>
           <TabsTrigger value="requests">{t("observability.requestVolume")}</TabsTrigger>
           <TabsTrigger value="latency">{t("observability.latency")}</TabsTrigger>
+          <TabsTrigger value="generation">{t("observability.generation")}</TabsTrigger>
           <TabsTrigger value="tokens">{t("observability.tokenUsage")}</TabsTrigger>
+          <TabsTrigger value="cache">{t("observability.cache.title")}</TabsTrigger>
           <TabsTrigger value="errors">{t("observability.errors")}</TabsTrigger>
         </TabsList>
 
@@ -163,6 +175,57 @@ export function ObservabilityPage() {
               )}
             </CardContent>
           </Card>
+        </TabsContent>
+
+        <TabsContent value="generation">
+          <div className="grid gap-4 xl:grid-cols-2">
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">{t("observability.tpotTitle")}</CardTitle>
+                <CardDescription>{t("observability.percentiles", { range: rangeLabels[range] })}</CardDescription>
+              </CardHeader>
+              <CardContent>
+                {isLoading ? <Skeleton className="h-[280px] w-full" /> : points.length === 0 ? (
+                  <EmptyState title={t("observability.noData")} description={t("observability.noLatencyData")} />
+                ) : (
+                  <ResponsiveContainer width="100%" height={280}>
+                    <LineChart data={points}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#222631" />
+                      <XAxis dataKey="timestamp" tick={{ fontSize: 12, fill: "#8b93a7" }} tickFormatter={(value: string) => new Date(value).toLocaleTimeString(i18n.language, { hour: "2-digit", minute: "2-digit" })} />
+                      <YAxis tick={{ fontSize: 12, fill: "#8b93a7" }} label={{ value: "ms/token", angle: -90, position: "insideLeft", fill: "#8b93a7" }} />
+                      <Tooltip contentStyle={{ background: "#0d0f14", border: "1px solid #222631", borderRadius: "8px", color: "#f5f7fb" }} />
+                      <Legend />
+                      <Line type="monotone" dataKey="tpot_p50" stroke="#38bdf8" name="P50" strokeWidth={2} dot={false} />
+                      <Line type="monotone" dataKey="tpot_p95" stroke="#f59e0b" name="P95" strokeWidth={2} dot={false} />
+                    </LineChart>
+                  </ResponsiveContainer>
+                )}
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">{t("observability.tpsTitle")}</CardTitle>
+                <CardDescription>{t("observability.percentiles", { range: rangeLabels[range] })}</CardDescription>
+              </CardHeader>
+              <CardContent>
+                {isLoading ? <Skeleton className="h-[280px] w-full" /> : points.length === 0 ? (
+                  <EmptyState title={t("observability.noData")} description={t("observability.noLatencyData")} />
+                ) : (
+                  <ResponsiveContainer width="100%" height={280}>
+                    <LineChart data={points}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#222631" />
+                      <XAxis dataKey="timestamp" tick={{ fontSize: 12, fill: "#8b93a7" }} tickFormatter={(value: string) => new Date(value).toLocaleTimeString(i18n.language, { hour: "2-digit", minute: "2-digit" })} />
+                      <YAxis tick={{ fontSize: 12, fill: "#8b93a7" }} label={{ value: "token/s", angle: -90, position: "insideLeft", fill: "#8b93a7" }} />
+                      <Tooltip contentStyle={{ background: "#0d0f14", border: "1px solid #222631", borderRadius: "8px", color: "#f5f7fb" }} />
+                      <Legend />
+                      <Line type="monotone" dataKey="tps_p50" stroke="#22c55e" name="P50" strokeWidth={2} dot={false} />
+                      <Line type="monotone" dataKey="tps_p95" stroke="#a78bfa" name="P95" strokeWidth={2} dot={false} />
+                    </LineChart>
+                  </ResponsiveContainer>
+                )}
+              </CardContent>
+            </Card>
+          </div>
         </TabsContent>
 
         <TabsContent value="latency">
@@ -257,6 +320,57 @@ export function ObservabilityPage() {
           </Card>
         </TabsContent>
 
+        <TabsContent value="cache">
+          <div className="grid gap-4 xl:grid-cols-2">
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">{t("observability.cache.ratioTitle")}</CardTitle>
+                <CardDescription>{t("observability.cache.ratioDescription")}</CardDescription>
+              </CardHeader>
+              <CardContent>
+                {isLoading ? <Skeleton className="h-[280px] w-full" /> : points.length === 0 ? (
+                  <EmptyState title={t("observability.noData")} description={t("observability.cache.noData")} />
+                ) : (
+                  <ResponsiveContainer width="100%" height={280}>
+                    <LineChart data={points}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#222631" />
+                      <XAxis dataKey="timestamp" tick={{ fontSize: 12, fill: "#8b93a7" }} tickFormatter={(value: string) => new Date(value).toLocaleTimeString(i18n.language, { hour: "2-digit", minute: "2-digit" })} />
+                      <YAxis domain={[0, 1]} tick={{ fontSize: 12, fill: "#8b93a7" }} tickFormatter={(value: number) => `${Math.round(value * 100)}%`} />
+                      <Tooltip formatter={(value: number) => `${Math.round(value * 100)}%`} contentStyle={{ background: "#0d0f14", border: "1px solid #222631", borderRadius: "8px", color: "#f5f7fb" }} />
+                      <Legend />
+                      <Line type="monotone" dataKey="cache_hit_ratio" stroke="#22c55e" name={t("observability.cache.weightedRatio")} strokeWidth={2} dot={false} />
+                      <Line type="monotone" dataKey="cache_coverage" stroke="#a78bfa" name={t("observability.cache.coverage")} strokeWidth={2} dot={false} />
+                    </LineChart>
+                  </ResponsiveContainer>
+                )}
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">{t("observability.cache.volumeTitle")}</CardTitle>
+                <CardDescription>{rangeLabels[range]}</CardDescription>
+              </CardHeader>
+              <CardContent>
+                {isLoading ? <Skeleton className="h-[280px] w-full" /> : points.length === 0 ? (
+                  <EmptyState title={t("observability.noData")} description={t("observability.cache.noData")} />
+                ) : (
+                  <ResponsiveContainer width="100%" height={280}>
+                    <BarChart data={points}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#222631" />
+                      <XAxis dataKey="timestamp" tick={{ fontSize: 12, fill: "#8b93a7" }} tickFormatter={(value: string) => new Date(value).toLocaleTimeString(i18n.language, { hour: "2-digit", minute: "2-digit" })} />
+                      <YAxis tick={{ fontSize: 12, fill: "#8b93a7" }} />
+                      <Tooltip contentStyle={{ background: "#0d0f14", border: "1px solid #222631", borderRadius: "8px", color: "#f5f7fb" }} />
+                      <Legend />
+                      <Bar dataKey="tokens_cache_read" fill="#22c55e" name={t("observability.cache.read")} />
+                      <Bar dataKey="tokens_cache_write" fill="#f59e0b" name={t("observability.cache.write")} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+        </TabsContent>
+
         <TabsContent value="errors">
           <Card>
             <CardHeader>
@@ -322,7 +436,7 @@ function MetricCard({
   icon,
 }: {
   label: string
-  value: number
+  value: number | string
   loading: boolean
   icon: React.ReactNode
 }) {
@@ -336,7 +450,7 @@ function MetricCard({
         <div className="flex-1 min-w-0">
           <p className="text-sm text-muted-foreground truncate">{label}</p>
           <p className="text-2xl font-semibold tabular-nums">
-            {loading ? "..." : value.toLocaleString(i18n.language)}
+            {loading ? "..." : typeof value === "number" ? value.toLocaleString(i18n.language) : value}
           </p>
         </div>
       </CardContent>

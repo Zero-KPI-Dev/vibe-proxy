@@ -10,8 +10,9 @@ import (
 func TestRecentStoreTracksActiveAndRecent(t *testing.T) {
 	s := NewRecentStore(2)
 	s.RequestStarted(Event{RequestID: "1", VirtualModel: "a"})
-	if len(s.Active()) != 1 {
-		t.Fatalf("expected active request")
+	s.RequestUpdated(Event{RequestID: "1", VirtualModel: "a", PrincipalName: "local-codex"}, RequestPhaseAuthenticated)
+	if active := s.Active(); len(active) != 1 || active[0].PrincipalName != "local-codex" {
+		t.Fatalf("expected enriched active request: %+v", active)
 	}
 	s.Token(Event{RequestID: "1", VirtualModel: "a", TTFTMillis: 10})
 	s.RequestFinished(Event{RequestID: "1", VirtualModel: "a", StatusCode: 200})

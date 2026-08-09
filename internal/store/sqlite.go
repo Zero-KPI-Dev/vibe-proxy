@@ -452,7 +452,7 @@ func (s *SQLite) MetricsHistory(since time.Time, bucket time.Duration) ([]teleme
 		bucket = 5 * time.Minute
 	}
 	rows, err := s.db.Query(`
-SELECT started_at, status_code, ttft_ms, tpot_ms, prompt_tokens, completion_tokens,
+SELECT started_at, status_code, ttft_ms, tpot_ms, tps, prompt_tokens, completion_tokens,
 	cache_read_tokens, cache_write_tokens, cache_metrics_reported
 FROM request_logs
 WHERE started_at >= ?
@@ -467,6 +467,7 @@ ORDER BY started_at ASC
 		point                 telemetry.MetricPoint
 		ttft                  []int64
 		tpot                  []float64
+		tps                   []float64
 		cachePromptTokens     int64
 		cacheReportedRequests int64
 	}
@@ -478,6 +479,7 @@ ORDER BY started_at ASC
 			statusCode           int
 			ttftMillis           int64
 			tpotMillis           float64
+			tokensPerSecond      float64
 			promptTokens         int64
 			completionTokens     int64
 			cacheReadTokens      int64
@@ -489,6 +491,7 @@ ORDER BY started_at ASC
 			&statusCode,
 			&ttftMillis,
 			&tpotMillis,
+			&tokensPerSecond,
 			&promptTokens,
 			&completionTokens,
 			&cacheReadTokens,
@@ -523,6 +526,9 @@ ORDER BY started_at ASC
 		if tpotMillis > 0 {
 			current.tpot = append(current.tpot, tpotMillis)
 		}
+		if tokensPerSecond > 0 {
+			current.tps = append(current.tps, tokensPerSecond)
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -541,6 +547,8 @@ ORDER BY started_at ASC
 		current.point.TTFTP99 = percentileInt64(current.ttft, 0.99)
 		current.point.TPOTP50 = percentileFloat64(current.tpot, 0.50)
 		current.point.TPOTP95 = percentileFloat64(current.tpot, 0.95)
+		current.point.TPSP50 = percentileFloat64(current.tps, 0.50)
+		current.point.TPSP95 = percentileFloat64(current.tps, 0.95)
 		if current.cachePromptTokens > 0 {
 			current.point.CacheHitRatio = float64(current.point.TokensCacheRead) / float64(current.cachePromptTokens)
 		}

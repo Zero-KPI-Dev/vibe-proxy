@@ -34,6 +34,15 @@ func (s *RecentStore) Token(e Event) {
 	s.active[e.RequestID] = e
 }
 
+func (s *RecentStore) RequestUpdated(e Event, _ RequestPhase) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.active == nil {
+		s.active = map[string]Event{}
+	}
+	s.active[e.RequestID] = e
+}
+
 func (s *RecentStore) RequestFinished(e Event) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
