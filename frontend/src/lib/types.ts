@@ -72,6 +72,7 @@ export interface AliasEntry {
 export interface ClientKey {
   name: string
   key_prefix: string
+  recoverable: boolean
   enabled: boolean
   allowed_models: string[]
   rpm: number
@@ -80,6 +81,11 @@ export interface ClientKey {
 
 export interface ClientKeyCreateResponse {
   key: ClientKey
+  raw_key: string
+}
+
+export interface ClientKeyRevealResponse {
+  name: string
   raw_key: string
 }
 

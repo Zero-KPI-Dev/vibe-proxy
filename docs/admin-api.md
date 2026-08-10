@@ -133,6 +133,36 @@ best-effort capability metadata from the local models.dev catalog:
 Unknown or ambiguous catalog matches remain explicit instead of guessing a capability.
 Provider credentials are used only for the probe and are never returned.
 
+## Client Keys
+
+```text
+GET    /admin/client-keys
+POST   /admin/client-keys
+GET    /admin/client-keys/{name}
+POST   /admin/client-keys/{name}/rotate
+PUT    /admin/client-keys/{name}
+DELETE /admin/client-keys/{name}
+```
+
+The collection response returns the safe prefix and a `recoverable` flag, but
+not the complete key. `POST` creates a key, persists its recoverable local value,
+and returns `raw_key`. An explicit authenticated `GET` for one key returns:
+
+```json
+{
+  "name": "local-agent",
+  "raw_key": "sk-0123456789abcdef"
+}
+```
+
+Create and reveal responses use `Cache-Control: no-store`. A key created by an
+older version without `raw_key` remains valid but the reveal endpoint returns
+HTTP `409` with code `client_key_not_recoverable`. The explicit `rotate` action
+replaces its hash, prefix, and recoverable value while preserving status, model
+policy, and RPM; the old value stops authenticating immediately. Client-key
+values never enter the list endpoint, runtime snapshot, request telemetry,
+Prometheus labels, or application logs.
+
 ## Model Capability Catalog
 
 ```text

@@ -10,6 +10,7 @@ import type {
   AliasEntry,
   ClientKey,
   ClientKeyCreateResponse,
+  ClientKeyRevealResponse,
   MetricsSummary,
   MetricsHistoryResponse,
   ProviderHealthResponse,
@@ -198,6 +199,14 @@ export const aliasApi = {
 // ---- Client Keys ----
 export const clientKeyApi = {
   list: () => request<{ keys: ClientKey[] }>("/admin/client-keys"),
+
+  reveal: (name: string) =>
+    request<ClientKeyRevealResponse>(`/admin/client-keys/${encodeURIComponent(name)}`),
+
+  rotate: (name: string) =>
+    request<ClientKeyCreateResponse>(`/admin/client-keys/${encodeURIComponent(name)}/rotate`, {
+      method: "POST",
+    }),
 
   create: (data: { name: string; allowed_models?: string[]; rpm?: number }) =>
     request<ClientKeyCreateResponse>("/admin/client-keys", {

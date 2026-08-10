@@ -16,6 +16,7 @@ storage:
 client_keys:
   - name: "local-dev"
     key_hash: "$2a$10$AXRkz.6y44ygdJFk6L1/IO0aRVp9zRMfXDJoBCBsroxVac/Lovvz6" # vibe-local-dev-key
+    raw_key: "vibe-local-dev-key"
     key_prefix: vibe-local-d
     enabled: true
     allowed_models: ["*"]

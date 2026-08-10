@@ -1345,8 +1345,28 @@ func TestRuntimeAdminAliasAndClientKeyCRUD(t *testing.T) {
 	keyCreate := adminJSONRequest(http.MethodPost, "/admin/client-keys", `{"name":"agent","allowed_models":["vibe-fast"],"rpm":10}`)
 	keyCreateW := httptest.NewRecorder()
 	s.Routes().ServeHTTP(keyCreateW, keyCreate)
-	if keyCreateW.Code != http.StatusOK || !strings.Contains(keyCreateW.Body.String(), `"raw_key":"sk-`) {
+	var created struct {
+		RawKey string `json:"raw_key"`
+	}
+	if keyCreateW.Code != http.StatusOK || json.Unmarshal(keyCreateW.Body.Bytes(), &created) != nil || !strings.HasPrefix(created.RawKey, "sk-") {
 		t.Fatalf("unexpected client key create response: %d %s", keyCreateW.Code, keyCreateW.Body.String())
+	}
+	if keyCreateW.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("client key create response may be cached: %q", keyCreateW.Header().Get("Cache-Control"))
+	}
+
+	keyList := adminJSONRequest(http.MethodGet, "/admin/client-keys", "")
+	keyListW := httptest.NewRecorder()
+	s.Routes().ServeHTTP(keyListW, keyList)
+	if keyListW.Code != http.StatusOK || !strings.Contains(keyListW.Body.String(), `"recoverable":true`) || strings.Contains(keyListW.Body.String(), created.RawKey) {
+		t.Fatalf("client key list leaked or omitted recoverability metadata: %d %s", keyListW.Code, keyListW.Body.String())
+	}
+
+	keyReveal := adminJSONRequest(http.MethodGet, "/admin/client-keys/agent", "")
+	keyRevealW := httptest.NewRecorder()
+	s.Routes().ServeHTTP(keyRevealW, keyReveal)
+	if keyRevealW.Code != http.StatusOK || keyRevealW.Header().Get("Cache-Control") != "no-store" || !strings.Contains(keyRevealW.Body.String(), created.RawKey) {
+		t.Fatalf("unexpected client key reveal response: %d %s", keyRevealW.Code, keyRevealW.Body.String())
 	}
 
 	keyUpdate := adminJSONRequest(http.MethodPut, "/admin/client-keys/agent", `{"enabled":false,"allowed_models":["*"],"rpm":20}`)
@@ -1354,6 +1374,9 @@ func TestRuntimeAdminAliasAndClientKeyCRUD(t *testing.T) {
 	s.Routes().ServeHTTP(keyUpdateW, keyUpdate)
 	if keyUpdateW.Code != http.StatusOK || s.current().Config.ClientKeys[len(s.current().Config.ClientKeys)-1].Enabled {
 		t.Fatalf("unexpected client key update response: %d %s", keyUpdateW.Code, keyUpdateW.Body.String())
+	}
+	if s.current().Config.ClientKeys[len(s.current().Config.ClientKeys)-1].RawKey != created.RawKey {
+		t.Fatal("client key update discarded the recoverable value")
 	}
 
 	keyDelete := adminJSONRequest(http.MethodDelete, "/admin/client-keys/agent", "")
@@ -1371,6 +1394,57 @@ func TestRuntimeAdminAliasAndClientKeyCRUD(t *testing.T) {
 	}
 	if _, ok := s.current().Config.ModelResolver.Aliases["vibe-fast"]; ok {
 		t.Fatalf("deleted alias still loaded")
+	}
+}
+
+func TestRuntimeAdminLegacyClientKeyCannotBeRevealed(t *testing.T) {
+	t.Setenv("VIBE_PROXY_ADMIN_TOKEN", "admin-token")
+	path := writeAdminTestConfig(t)
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := strings.Replace(string(raw), "client_keys: []", `client_keys:
+  - name: legacy
+    key_hash: "$2a$10$AXRkz.6y44ygdJFk6L1/IO0aRVp9zRMfXDJoBCBsroxVac/Lovvz6"
+    key_prefix: vibe-local-d
+    enabled: true
+    allowed_models: ["*"]
+    rpm: 60`, 1)
+	if err := os.WriteFile(path, []byte(legacy), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.LoadRuntime(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	testPromOnce.Do(func() { testProm = metrics.New() })
+	s := New(path, cfg, metrics.MultiSink{}, testProm)
+
+	listW := httptest.NewRecorder()
+	s.Routes().ServeHTTP(listW, adminJSONRequest(http.MethodGet, "/admin/client-keys", ""))
+	if listW.Code != http.StatusOK || !strings.Contains(listW.Body.String(), `"recoverable":false`) {
+		t.Fatalf("legacy key list metadata = %d %s", listW.Code, listW.Body.String())
+	}
+
+	revealW := httptest.NewRecorder()
+	s.Routes().ServeHTTP(revealW, adminJSONRequest(http.MethodGet, "/admin/client-keys/legacy", ""))
+	if revealW.Code != http.StatusConflict || !strings.Contains(revealW.Body.String(), `"code":"client_key_not_recoverable"`) || strings.Contains(revealW.Body.String(), "$2a$") {
+		t.Fatalf("legacy key reveal response = %d %s", revealW.Code, revealW.Body.String())
+	}
+
+	rotateW := httptest.NewRecorder()
+	s.Routes().ServeHTTP(rotateW, adminJSONRequest(http.MethodPost, "/admin/client-keys/legacy/rotate", ""))
+	var rotated struct {
+		RawKey string `json:"raw_key"`
+	}
+	if rotateW.Code != http.StatusOK || rotateW.Header().Get("Cache-Control") != "no-store" || json.Unmarshal(rotateW.Body.Bytes(), &rotated) != nil || !strings.HasPrefix(rotated.RawKey, "sk-") {
+		t.Fatalf("legacy key rotation response = %d %s", rotateW.Code, rotateW.Body.String())
+	}
+	revealRotatedW := httptest.NewRecorder()
+	s.Routes().ServeHTTP(revealRotatedW, adminJSONRequest(http.MethodGet, "/admin/client-keys/legacy", ""))
+	if revealRotatedW.Code != http.StatusOK || !strings.Contains(revealRotatedW.Body.String(), rotated.RawKey) {
+		t.Fatalf("rotated key was not revealable: %d %s", revealRotatedW.Code, revealRotatedW.Body.String())
 	}
 }
 

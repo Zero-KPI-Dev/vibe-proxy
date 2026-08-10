@@ -66,6 +66,31 @@ Admin API, authentication, desktop bootstrap, and metrics. It defaults to
 `127.0.0.1:8081` and must remain a literal loopback address. The two non-zero
 ports must differ, and changing either listener requires an application restart.
 
+## Client Keys
+
+Client Keys authenticate Agent-facing data-plane requests. Keys created from the
+control plane keep both a bcrypt hash for authentication and a recoverable local
+copy for the explicit **View full key** action:
+
+```yaml
+client_keys:
+  - name: local-agent
+    key_hash: "$2a$10$..."
+    raw_key: sk-0123456789abcdef
+    key_prefix: sk-012345678
+    enabled: true
+    allowed_models: ["*"]
+    rpm: 120
+```
+
+`raw_key` is optional for compatibility. Existing hash-only keys continue to
+authenticate but cannot be recovered because bcrypt is one-way; recreate such a
+key—or use the control plane's regenerate action—to make it viewable. Rotation
+invalidates the old value while preserving the key's policy. The config writer uses atomic replacement and mode
+`0600`. The raw value is never included in list, runtime-snapshot, telemetry,
+metrics, or log responses, and `key_hash` remains the authentication source of
+truth. Do not manually change one without updating the other.
+
 ## Model Capability Catalog
 
 Provider model IDs discovered through `/v1/models` do not normally include whether the

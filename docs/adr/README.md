@@ -73,6 +73,7 @@ Retrospective ADRs must distinguish the original decision date from the recordin
 | [ADR-0009](0009-separate-data-and-control-plane-listeners.md) | Separate public data-plane and loopback control-plane listeners | Accepted | 2026-08-06 |
 | [ADR-0010](0010-control-plane-live-observability-stream.md) | Deliver live request lifecycle events over control-plane SSE | Accepted | 2026-08-09 |
 | [ADR-0011](0011-normalized-input-cache-metrics.md) | Normalize per-request input-cache metrics across providers | Accepted | 2026-08-09 |
+| [ADR-0012](0012-recoverable-local-client-keys.md) | Retain recoverable Client Keys in the private local configuration | Accepted | 2026-08-10 |
 
 ## Template
 

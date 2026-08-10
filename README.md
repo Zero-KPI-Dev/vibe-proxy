@@ -20,7 +20,7 @@ and Wails desktop host. Current capabilities include:
 - provider CRUD, literal/environment credentials, and custom auth headers
 - local models.dev capability catalog with proxy, cache, and offline import support
 - OCR-to-text and Vision fallback for image requests sent to non-Vision models
-- hashed data-plane client keys and a separate desktop management password
+- locally recoverable data-plane client keys with hashed authentication, plus a separate desktop management password
 - atomic configuration reloads
 - local SQLite request summaries, traces, Sessions, optional sanitized payload
   capture, replay, and structural request diffs

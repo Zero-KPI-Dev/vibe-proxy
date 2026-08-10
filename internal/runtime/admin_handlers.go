@@ -267,6 +267,36 @@ func (s *Server) adminAliasesDefaults(w http.ResponseWriter, r *http.Request) {
 
 // ---- Client Keys ----
 
+type clientKeyAdminView struct {
+	Name          string   `json:"name"`
+	KeyPrefix     string   `json:"key_prefix"`
+	Recoverable   bool     `json:"recoverable"`
+	Enabled       bool     `json:"enabled"`
+	AllowedModels []string `json:"allowed_models"`
+	RPM           int      `json:"rpm"`
+	CreatedAt     string   `json:"created_at,omitempty"`
+}
+
+func newClientKeyAdminView(key config.ClientKeyConfig) clientKeyAdminView {
+	return clientKeyAdminView{
+		Name:          key.Name,
+		KeyPrefix:     key.KeyPrefix,
+		Recoverable:   key.RawKey != "",
+		Enabled:       key.Enabled,
+		AllowedModels: key.AllowedModels,
+		RPM:           key.RPM,
+	}
+}
+
+func findClientKey(keys []config.ClientKeyConfig, name string) (config.ClientKeyConfig, bool) {
+	for _, key := range keys {
+		if key.Name == name {
+			return key, true
+		}
+	}
+	return config.ClientKeyConfig{}, false
+}
+
 func (s *Server) adminClientKeysList(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -276,23 +306,9 @@ func (s *Server) adminClientKeysList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	snap := s.current()
-	type keyResp struct {
-		Name          string   `json:"name"`
-		KeyPrefix     string   `json:"key_prefix"`
-		Enabled       bool     `json:"enabled"`
-		AllowedModels []string `json:"allowed_models"`
-		RPM           int      `json:"rpm"`
-		CreatedAt     string   `json:"created_at,omitempty"`
-	}
-	keys := make([]keyResp, 0, len(snap.Config.ClientKeys))
+	keys := make([]clientKeyAdminView, 0, len(snap.Config.ClientKeys))
 	for _, k := range snap.Config.ClientKeys {
-		keys = append(keys, keyResp{
-			Name:          k.Name,
-			KeyPrefix:     k.KeyPrefix,
-			Enabled:       k.Enabled,
-			AllowedModels: k.AllowedModels,
-			RPM:           k.RPM,
-		})
+		keys = append(keys, newClientKeyAdminView(k))
 	}
 	s.writeJSON(w, map[string]any{"keys": keys})
 }
@@ -324,16 +340,43 @@ func (s *Server) adminClientKeysCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.applyRuntimeConfig(next)
+	created, _ := findClientKey(next.ClientKeys, input.Name)
+	w.Header().Set("Cache-Control", "no-store")
 	s.writeJSON(w, map[string]any{
-		"key": map[string]any{
-			"name":           input.Name,
-			"key_prefix":     rawKey[:12],
-			"enabled":        true,
-			"allowed_models": input.AllowedModels,
-			"rpm":            input.RPM,
-		},
+		"key":     newClientKeyAdminView(created),
 		"raw_key": rawKey,
 	})
+}
+
+func (s *Server) adminClientKeyReveal(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.adminAuthorize(w, r) {
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	name := strings.TrimPrefix(r.URL.Path, "/admin/client-keys/")
+	if name == "" {
+		http.Error(w, `{"error":"name is required"}`, http.StatusBadRequest)
+		return
+	}
+	for _, key := range s.current().Config.ClientKeys {
+		if key.Name != name {
+			continue
+		}
+		if key.RawKey == "" {
+			s.writeJSONStatus(w, http.StatusConflict, map[string]string{
+				"code":  "client_key_not_recoverable",
+				"error": "client key was created before recoverable local storage was enabled",
+			})
+			return
+		}
+		s.writeJSON(w, map[string]string{"name": key.Name, "raw_key": key.RawKey})
+		return
+	}
+	s.writeJSONError(w, http.StatusNotFound, "client key not found")
 }
 
 func (s *Server) adminClientKeysUpdate(w http.ResponseWriter, r *http.Request) {
@@ -365,6 +408,37 @@ func (s *Server) adminClientKeysUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	s.applyRuntimeConfig(next)
 	s.writeJSON(w, map[string]bool{"ok": true})
+}
+
+func (s *Server) adminClientKeyRotate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.adminAuthorize(w, r) {
+		return
+	}
+	if s.cfgPath == "" {
+		http.Error(w, `{"error":"config path not writable"}`, http.StatusBadRequest)
+		return
+	}
+	name := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/admin/client-keys/"), "/rotate")
+	if name == "" {
+		http.Error(w, `{"error":"name is required"}`, http.StatusBadRequest)
+		return
+	}
+	next, rawKey, err := config.RotateClientKey(s.cfgPath, name)
+	if err != nil {
+		s.writeJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	s.applyRuntimeConfig(next)
+	rotated, _ := findClientKey(next.ClientKeys, name)
+	w.Header().Set("Cache-Control", "no-store")
+	s.writeJSON(w, map[string]any{
+		"key":     newClientKeyAdminView(rotated),
+		"raw_key": rawKey,
+	})
 }
 
 func (s *Server) adminClientKeysDelete(w http.ResponseWriter, r *http.Request) {
@@ -405,7 +479,14 @@ func (s *Server) adminClientKeys(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) adminClientKeysByName(w http.ResponseWriter, r *http.Request) {
+	relativePath := strings.TrimPrefix(r.URL.Path, "/admin/client-keys/")
+	if r.Method == http.MethodPost && strings.HasSuffix(relativePath, "/rotate") && strings.TrimSuffix(relativePath, "/rotate") != "" {
+		s.adminClientKeyRotate(w, r)
+		return
+	}
 	switch r.Method {
+	case http.MethodGet:
+		s.adminClientKeyReveal(w, r)
 	case http.MethodPut:
 		s.adminClientKeysUpdate(w, r)
 	case http.MethodDelete:

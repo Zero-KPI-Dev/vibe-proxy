@@ -205,7 +205,11 @@ Future secret references:
 - OS keychain
 - Vault-compatible external stores
 
-Secrets may be written through UI, but must not be returned in plaintext by API responses.
+Provider credentials may be written through the UI, but routine snapshots and
+list APIs never return them in plaintext. Local data-plane Client Keys are an
+explicit exception: keys created by the control plane retain a recoverable copy
+in the private local config and return it only from the authenticated per-key
+reveal endpoint. Authentication continues to use the stored bcrypt hash.
 
 ### 7. Pipeline Hooks
 
