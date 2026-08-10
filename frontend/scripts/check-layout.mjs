@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises"
 const layout = await readFile(new URL("../src/layouts/app-layout.tsx", import.meta.url), "utf8")
 const authGate = await readFile(new URL("../src/components/auth-gate.tsx", import.meta.url), "utf8")
 const brandMark = await readFile(new URL("../src/components/brand-mark.tsx", import.meta.url), "utf8")
+const favicon = await readFile(new URL("../public/favicon.svg", import.meta.url), "utf8")
 const requestTable = await readFile(new URL("../src/components/request-table.tsx", import.meta.url), "utf8")
 const badge = await readFile(new URL("../src/components/ui/badge.tsx", import.meta.url), "utf8")
 const css = await readFile(new URL("../src/index.css", import.meta.url), "utf8")
@@ -19,8 +20,12 @@ assert.doesNotMatch(providerForm, /max-h-72 space-y-2 overflow-y-auto/,
   "provider capability rows must not create a nested page scrollbar")
 assert.match(layout, /<BrandMark/, "the application shell must use the shared product mark")
 assert.match(authGate, /<BrandMark/, "the authentication shell must use the shared product mark")
-assert.match(brandMark, /5\.5 10\.5H8[\s\S]*18\.5 16h8[\s\S]*14\.5 7\.5/,
-  "the shared product mark must preserve the Flow Gate geometry")
+assert.match(brandMark, /src="\/favicon\.svg"/,
+  "the shared product mark must render the canonical web icon")
+assert.equal((favicon.match(/<path\b/g) ?? []).length, 3,
+  "the canonical web icon must preserve the three-flow gateway geometry")
+assert.match(favicon, /#59DFB7/,
+  "the canonical web icon must preserve the stable-output accent")
 assert.match(requestTable, /min-w-\[5\.5rem\][\s\S]*flex-col items-start/,
   "request statuses must stack without forcing a wide table column")
 assert.match(badge, /whitespace-nowrap/, "badges must not wrap into vertical labels")
