@@ -1,11 +1,10 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="Vibe Proxy">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
   <defs>
-    <linearGradient id="bg" x1="3" y1="2" x2="29" y2="30" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#7657FF"/><stop offset="1" stop-color="#2B1168"/>
+    <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#9b8cff"/>
+      <stop offset="100%" stop-color="#38bdf8"/>
     </linearGradient>
   </defs>
-  <rect width="32" height="32" rx="8" fill="url(#bg)"/>
-  <path d="M5.5 10.5H8c2.8 0 4 1.8 5.5 3.3l1.5 1.5M5.5 21.5H8c2.8 0 4-1.8 5.5-3.3l1.5-1.5" fill="none" stroke="#EDE9FF" stroke-width="2.7" stroke-linecap="round"/>
-  <path d="M18.5 16h8" fill="none" stroke="#66F0C6" stroke-width="3" stroke-linecap="round"/>
-  <path d="m14.5 7.5 4.2 8.5-4.2 8.5" fill="none" stroke="#FFFFFF" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect width="32" height="32" rx="8" fill="url(#g)"/>
+  <text x="16" y="22" font-family="system-ui" font-weight="700" font-size="18" fill="#fff" text-anchor="middle">V</text>
 </svg>
