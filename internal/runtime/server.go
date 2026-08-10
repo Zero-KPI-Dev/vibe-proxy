@@ -289,6 +289,7 @@ func (s *Server) registerControlRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/admin/config/reload", s.reload)
 	mux.HandleFunc("/admin/desktop", s.desktopSnapshot)
 	mux.HandleFunc("/admin/desktop/preferences", s.desktopPreferences)
+	mux.HandleFunc("/admin/desktop/clipboard", s.desktopClipboard)
 	mux.HandleFunc("/admin/desktop/open-data-dir", s.desktopOpenDataDir)
 	mux.HandleFunc("/admin/desktop/import-config", s.desktopImportConfig)
 	mux.HandleFunc("/admin/config/snapshot", s.adminSnapshot)

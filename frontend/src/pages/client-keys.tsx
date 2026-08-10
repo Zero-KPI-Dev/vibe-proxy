@@ -12,7 +12,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 import { Badge } from "@/components/ui/badge"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent } from "@/components/ui/card"
 import {
   Table,
   TableBody,
@@ -33,8 +33,9 @@ import {
 import { Skeleton } from "@/components/ui/skeleton"
 import { EmptyState } from "@/components/empty-state"
 import { toast } from "sonner"
-import { KeyRound, Plus, Trash2, Copy, Check, Pencil, Eye, RotateCw } from "lucide-react"
+import { KeyRound, Plus, Trash2, Copy, Check, Pencil, RotateCw } from "lucide-react"
 import type { ClientKey } from "@/lib/types"
+import { copyText } from "@/lib/clipboard"
 import { useTranslation } from "react-i18next"
 
 export function ClientKeysPage() {
@@ -50,7 +51,6 @@ export function ClientKeysPage() {
   const [newName, setNewName] = useState("")
   const [newRpm, setNewRpm] = useState("60")
   const [newModels, setNewModels] = useState("")
-  const [createdRawKey, setCreatedRawKey] = useState<string | null>(null)
   const [revealedKey, setRevealedKey] = useState<{ name: string; rawKey: string } | null>(null)
   const [copiedValue, setCopiedValue] = useState<string | null>(null)
   const [editingKey, setEditingKey] = useState<ClientKey | null>(null)
@@ -69,7 +69,8 @@ export function ClientKeysPage() {
           ? newModels.split(",").map((s) => s.trim()).filter(Boolean)
           : undefined,
       })
-      setCreatedRawKey(res.raw_key)
+      setRevealedKey({ name: res.key.name, rawKey: res.raw_key })
+      setShowCreate(false)
       setNewName("")
       setNewRpm("60")
       setNewModels("")
@@ -102,25 +103,42 @@ export function ClientKeysPage() {
     }
   }
 
-  const handleCopyKey = (value: string) => {
-    navigator.clipboard.writeText(value)
-    setCopiedValue(value)
-    setTimeout(() => setCopiedValue((current) => current === value ? null : current), 2000)
-  }
-
-  const handleRevealKey = async (key: ClientKey) => {
+  const revealClientKey = async (key: ClientKey) => {
+    if (revealedKey?.name === key.name) return revealedKey.rawKey
     if (!key.recoverable) {
       toast.error(t("clientKeys.legacyUnavailable"))
-      return
+      return null
     }
     try {
       const result = await revealKey.mutateAsync(key.name)
       setRevealedKey({ name: result.name, rawKey: result.raw_key })
+      return result.raw_key
     } catch (e) {
       toast.error(t("clientKeys.revealFailed", {
         error: e instanceof Error ? e.message : t("common.unknownError"),
       }))
+      return null
     }
+  }
+
+  const handleToggleKey = async (key: ClientKey) => {
+    if (revealedKey?.name === key.name) {
+      setRevealedKey(null)
+      return
+    }
+    await revealClientKey(key)
+  }
+
+  const handleCopyKey = async (key: ClientKey) => {
+    const value = await revealClientKey(key)
+    if (!value) return
+    if (!await copyText(value)) {
+      toast.error(t("clientKeys.copyFailed"))
+      return
+    }
+    setCopiedValue(value)
+    toast.success(t("clientKeys.copied"))
+    setTimeout(() => setCopiedValue((current) => current === value ? null : current), 2000)
   }
 
   const handleRotateKey = async (key: ClientKey) => {
@@ -168,7 +186,7 @@ export function ClientKeysPage() {
             {t("clientKeys.description")}
           </p>
         </div>
-        <Dialog open={showCreate && !createdRawKey} onOpenChange={(o) => { setShowCreate(o); if (!o) setCreatedRawKey(null) }}>
+        <Dialog open={showCreate} onOpenChange={setShowCreate}>
           <DialogTrigger asChild>
             <Button size="sm">
               <Plus className="h-4 w-4 mr-1" />
@@ -227,31 +245,6 @@ export function ClientKeysPage() {
         </Dialog>
       </div>
 
-      {createdRawKey && (
-        <Card className="border-primary/25 bg-primary/[0.04]">
-          <CardContent className="p-4">
-            <p className="text-sm font-medium mb-1">{t("clientKeys.createdKeyTitle")}</p>
-            <p className="text-xs text-muted-foreground mb-3">{t("clientKeys.savedNotice")}</p>
-            <div className="flex items-center gap-2">
-              <code className="flex-1 rounded bg-background px-3 py-2 text-sm font-mono border border-border break-all">
-                {createdRawKey}
-              </code>
-              <Button variant="outline" size="sm" onClick={() => handleCopyKey(createdRawKey)} aria-label={t("clientKeys.copyKey")}>
-                {copiedValue === createdRawKey ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-              </Button>
-            </div>
-            <Button
-              variant="default"
-              size="sm"
-              className="mt-3"
-              onClick={() => { setCreatedRawKey(null); setShowCreate(false) }}
-            >
-              {t("common.done")}
-            </Button>
-          </CardContent>
-        </Card>
-      )}
-
       <Card>
         <CardContent className="p-0">
           {isLoading ? (
@@ -277,7 +270,7 @@ export function ClientKeysPage() {
               <TableHeader>
                 <TableRow>
                   <TableHead>{t("clientKeys.name")}</TableHead>
-                  <TableHead>{t("clientKeys.keyPrefix")}</TableHead>
+                  <TableHead>{t("clientKeys.key")}</TableHead>
                   <TableHead>{t("clientKeys.models")}</TableHead>
                   <TableHead>{t("clientKeys.status")}</TableHead>
                   <TableHead>RPM</TableHead>
@@ -288,8 +281,40 @@ export function ClientKeysPage() {
                 {keys.map((k) => (
                   <TableRow key={k.name}>
                     <TableCell className="font-medium">{k.name}</TableCell>
-                    <TableCell className="font-mono text-xs text-muted-foreground">
-                      {k.key_prefix ? `${k.key_prefix}...` : t("clientKeys.prefixUnavailable")}
+                    <TableCell>
+                      <div className="flex min-w-[16rem] max-w-[34rem] items-center gap-1.5">
+                        <button
+                          type="button"
+                          className="min-w-0 rounded-md px-2 py-1.5 text-left font-mono text-xs text-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                          disabled={revealKey.isPending || rotateKey.isPending}
+                          onClick={() => handleToggleKey(k)}
+                          title={revealedKey?.name === k.name ? t("clientKeys.hide") : t("clientKeys.reveal")}
+                          aria-label={revealedKey?.name === k.name
+                            ? t("clientKeys.hideNamed", { name: k.name })
+                            : t("clientKeys.revealNamed", { name: k.name })}
+                        >
+                          <span className="break-all">
+                            {revealedKey?.name === k.name
+                              ? revealedKey.rawKey
+                              : k.key_prefix
+                                ? `${k.key_prefix.slice(0, 7)}**********`
+                                : t("clientKeys.prefixUnavailable")}
+                          </span>
+                        </button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7 shrink-0"
+                          disabled={!k.recoverable || revealKey.isPending || rotateKey.isPending}
+                          onClick={() => handleCopyKey(k)}
+                          title={t("clientKeys.copyKey")}
+                          aria-label={t("clientKeys.copyNamed", { name: k.name })}
+                        >
+                          {copiedValue && revealedKey?.name === k.name && copiedValue === revealedKey.rawKey
+                            ? <Check className="h-3.5 w-3.5 text-emerald-500" />
+                            : <Copy className="h-3.5 w-3.5" />}
+                        </Button>
+                      </div>
                     </TableCell>
                     <TableCell>
                       {k.allowed_models && k.allowed_models.length > 0 ? (
@@ -311,18 +336,7 @@ export function ClientKeysPage() {
                     <TableCell className="tabular-nums">{k.rpm}</TableCell>
                     <TableCell>
                       <div className="flex items-center gap-1">
-                        {k.recoverable ? (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            disabled={revealKey.isPending || rotateKey.isPending}
-                            onClick={() => handleRevealKey(k)}
-                            title={t("clientKeys.reveal")}
-                            aria-label={t("clientKeys.revealNamed", { name: k.name })}
-                          >
-                            <Eye className="h-3.5 w-3.5" />
-                          </Button>
-                        ) : (
+                        {!k.recoverable && (
                           <Button
                             variant="ghost"
                             size="sm"
@@ -349,33 +363,6 @@ export function ClientKeysPage() {
           )}
         </CardContent>
       </Card>
-
-      <Dialog open={!!revealedKey} onOpenChange={(open) => { if (!open) setRevealedKey(null) }}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>{t("clientKeys.revealTitle", { name: revealedKey?.name })}</DialogTitle>
-            <DialogDescription>{t("clientKeys.revealDescription")}</DialogDescription>
-          </DialogHeader>
-          {revealedKey && (
-            <div className="flex items-center gap-2">
-              <code className="min-w-0 flex-1 break-all rounded-md border border-border bg-muted/40 px-3 py-2.5 font-mono text-sm">
-                {revealedKey.rawKey}
-              </code>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => handleCopyKey(revealedKey.rawKey)}
-                aria-label={t("clientKeys.copyKey")}
-              >
-                {copiedValue === revealedKey.rawKey ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-              </Button>
-            </div>
-          )}
-          <DialogFooter>
-            <Button onClick={() => setRevealedKey(null)}>{t("common.done")}</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
 
       <Dialog open={!!editingKey} onOpenChange={(o) => { if (!o) setEditingKey(null) }}>
         <DialogContent>

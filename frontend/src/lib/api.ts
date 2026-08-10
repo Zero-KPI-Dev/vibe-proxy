@@ -151,6 +151,11 @@ export const desktopApi = {
       method: "PUT",
       body: JSON.stringify({ close_behavior }),
     }),
+  copyText: (text: string) =>
+    request<{ copied: boolean }>("/admin/desktop/clipboard", {
+      method: "POST",
+      body: JSON.stringify({ text }),
+    }),
   openDataDir: () =>
     request<{ opened: boolean }>("/admin/desktop/open-data-dir", { method: "POST" }),
   importConfig: () =>

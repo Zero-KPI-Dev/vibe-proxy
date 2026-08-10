@@ -57,11 +57,14 @@ GET  /admin/desktop
 PUT  /admin/desktop/preferences
 POST /admin/desktop/open-data-dir
 POST /admin/desktop/import-config
+POST /admin/desktop/clipboard
 ```
 
 They expose the platform, close behavior, listen address and safe native
-actions. In CLI mode the snapshot reports desktop controls as unavailable and
-mutating routes return a conflict response.
+actions. The clipboard endpoint accepts `{ "text": "..." }`, copies through
+the native OS clipboard, and never returns the copied value. In CLI mode the
+snapshot reports desktop controls as unavailable and mutating routes return a
+conflict response.
 
 ## Validate Config
 

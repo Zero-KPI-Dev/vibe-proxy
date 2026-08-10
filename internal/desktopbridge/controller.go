@@ -30,6 +30,7 @@ type ImportResult struct {
 type Controller interface {
 	Snapshot() Snapshot
 	SetCloseBehavior(CloseBehavior) error
+	CopyText(string) error
 	OpenDataDir() error
 	ImportConfig(context.Context) (ImportResult, error)
 }
