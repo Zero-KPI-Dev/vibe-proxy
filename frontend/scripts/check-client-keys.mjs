@@ -28,6 +28,15 @@ assert.match(page, /handleToggleKey\(k\)[\s\S]*?revealedKey\.rawKey/,
   "clicking a masked key must reveal it inline")
 assert.match(page, /handleCopyKey\(k\)/,
   "each recoverable key must have an adjacent copy action")
+const copyHandler = page.match(/const handleCopyKey = async[\s\S]*?\n  }\n\n  const handleRotateKey/)?.[0] ?? ""
+assert.doesNotMatch(copyHandler, /setRevealedKey/,
+  "copying a key must not change its masked or revealed display state")
+assert.match(page, /<Table className="table-fixed">[\s\S]*?<colgroup>/,
+  "revealing a long key must not cause the browser to recalculate table columns")
+assert.doesNotMatch(page, /max-w-\[34rem\]/,
+  "the key value must not be constrained to a width that wraps on wide tables")
+assert.match(page, /flex-1 truncate whitespace-nowrap/,
+  "revealing a long key must keep the table row on a single line")
 assert.doesNotMatch(page, /<Dialog open=\{!!revealedKey\}/,
   "revealing a client key must not open a separate dialog")
 assert.match(page, /!k\.recoverable[\s\S]*?handleRotateKey\(k\)/,

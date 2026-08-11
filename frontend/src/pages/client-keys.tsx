@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useRef, useState } from "react"
 import {
   useClientKeys,
   useCreateClientKey,
@@ -52,10 +52,11 @@ export function ClientKeysPage() {
   const [newRpm, setNewRpm] = useState("60")
   const [newModels, setNewModels] = useState("")
   const [revealedKey, setRevealedKey] = useState<{ name: string; rawKey: string } | null>(null)
-  const [copiedValue, setCopiedValue] = useState<string | null>(null)
+  const [copiedKeyName, setCopiedKeyName] = useState<string | null>(null)
   const [editingKey, setEditingKey] = useState<ClientKey | null>(null)
   const [editModels, setEditModels] = useState("")
   const [editRpm, setEditRpm] = useState("")
+  const rawKeyCache = useRef(new Map<string, string>())
 
   const keys = data?.keys ?? []
 
@@ -69,6 +70,7 @@ export function ClientKeysPage() {
           ? newModels.split(",").map((s) => s.trim()).filter(Boolean)
           : undefined,
       })
+      rawKeyCache.current.set(res.key.name, res.raw_key)
       setRevealedKey({ name: res.key.name, rawKey: res.raw_key })
       setShowCreate(false)
       setNewName("")
@@ -97,21 +99,25 @@ export function ClientKeysPage() {
   const handleDelete = async (name: string) => {
     try {
       await deleteKey.mutateAsync(name)
+      rawKeyCache.current.delete(name)
+      setRevealedKey((current) => current?.name === name ? null : current)
+      setCopiedKeyName((current) => current === name ? null : current)
       toast.success(t("clientKeys.deleted", { name }))
     } catch (e) {
       toast.error(t("clientKeys.deleteFailed"))
     }
   }
 
-  const revealClientKey = async (key: ClientKey) => {
-    if (revealedKey?.name === key.name) return revealedKey.rawKey
+  const loadClientKey = async (key: ClientKey) => {
+    const cached = rawKeyCache.current.get(key.name)
+    if (cached) return cached
     if (!key.recoverable) {
       toast.error(t("clientKeys.legacyUnavailable"))
       return null
     }
     try {
       const result = await revealKey.mutateAsync(key.name)
-      setRevealedKey({ name: result.name, rawKey: result.raw_key })
+      rawKeyCache.current.set(result.name, result.raw_key)
       return result.raw_key
     } catch (e) {
       toast.error(t("clientKeys.revealFailed", {
@@ -126,25 +132,27 @@ export function ClientKeysPage() {
       setRevealedKey(null)
       return
     }
-    await revealClientKey(key)
+    const value = await loadClientKey(key)
+    if (value) setRevealedKey({ name: key.name, rawKey: value })
   }
 
   const handleCopyKey = async (key: ClientKey) => {
-    const value = await revealClientKey(key)
+    const value = await loadClientKey(key)
     if (!value) return
     if (!await copyText(value)) {
       toast.error(t("clientKeys.copyFailed"))
       return
     }
-    setCopiedValue(value)
+    setCopiedKeyName(key.name)
     toast.success(t("clientKeys.copied"))
-    setTimeout(() => setCopiedValue((current) => current === value ? null : current), 2000)
+    setTimeout(() => setCopiedKeyName((current) => current === key.name ? null : current), 2000)
   }
 
   const handleRotateKey = async (key: ClientKey) => {
     if (!window.confirm(t("clientKeys.rotateConfirm", { name: key.name }))) return
     try {
       const result = await rotateKey.mutateAsync(key.name)
+      rawKeyCache.current.set(result.key.name, result.raw_key)
       setRevealedKey({ name: result.key.name, rawKey: result.raw_key })
       toast.success(t("clientKeys.rotated", { name: key.name }))
     } catch (e) {
@@ -266,7 +274,15 @@ export function ClientKeysPage() {
               }
             />
           ) : (
-            <Table>
+            <Table className="table-fixed">
+              <colgroup>
+                <col className="w-[12%]" />
+                <col className="w-[56%]" />
+                <col className="w-[7%]" />
+                <col className="w-[7%]" />
+                <col className="w-[7%]" />
+                <col className="w-[11%]" />
+              </colgroup>
               <TableHeader>
                 <TableRow>
                   <TableHead>{t("clientKeys.name")}</TableHead>
@@ -274,7 +290,7 @@ export function ClientKeysPage() {
                   <TableHead>{t("clientKeys.models")}</TableHead>
                   <TableHead>{t("clientKeys.status")}</TableHead>
                   <TableHead>RPM</TableHead>
-                  <TableHead className="w-32">{t("common.actions")}</TableHead>
+                  <TableHead>{t("common.actions")}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -282,13 +298,13 @@ export function ClientKeysPage() {
                   <TableRow key={k.name}>
                     <TableCell className="font-medium">{k.name}</TableCell>
                     <TableCell>
-                      <div className="flex min-w-[16rem] max-w-[34rem] items-center gap-1.5">
+                      <div className="flex w-full min-w-0 items-center gap-1.5">
                         <button
                           type="button"
-                          className="min-w-0 rounded-md px-2 py-1.5 text-left font-mono text-xs text-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                          className="min-w-0 flex-1 truncate whitespace-nowrap rounded-md px-1 py-1.5 text-left font-mono text-[11px] text-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                           disabled={revealKey.isPending || rotateKey.isPending}
                           onClick={() => handleToggleKey(k)}
-                          title={revealedKey?.name === k.name ? t("clientKeys.hide") : t("clientKeys.reveal")}
+                          title={revealedKey?.name === k.name ? revealedKey.rawKey : t("clientKeys.reveal")}
                           aria-label={revealedKey?.name === k.name
                             ? t("clientKeys.hideNamed", { name: k.name })
                             : t("clientKeys.revealNamed", { name: k.name })}
@@ -310,7 +326,7 @@ export function ClientKeysPage() {
                           title={t("clientKeys.copyKey")}
                           aria-label={t("clientKeys.copyNamed", { name: k.name })}
                         >
-                          {copiedValue && revealedKey?.name === k.name && copiedValue === revealedKey.rawKey
+                          {copiedKeyName === k.name
                             ? <Check className="h-3.5 w-3.5 text-emerald-500" />
                             : <Copy className="h-3.5 w-3.5" />}
                         </Button>
@@ -339,7 +355,8 @@ export function ClientKeysPage() {
                         {!k.recoverable && (
                           <Button
                             variant="ghost"
-                            size="sm"
+                            size="icon"
+                            className="h-7 w-7"
                             disabled={rotateKey.isPending}
                             onClick={() => handleRotateKey(k)}
                             title={t("clientKeys.rotate")}
@@ -348,10 +365,24 @@ export function ClientKeysPage() {
                             <RotateCw className="h-3.5 w-3.5" />
                           </Button>
                         )}
-                        <Button variant="ghost" size="sm" onClick={() => openEdit(k)}>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7"
+                          onClick={() => openEdit(k)}
+                          title={t("common.edit")}
+                          aria-label={`${t("common.edit")} ${k.name}`}
+                        >
                           <Pencil className="h-3.5 w-3.5" />
                         </Button>
-                        <Button variant="ghost" size="sm" onClick={() => handleDelete(k.name)}>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7"
+                          onClick={() => handleDelete(k.name)}
+                          title={t("common.delete")}
+                          aria-label={`${t("common.delete")} ${k.name}`}
+                        >
                           <Trash2 className="h-3.5 w-3.5 text-destructive" />
                         </Button>
                       </div>

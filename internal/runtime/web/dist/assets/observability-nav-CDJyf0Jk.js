@@ -1,6 +1,0 @@
-import{c,u as d,a0 as m,j as t,V as l,Q as p,b as u}from"./index-C8gfCzgC.js";import{A as b}from"./activity-B3oD2Wkg.js";/**
- * @license lucide-react v0.460.0 - ISC
- *
- * This source code is licensed under the ISC license.
- * See the LICENSE file in the root directory of this source tree.
- */const h=c("ListTree",[["path",{d:"M21 12h-8",key:"1bmf0i"}],["path",{d:"M21 6H8",key:"1pqkrb"}],["path",{d:"M21 18h-8",key:"1tm79t"}],["path",{d:"M3 6v4c0 1.1.9 2 2 2h3",key:"1ywdgy"}],["path",{d:"M3 10v6c0 1.1.9 2 2 2h3",key:"2wc746"}]]),y=[{href:"/observability",key:"overview",icon:b,exact:!0},{href:"/observability/requests",key:"requests",icon:h,exact:!1},{href:"/observability/sessions",key:"sessions",icon:l,exact:!1}];function f(){const{t:a}=d(),s=m();return t.jsx("nav",{className:"flex w-full gap-1 overflow-x-auto rounded-xl border border-border bg-card p-1 sm:w-fit",children:y.map(({href:e,key:r,icon:o,exact:i})=>{const n=i?s.pathname===e:s.pathname.startsWith(e);return t.jsxs(p,{to:e,className:u("flex items-center gap-2 whitespace-nowrap rounded-lg px-3 py-2 text-sm font-medium transition-colors",n?"bg-primary text-primary-foreground shadow-sm":"text-muted-foreground hover:bg-accent hover:text-accent-foreground"),children:[t.jsx(o,{className:"h-4 w-4"}),a(`observability.navigation.${r}`)]},e)})})}export{h as L,f as O};
