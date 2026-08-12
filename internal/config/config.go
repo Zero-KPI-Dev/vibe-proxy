@@ -83,6 +83,7 @@ type ObservabilityRetentionConfig struct {
 type ClientKeyConfig struct {
 	Name          string   `yaml:"name"`
 	KeyHash       string   `yaml:"key_hash"`
+	RawKey        string   `yaml:"raw_key,omitempty"`
 	KeyPrefix     string   `yaml:"key_prefix,omitempty"`
 	Enabled       bool     `yaml:"enabled"`
 	AllowedModels []string `yaml:"allowed_models"`

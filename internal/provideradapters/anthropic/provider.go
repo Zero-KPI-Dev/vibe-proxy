@@ -315,13 +315,28 @@ func parseUsage(raw json.RawMessage) ir.Usage {
 	return usageFromAnthropic(u)
 }
 func usageFromAnthropic(u anthropicUsage) ir.Usage {
-	r := ir.Usage{PromptTokens: u.InputTokens, CompletionTokens: u.OutputTokens, CacheReadTokens: u.CacheReadInputTokens, CacheWriteTokens: u.CacheCreationInputTokens}
+	cacheRead := pointerValue(u.CacheReadInputTokens)
+	cacheWrite := pointerValue(u.CacheCreationInputTokens)
+	cacheReported := u.CacheReadInputTokens != nil || u.CacheCreationInputTokens != nil
+	r := ir.Usage{
+		PromptTokens:         u.InputTokens + cacheRead + cacheWrite,
+		CompletionTokens:     u.OutputTokens,
+		CacheReadTokens:      cacheRead,
+		CacheWriteTokens:     cacheWrite,
+		CacheMetricsReported: cacheReported,
+	}
 	r.TotalTokens = r.PromptTokens + r.CompletionTokens
-	denom := r.CacheReadTokens + r.CacheWriteTokens
-	if denom > 0 {
-		r.CacheHitRatio = float64(r.CacheReadTokens) / float64(denom)
+	if cacheReported && r.PromptTokens > 0 {
+		r.CacheHitRatio = float64(r.CacheReadTokens) / float64(r.PromptTokens)
 	}
 	return r
+}
+
+func pointerValue(value *int64) int64 {
+	if value == nil {
+		return 0
+	}
+	return *value
 }
 
 type anthropicRequest struct {
@@ -374,10 +389,10 @@ type anthropicResponse struct {
 	Usage      anthropicUsage `json:"usage"`
 }
 type anthropicUsage struct {
-	InputTokens              int64 `json:"input_tokens"`
-	OutputTokens             int64 `json:"output_tokens"`
-	CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
-	CacheCreationInputTokens int64 `json:"cache_creation_input_tokens"`
+	InputTokens              int64  `json:"input_tokens"`
+	OutputTokens             int64  `json:"output_tokens"`
+	CacheReadInputTokens     *int64 `json:"cache_read_input_tokens"`
+	CacheCreationInputTokens *int64 `json:"cache_creation_input_tokens"`
 }
 
 func anthropicToolChoiceFromIR(choice *ir.ToolChoice) *anthropicToolChoice {

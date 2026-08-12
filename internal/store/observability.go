@@ -17,10 +17,11 @@ const requestEventColumns = `
 	started_at, first_token_at, completed_at, COALESCE(ttft_ms, 0), COALESCE(tpot_ms, 0), COALESCE(tps, 0),
 	COALESCE(status_code, 0), COALESCE(error_code, ''), COALESCE(prompt_tokens, 0), COALESCE(completion_tokens, 0),
 	COALESCE(total_tokens, 0), COALESCE(cache_read_tokens, 0), COALESCE(cache_write_tokens, 0),
-	COALESCE(cache_hit_ratio, 0), COALESCE(input_labels_json, ''), COALESCE(output_labels_json, ''), transformation_json,
+	COALESCE(cache_metrics_reported, 0), COALESCE(cache_hit_ratio, 0), COALESCE(input_labels_json, ''), COALESCE(output_labels_json, ''), transformation_json,
 	COALESCE(trace_id, ''), COALESCE(span_id, ''), COALESCE(parent_span_id, ''),
 	COALESCE(session_id, ''), COALESCE(session_name, ''), COALESCE(session_kind, ''), COALESCE(session_path, ''),
-	COALESCE(parent_request_id, ''), COALESCE(principal_name, ''), COALESCE(agent_id, ''),
+	COALESCE(parent_request_id, ''), COALESCE(principal_type, ''), COALESCE(principal_name, ''),
+	COALESCE(client_key_prefix, ''), COALESCE(agent_id, ''),
 	COALESCE(agent_name, ''), COALESCE(agent_version, ''), COALESCE(agent_source, ''), COALESCE(agent_confidence, ''),
 	COALESCE(project_id, ''), COALESCE(duration_ms, 0), COALESCE(initial_provider, ''), COALESCE(initial_model, ''),
 	COALESCE(finish_reason, ''), COALESCE(upstream_request_id, ''), COALESCE(retry_count, 0),
@@ -44,9 +45,10 @@ func scanRequestEvent(scanner rowScanner) (telemetry.Event, error) {
 		&firstTokenAt, &completedAt, &event.TTFTMillis, &event.TPOTMillis, &event.TPS,
 		&event.StatusCode, &event.ErrorCode, &event.Usage.PromptTokens, &event.Usage.CompletionTokens,
 		&event.Usage.TotalTokens, &event.Usage.CacheReadTokens, &event.Usage.CacheWriteTokens,
-		&event.Usage.CacheHitRatio, &event.InputLabelsJSON, &event.OutputLabelsJSON, &transformationJSON,
+		&event.Usage.CacheMetricsReported, &event.Usage.CacheHitRatio, &event.InputLabelsJSON, &event.OutputLabelsJSON, &transformationJSON,
 		&event.TraceID, &event.SpanID, &event.ParentSpanID, &event.SessionID, &event.SessionName,
-		&event.SessionKind, &event.SessionPath, &event.ParentRequestID, &event.PrincipalName,
+		&event.SessionKind, &event.SessionPath, &event.ParentRequestID, &event.PrincipalType, &event.PrincipalName,
+		&event.ClientKeyPrefix,
 		&event.AgentID, &event.AgentName, &event.AgentVersion, &event.AgentSource, &event.AgentConfidence,
 		&event.ProjectID, &event.DurationMillis, &event.InitialProvider, &event.InitialModel,
 		&event.FinishReason, &event.UpstreamRequestID, &event.RetryCount,
@@ -102,8 +104,11 @@ func (s *SQLite) QueryRequests(query telemetry.RequestQuery) (telemetry.RequestP
 	addEqualFilter("session_id", query.SessionID)
 	addEqualFilter("project_id", query.ProjectID)
 	addEqualFilter("channel_id", query.Provider)
-	addEqualFilter("protocol_in", query.Protocol)
 	addEqualFilter("capture_status", query.CaptureStatus)
+	if protocol := strings.TrimSpace(query.Protocol); protocol != "" {
+		where = append(where, "(protocol_in = ? OR protocol_out = ?)")
+		args = append(args, protocol, protocol)
+	}
 	if query.Model != "" {
 		where = append(where, "(virtual_model = ? OR upstream_model = ?)")
 		args = append(args, query.Model, query.Model)
@@ -114,8 +119,8 @@ func (s *SQLite) QueryRequests(query telemetry.RequestQuery) (telemetry.RequestP
 	}
 	if trimmed := strings.TrimSpace(query.Query); trimmed != "" {
 		like := "%" + trimmed + "%"
-		where = append(where, `(request_id LIKE ? OR session_id LIKE ? OR agent_id LIKE ? OR principal_name LIKE ? OR virtual_model LIKE ? OR upstream_model LIKE ?)`)
-		args = append(args, like, like, like, like, like, like)
+		where = append(where, `(request_id LIKE ? OR trace_id LIKE ? OR session_id LIKE ? OR agent_id LIKE ? OR agent_name LIKE ? OR principal_name LIKE ? OR client_key_prefix LIKE ? OR virtual_model LIKE ? OR upstream_model LIKE ? OR channel_id LIKE ?)`)
+		args = append(args, like, like, like, like, like, like, like, like, like, like)
 	}
 	if query.From != nil {
 		where = append(where, "started_at >= ?")

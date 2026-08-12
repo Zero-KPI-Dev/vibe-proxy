@@ -23,10 +23,14 @@ func TestAuthenticateDataPlaneRefreshesLimiterWhenRPMChanges(t *testing.T) {
 		return req
 	}
 	authenticator := NewAuthenticator()
-	key := config.ClientKeyConfig{Name: "agent", KeyHash: string(hash), Enabled: true, AllowedModels: []string{"*"}, RPM: 1}
+	key := config.ClientKeyConfig{Name: "agent", KeyHash: string(hash), KeyPrefix: "sk-test-rate", Enabled: true, AllowedModels: []string{"*"}, RPM: 1}
 
-	if _, gatewayErr := authenticator.AuthenticateDataPlane(request(), []config.ClientKeyConfig{key}); gatewayErr != nil {
+	client, gatewayErr := authenticator.AuthenticateDataPlane(request(), []config.ClientKeyConfig{key})
+	if gatewayErr != nil {
 		t.Fatalf("first request rejected: %+v", gatewayErr)
+	}
+	if client.PrincipalType != PrincipalTypeClientKey || client.Name != "agent" || client.KeyPrefix != "sk-test-rate" {
+		t.Fatalf("authenticated Client Key identity was incomplete: %+v", client)
 	}
 	if _, gatewayErr := authenticator.AuthenticateDataPlane(request(), []config.ClientKeyConfig{key}); gatewayErr == nil || gatewayErr.StatusCode != http.StatusTooManyRequests {
 		t.Fatalf("expected original limiter to be exhausted: %+v", gatewayErr)

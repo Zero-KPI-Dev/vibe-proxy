@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/crypto/bcrypt"
+
 	"github.com/a448582655/vibe-proxy/internal/ir"
 	"github.com/a448582655/vibe-proxy/internal/modelcapability"
 	"github.com/a448582655/vibe-proxy/internal/modelresolver"
@@ -134,6 +136,11 @@ func ValidateRuntime(cfg *RuntimeConfig) []ValidationIssue {
 		}
 		if strings.TrimSpace(clientKey.KeyHash) == "" {
 			issues = append(issues, issue("error", path+".key_hash", "missing_client_key_hash", "Client key hash is required."))
+		} else if clientKey.RawKey != "" && bcrypt.CompareHashAndPassword([]byte(clientKey.KeyHash), []byte(clientKey.RawKey)) != nil {
+			issues = append(issues, issue("error", path+".raw_key", "client_key_raw_hash_mismatch", "Client key raw value does not match its hash."))
+		}
+		if clientKey.RawKey != "" && clientKey.KeyPrefix != clientKeyPrefix(clientKey.RawKey) {
+			issues = append(issues, issue("error", path+".key_prefix", "client_key_prefix_mismatch", "Client key prefix does not match its raw value."))
 		}
 		if len(clientKey.AllowedModels) == 0 {
 			issues = append(issues, issue("error", path+".allowed_models", "missing_allowed_models", "Client key must allow at least one model or wildcard."))

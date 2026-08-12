@@ -12,24 +12,42 @@ var ErrRequestNotFound = errors.New("observability request not found")
 
 type MetricsSummary struct {
 	TotalRequests int64 `json:"total_requests"`
+	TodayRequests int64 `json:"today_requests"`
 	TodayTokens   struct {
 		Prompt     int64 `json:"prompt"`
 		Completion int64 `json:"completion"`
 		Total      int64 `json:"total"`
+		CacheRead  int64 `json:"cache_read"`
+		CacheWrite int64 `json:"cache_write"`
 	} `json:"today_tokens"`
+	PromptCache struct {
+		ReportedRequests     int64   `json:"reported_requests"`
+		EligiblePromptTokens int64   `json:"eligible_prompt_tokens"`
+		WeightedHitRatio     float64 `json:"weighted_hit_ratio"`
+		ReportingCoverage    float64 `json:"reporting_coverage"`
+	} `json:"prompt_cache"`
 }
 
 type MetricPoint struct {
 	Timestamp        time.Time `json:"timestamp"`
 	Requests         int64     `json:"requests"`
 	Errors           int64     `json:"errors"`
+	TTFTAvg          float64   `json:"ttft_avg"`
 	TTFTP50          int64     `json:"ttft_p50"`
 	TTFTP95          int64     `json:"ttft_p95"`
 	TTFTP99          int64     `json:"ttft_p99"`
+	TPOTAvg          float64   `json:"tpot_avg"`
 	TPOTP50          float64   `json:"tpot_p50"`
 	TPOTP95          float64   `json:"tpot_p95"`
+	TPSAvg           float64   `json:"tps_avg"`
+	TPSP50           float64   `json:"tps_p50"`
+	TPSP95           float64   `json:"tps_p95"`
 	TokensPrompt     int64     `json:"tokens_prompt"`
 	TokensCompletion int64     `json:"tokens_completion"`
+	TokensCacheRead  int64     `json:"tokens_cache_read"`
+	TokensCacheWrite int64     `json:"tokens_cache_write"`
+	CacheHitRatio    float64   `json:"cache_hit_ratio"`
+	CacheCoverage    float64   `json:"cache_coverage"`
 }
 
 type RequestQuery struct {

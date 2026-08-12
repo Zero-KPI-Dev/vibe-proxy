@@ -164,11 +164,13 @@ type fakeDesktopController struct {
 	snapshot desktopbridge.Snapshot
 
 	setCloseBehaviorErr error
+	copyTextErr         error
 	openDataDirErr      error
 	importConfigErr     error
 	importConfig        func(context.Context) (desktopbridge.ImportResult, error)
 
 	setCloseBehaviors []desktopbridge.CloseBehavior
+	copiedTexts       []string
 	openDataDirCalls  int
 	importConfigCalls int
 }
@@ -178,6 +180,11 @@ func (f *fakeDesktopController) Snapshot() desktopbridge.Snapshot { return f.sna
 func (f *fakeDesktopController) SetCloseBehavior(behavior desktopbridge.CloseBehavior) error {
 	f.setCloseBehaviors = append(f.setCloseBehaviors, behavior)
 	return f.setCloseBehaviorErr
+}
+
+func (f *fakeDesktopController) CopyText(value string) error {
+	f.copiedTexts = append(f.copiedTexts, value)
+	return f.copyTextErr
 }
 
 func (f *fakeDesktopController) OpenDataDir() error {
@@ -211,6 +218,7 @@ func TestDesktopControllerCLISnapshotIsUnavailableAndNativeActionsConflict(t *te
 	}{
 		{method: http.MethodGet, target: "/admin/desktop", want: http.StatusOK},
 		{method: http.MethodPut, target: "/admin/desktop/preferences", body: `{"close_behavior":"tray"}`, want: http.StatusConflict},
+		{method: http.MethodPost, target: "/admin/desktop/clipboard", body: `{"text":"hello"}`, want: http.StatusConflict},
 		{method: http.MethodPost, target: "/admin/desktop/open-data-dir", want: http.StatusConflict},
 		{method: http.MethodPost, target: "/admin/desktop/import-config", want: http.StatusConflict},
 	} {
@@ -239,10 +247,12 @@ func TestDesktopControllerRoutesAreAuthenticatedAndMethodExact(t *testing.T) {
 	}{
 		{name: "snapshot auth", method: http.MethodGet, target: "/admin/desktop", want: http.StatusUnauthorized},
 		{name: "preferences auth", method: http.MethodPut, target: "/admin/desktop/preferences", want: http.StatusUnauthorized},
+		{name: "clipboard auth", method: http.MethodPost, target: "/admin/desktop/clipboard", want: http.StatusUnauthorized},
 		{name: "open auth", method: http.MethodPost, target: "/admin/desktop/open-data-dir", want: http.StatusUnauthorized},
 		{name: "import auth", method: http.MethodPost, target: "/admin/desktop/import-config", want: http.StatusUnauthorized},
 		{name: "snapshot method", method: http.MethodPost, target: "/admin/desktop", want: http.StatusMethodNotAllowed},
 		{name: "preferences method", method: http.MethodPost, target: "/admin/desktop/preferences", want: http.StatusMethodNotAllowed},
+		{name: "clipboard method", method: http.MethodGet, target: "/admin/desktop/clipboard", want: http.StatusMethodNotAllowed},
 		{name: "open method", method: http.MethodGet, target: "/admin/desktop/open-data-dir", want: http.StatusMethodNotAllowed},
 		{name: "import method", method: http.MethodGet, target: "/admin/desktop/import-config", want: http.StatusMethodNotAllowed},
 	} {
@@ -300,6 +310,40 @@ func TestDesktopControllerOpenDataDirInvokesControllerOnce(t *testing.T) {
 	}
 	if controller.openDataDirCalls != 1 {
 		t.Fatalf("open calls = %d, want 1", controller.openDataDirCalls)
+	}
+}
+
+func TestDesktopClipboardCopiesWithoutEchoingValue(t *testing.T) {
+	controller := &fakeDesktopController{snapshot: desktopbridge.Snapshot{Available: true}}
+	server := newDesktopControllerTestServer(t, controller)
+	const value = "sk-local-secret-value"
+
+	response := httptest.NewRecorder()
+	server.Routes().ServeHTTP(response, adminJSONRequest(http.MethodPost, "/admin/desktop/clipboard", `{"text":"`+value+`"}`))
+	if response.Code != http.StatusOK {
+		t.Fatalf("clipboard status = %d, want 200: %s", response.Code, response.Body.String())
+	}
+	if len(controller.copiedTexts) != 1 || controller.copiedTexts[0] != value {
+		t.Fatalf("copied texts = %q, want one exact value", controller.copiedTexts)
+	}
+	if strings.Contains(response.Body.String(), value) || response.Body.String() != "{\"copied\":true}\n" {
+		t.Fatalf("clipboard response leaked value or changed contract: %s", response.Body.String())
+	}
+}
+
+func TestDesktopClipboardRejectsInvalidInput(t *testing.T) {
+	controller := &fakeDesktopController{snapshot: desktopbridge.Snapshot{Available: true}}
+	server := newDesktopControllerTestServer(t, controller)
+
+	for _, body := range []string{`{}`, `{"text":""}`, `{"text":"ok","extra":true}`, `{"text":"ok"}{"text":"extra"}`} {
+		response := httptest.NewRecorder()
+		server.Routes().ServeHTTP(response, adminJSONRequest(http.MethodPost, "/admin/desktop/clipboard", body))
+		if response.Code != http.StatusBadRequest {
+			t.Fatalf("body %s: status = %d, want 400: %s", body, response.Code, response.Body.String())
+		}
+	}
+	if len(controller.copiedTexts) != 0 {
+		t.Fatalf("invalid input reached clipboard controller: %q", controller.copiedTexts)
 	}
 }
 
@@ -375,6 +419,7 @@ func TestDesktopControllerErrorsReturnGenericJSON(t *testing.T) {
 	controller := &fakeDesktopController{
 		snapshot:            desktopbridge.Snapshot{Available: true},
 		setCloseBehaviorErr: errors.New(secret),
+		copyTextErr:         errors.New(secret),
 		openDataDirErr:      errors.New(secret),
 		importConfigErr:     errors.New(secret),
 	}
@@ -387,6 +432,7 @@ func TestDesktopControllerErrorsReturnGenericJSON(t *testing.T) {
 		body   string
 	}{
 		{name: "preferences", method: http.MethodPut, target: "/admin/desktop/preferences", body: `{"close_behavior":"ask"}`},
+		{name: "clipboard", method: http.MethodPost, target: "/admin/desktop/clipboard", body: `{"text":"secret"}`},
 		{name: "open", method: http.MethodPost, target: "/admin/desktop/open-data-dir"},
 		{name: "import", method: http.MethodPost, target: "/admin/desktop/import-config"},
 	} {

@@ -10,6 +10,7 @@ import type {
   AliasEntry,
   ClientKey,
   ClientKeyCreateResponse,
+  ClientKeyRevealResponse,
   MetricsSummary,
   MetricsHistoryResponse,
   ProviderHealthResponse,
@@ -150,6 +151,11 @@ export const desktopApi = {
       method: "PUT",
       body: JSON.stringify({ close_behavior }),
     }),
+  copyText: (text: string) =>
+    request<{ copied: boolean }>("/admin/desktop/clipboard", {
+      method: "POST",
+      body: JSON.stringify({ text }),
+    }),
   openDataDir: () =>
     request<{ opened: boolean }>("/admin/desktop/open-data-dir", { method: "POST" }),
   importConfig: () =>
@@ -198,6 +204,14 @@ export const aliasApi = {
 // ---- Client Keys ----
 export const clientKeyApi = {
   list: () => request<{ keys: ClientKey[] }>("/admin/client-keys"),
+
+  reveal: (name: string) =>
+    request<ClientKeyRevealResponse>(`/admin/client-keys/${encodeURIComponent(name)}`),
+
+  rotate: (name: string) =>
+    request<ClientKeyCreateResponse>(`/admin/client-keys/${encodeURIComponent(name)}/rotate`, {
+      method: "POST",
+    }),
 
   create: (data: { name: string; allowed_models?: string[]; rpm?: number }) =>
     request<ClientKeyCreateResponse>("/admin/client-keys", {

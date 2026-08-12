@@ -60,7 +60,7 @@ func (p Provider) ParseUnary(ctx context.Context, resp *http.Response) (*ir.Resp
 	if err := json.NewDecoder(resp.Body).Decode(&cr); err != nil {
 		return nil, ir.GatewayError{StatusCode: 502, Kind: "upstream_error", Code: "invalid_upstream_response", Message: "Upstream returned an invalid response."}
 	}
-	out := &ir.Response{ID: cr.ID, Model: cr.Model, Usage: ir.Usage{PromptTokens: cr.Usage.PromptTokens, CompletionTokens: cr.Usage.CompletionTokens, TotalTokens: cr.Usage.TotalTokens}}
+	out := &ir.Response{ID: cr.ID, Model: cr.Model, Usage: usageFromOpenAI(cr.Usage)}
 	if len(cr.Choices) > 0 {
 		out.StopReason = cr.Choices[0].FinishReason
 		out.Messages = []ir.Message{toIRMessage(cr.Choices[0].Message)}
@@ -138,7 +138,7 @@ func (p Provider) ParseStream(ctx context.Context, resp *http.Response) (<-chan 
 				}
 			}
 			if chunk.Usage.TotalTokens > 0 {
-				u := ir.Usage{PromptTokens: chunk.Usage.PromptTokens, CompletionTokens: chunk.Usage.CompletionTokens, TotalTokens: chunk.Usage.TotalTokens}
+				u := usageFromOpenAI(chunk.Usage)
 				if !emitStreamEvent(ctx, out, ir.StreamEvent{Type: ir.EventUsageDelta, Time: time.Now(), Usage: &u, Raw: []byte(data)}) {
 					return
 				}
@@ -306,9 +306,33 @@ type streamChunk struct {
 	Usage usage `json:"usage"`
 }
 type usage struct {
-	PromptTokens     int64 `json:"prompt_tokens"`
-	CompletionTokens int64 `json:"completion_tokens"`
-	TotalTokens      int64 `json:"total_tokens"`
+	PromptTokens       int64               `json:"prompt_tokens"`
+	CompletionTokens   int64               `json:"completion_tokens"`
+	TotalTokens        int64               `json:"total_tokens"`
+	PromptTokenDetails *promptTokenDetails `json:"prompt_tokens_details"`
+}
+
+type promptTokenDetails struct {
+	CachedTokens *int64 `json:"cached_tokens"`
+}
+
+func usageFromOpenAI(value usage) ir.Usage {
+	result := ir.Usage{
+		PromptTokens:     value.PromptTokens,
+		CompletionTokens: value.CompletionTokens,
+		TotalTokens:      value.TotalTokens,
+	}
+	if value.PromptTokenDetails != nil && value.PromptTokenDetails.CachedTokens != nil {
+		result.CacheMetricsReported = true
+		result.CacheReadTokens = *value.PromptTokenDetails.CachedTokens
+		if result.PromptTokens > 0 {
+			result.CacheHitRatio = float64(result.CacheReadTokens) / float64(result.PromptTokens)
+		}
+	}
+	if result.TotalTokens == 0 {
+		result.TotalTokens = result.PromptTokens + result.CompletionTokens
+	}
+	return result
 }
 
 func openAIToolChoice(choice *ir.ToolChoice) any {

@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestUpsertClientKeyPersistsRecoverablePrefix(t *testing.T) {
+func TestUpsertClientKeyPersistsRecoverableValueAndPrefix(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte("version: vibeproxy.io/v1alpha1\nclient_keys: []\nproviders: {}\nmodels:\n  allow_raw: true\n  aliases: {}\n"), 0600); err != nil {
 		t.Fatal(err)
@@ -16,15 +16,45 @@ func TestUpsertClientKeyPersistsRecoverablePrefix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rawKey) < 12 || len(cfg.ClientKeys) != 1 || cfg.ClientKeys[0].KeyPrefix != rawKey[:12] {
-		t.Fatalf("client key prefix was not preserved: raw=%q config=%+v", rawKey, cfg.ClientKeys)
+	if len(rawKey) < 12 || len(cfg.ClientKeys) != 1 || cfg.ClientKeys[0].RawKey != rawKey || cfg.ClientKeys[0].KeyPrefix != rawKey[:12] {
+		t.Fatalf("recoverable client key was not preserved: raw=%q config=%+v", rawKey, cfg.ClientKeys)
 	}
 	written, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(written), "key_prefix: "+rawKey[:12]) || strings.Contains(string(written), rawKey+"\n") {
+	if !strings.Contains(string(written), "raw_key: "+rawKey) || !strings.Contains(string(written), "key_prefix: "+rawKey[:12]) {
 		t.Fatalf("unexpected persisted client key: %s", written)
+	}
+}
+
+func TestRotateClientKeyMakesLegacyKeyRecoverable(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	legacy := `version: vibeproxy.io/v1alpha1
+client_keys:
+  - name: legacy
+    key_hash: "$2a$10$AXRkz.6y44ygdJFk6L1/IO0aRVp9zRMfXDJoBCBsroxVac/Lovvz6"
+    key_prefix: vibe-local-d
+    enabled: true
+    allowed_models: ["*"]
+    rpm: 60
+providers: {}
+models:
+  allow_raw: true
+  aliases: {}
+`
+	if err := os.WriteFile(path, []byte(legacy), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, rawKey, err := RotateClientKey(path, "legacy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.ClientKeys) != 1 || cfg.ClientKeys[0].RawKey != rawKey || cfg.ClientKeys[0].KeyPrefix != rawKey[:12] {
+		t.Fatalf("rotated key was not recoverable: raw=%q config=%+v", rawKey, cfg.ClientKeys)
+	}
+	if !cfg.ClientKeys[0].Enabled || cfg.ClientKeys[0].RPM != 60 || len(cfg.ClientKeys[0].AllowedModels) != 1 || cfg.ClientKeys[0].AllowedModels[0] != "*" {
+		t.Fatalf("rotation changed client-key policy: %+v", cfg.ClientKeys[0])
 	}
 }
 
@@ -44,6 +74,42 @@ func TestSaveRawConfigRejectsInvalidRuntimeWithoutReplacingFile(t *testing.T) {
 	}
 	if string(written) != original {
 		t.Fatalf("invalid config replaced the active file:\n%s", written)
+	}
+}
+
+func TestSaveRawConfigRejectsInconsistentRecoverableKeyWithoutReplacingFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	original := "version: vibeproxy.io/v1alpha1\nclient_keys: []\nproviders: {}\nmodels:\n  allow_raw: true\n  aliases: {}\n"
+	if err := os.WriteFile(path, []byte(original), 0600); err != nil {
+		t.Fatal(err)
+	}
+	hash, err := hashKey("sk-authenticated-value")
+	if err != nil {
+		t.Fatal(err)
+	}
+	invalid := `version: vibeproxy.io/v1alpha1
+client_keys:
+  - name: broken
+    key_hash: "` + hash + `"
+    raw_key: sk-different-value
+    key_prefix: sk-different
+    enabled: true
+    allowed_models: ["*"]
+    rpm: 60
+providers: {}
+models:
+  allow_raw: true
+  aliases: {}
+`
+	if _, err := SaveRawConfig(path, invalid); err == nil {
+		t.Fatal("expected inconsistent recoverable key to be rejected")
+	}
+	written, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(written) != original {
+		t.Fatalf("inconsistent recoverable key replaced active config:\n%s", written)
 	}
 }
 

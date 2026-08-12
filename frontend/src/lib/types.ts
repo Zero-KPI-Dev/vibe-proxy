@@ -72,6 +72,7 @@ export interface AliasEntry {
 export interface ClientKey {
   name: string
   key_prefix: string
+  recoverable: boolean
   enabled: boolean
   allowed_models: string[]
   rpm: number
@@ -83,6 +84,11 @@ export interface ClientKeyCreateResponse {
   raw_key: string
 }
 
+export interface ClientKeyRevealResponse {
+  name: string
+  raw_key: string
+}
+
 // ---- Telemetry / Requests ----
 export interface Usage {
   prompt_tokens: number
@@ -90,6 +96,7 @@ export interface Usage {
   total_tokens: number
   cache_read_tokens?: number
   cache_write_tokens?: number
+  cache_metrics_reported?: boolean
   cache_hit_ratio?: number
 }
 
@@ -114,7 +121,9 @@ export interface RequestEvent {
   session_kind?: string
   session_path?: string
   parent_request_id?: string
+  principal_type?: "client_key" | "internal" | "unknown" | string
   principal_name?: string
+  client_key_prefix?: string
   client_name: string
   agent_id: string
   agent_name?: string
@@ -344,12 +353,21 @@ export interface DeleteRequestContentResponse {
 // ---- Metrics ----
 export interface MetricsSummary {
   total_requests: number
+  today_requests: number
   active_providers: number
   total_models: number
   today_tokens: {
     prompt: number
     completion: number
     total: number
+    cache_read: number
+    cache_write: number
+  }
+  prompt_cache: {
+    reported_requests: number
+    eligible_prompt_tokens: number
+    weighted_hit_ratio: number
+    reporting_coverage: number
   }
 }
 
@@ -357,13 +375,49 @@ export interface MetricPoint {
   timestamp: string
   requests: number
   errors: number
+  ttft_avg: number
   ttft_p50: number
   ttft_p95: number
   ttft_p99: number
+  tpot_avg: number
   tpot_p50: number
   tpot_p95: number
+  tps_avg: number
+  tps_p50: number
+  tps_p95: number
   tokens_prompt: number
   tokens_completion: number
+  tokens_cache_read: number
+  tokens_cache_write: number
+  cache_hit_ratio: number
+  cache_coverage: number
+}
+
+export type LiveRequestKind = "started" | "updated" | "first_token" | "progress" | "finished" | "failed"
+
+export type RequestPhase =
+  | "received"
+  | "authenticated"
+  | "parsed"
+  | "routed"
+  | "preprocessing"
+  | "upstream_started"
+  | "streaming"
+  | "completed"
+
+export interface LiveRequestEvent {
+  id: number
+  kind: LiveRequestKind
+  phase: RequestPhase
+  emitted_at: string
+  request: RequestEvent
+}
+
+export interface LiveStreamMeta {
+  epoch: string
+  oldest_id: number
+  latest_id: number
+  replay_gap: boolean
 }
 
 export interface MetricsHistoryResponse {

@@ -20,7 +20,7 @@ and Wails desktop host. Current capabilities include:
 - provider CRUD, literal/environment credentials, and custom auth headers
 - local models.dev capability catalog with proxy, cache, and offline import support
 - OCR-to-text and Vision fallback for image requests sent to non-Vision models
-- hashed data-plane client keys and a separate desktop management password
+- locally recoverable data-plane client keys with hashed authentication, plus a separate desktop management password
 - atomic configuration reloads
 - local SQLite request summaries, traces, Sessions, optional sanitized payload
   capture, replay, and structural request diffs
@@ -135,6 +135,15 @@ guess a Session from an API key or User-Agent. Request diffs compare available
 canonical structures and do not infer semantic equivalence. External OTLP or
 hosted observability export is not required and, if added later, will remain an
 explicit opt-in.
+
+### Optional Prometheus and Grafana
+
+The embedded dashboard remains SQLite-backed and requires no external services.
+For users who already run an observability stack, vibe-proxy also exposes
+low-cardinality operational metrics from the loopback control plane and ships a
+same-host Prometheus scrape example plus an importable Grafana dashboard. See
+[`docs/prometheus-grafana.md`](docs/prometheus-grafana.md) for metric semantics,
+cache-ratio formulas, the network boundary, and setup instructions.
 
 ## Download a Release
 

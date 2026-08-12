@@ -2,6 +2,7 @@ import { User, Bot, Copy, Check, FileImage, BrainCircuit, ChevronDown } from "lu
 import { useState } from "react"
 import { useTranslation } from "react-i18next"
 import { cn } from "@/lib/utils"
+import { copyText } from "@/lib/clipboard"
 import { Button } from "@/components/ui/button"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
@@ -18,8 +19,8 @@ export function ChatMessage({ role, content, reasoning = "", images = [] }: Chat
   const { t } = useTranslation()
   const [copied, setCopied] = useState(false)
 
-  const handleCopy = () => {
-    navigator.clipboard.writeText(content)
+  const handleCopy = async () => {
+    if (!await copyText(content)) return
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
   }

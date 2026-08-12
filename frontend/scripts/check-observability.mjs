@@ -2,10 +2,13 @@ import assert from "node:assert/strict"
 import { readFile } from "node:fs/promises"
 
 const source = (path) => readFile(new URL(path, import.meta.url), "utf8")
-const [app, api, hooks, requests, sessions, details, filters, timeline, diff, table, en, zhCN] = await Promise.all([
+const [app, api, hooks, liveHook, liveStream, metrics, requests, sessions, details, filters, timeline, diff, table, en, zhCN] = await Promise.all([
   source("../src/App.tsx"),
   source("../src/lib/api.ts"),
   source("../src/hooks/use-requests.ts"),
+  source("../src/hooks/use-live-requests.ts"),
+  source("../src/lib/live-stream.ts"),
+  source("../src/pages/observability.tsx"),
   source("../src/pages/requests.tsx"),
   source("../src/pages/sessions.tsx"),
   source("../src/pages/request-detail.tsx"),
@@ -43,7 +46,14 @@ for (const parameter of [
 }
 
 assert.match(hooks, /useInfiniteQuery/, "cursor pagination must use an infinite query")
+assert.match(liveStream, /\/admin\/observability\/live/, "live traffic must consume the authenticated SSE endpoint")
+assert.match(liveStream, /Last-Event-ID/, "live traffic must resume from the last observed event")
+assert.match(liveStream, /X-Vibe-Stream-Epoch/, "live traffic must send the broker epoch when resuming")
+assert.match(liveStream, /stream\.meta/, "live traffic must parse broker epoch and replay metadata")
+assert.match(liveHook, /replay_gap[\s\S]*lastEventId\.current = 0/, "live traffic must reset stale cursors after restart or replay gaps")
+assert.match(liveHook, /pause[\s\S]*resume[\s\S]*pendingCount/, "live traffic must support pausing without losing buffered updates")
 assert.match(requests, /RequestFilters/, "requests page must render all request filters")
+assert.match(requests, /useLiveRequests/, "requests page must merge the live lifecycle stream")
 assert.match(sessions, /session_id/, "sessions page must show explicit Session identity")
 assert.match(sessions, /principal_name/, "sessions page must keep principal separate from Agent")
 assert.match(details, /summary[\s\S]*timeline[\s\S]*request[\s\S]*processing[\s\S]*response[\s\S]*changes[\s\S]*metadata/i,
@@ -56,6 +66,15 @@ assert.match(filters, /capture_status/, "filters must expose capture state")
 assert.match(timeline, /observations/, "timeline must render gateway observations")
 assert.match(diff, /base_id/, "diff UI must support a manual base request")
 assert.match(table, /agent_id[\s\S]*principal_name/, "request rows must keep Agent and principal separate")
+assert.match(table, /client_key_prefix/, "request rows must identify the client key without exposing the secret")
+assert.match(table, /cache_metrics_reported[\s\S]*cache_hit_ratio/, "request rows must distinguish unreported cache data from a zero hit ratio")
+assert.match(details, /vibe-proxy-playground[\s\S]*playgroundAgent/, "the built-in playground must have an explicit Agent identity")
+for (const metric of ["ttft_avg", "tpot_avg", "tpot_p50", "tpot_p95", "tps_avg", "tps_p50", "tps_p95", "cache_hit_ratio", "cache_coverage"]) {
+  assert.ok(metrics.includes(metric), `metrics UI must render ${metric}`)
+}
+assert.match(metrics, /formatMetricValue[\s\S]*maximumFractionDigits/,
+  "floating-point chart values must use bounded locale-aware precision")
+assert.match(metrics, /formatMetricTimestamp/, "metric tooltips must localize timestamps")
 
 const captureStates = ["not_captured", "captured", "redacted", "truncated", "expired", "dropped", "missing"]
 for (const state of captureStates) {

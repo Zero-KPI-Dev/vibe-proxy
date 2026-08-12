@@ -4,6 +4,7 @@ package wailsapp
 
 import (
 	"errors"
+	"sync"
 
 	"github.com/a448582655/vibe-proxy/desktop/app"
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -11,11 +12,14 @@ import (
 
 type nativeSystem struct {
 	application *application.App
+	clipboardMu sync.Mutex
 }
 
 var _ app.System = (*nativeSystem)(nil)
 
 func (s *nativeSystem) CopyText(value string) error {
+	s.clipboardMu.Lock()
+	defer s.clipboardMu.Unlock()
 	if ok := s.application.Clipboard.SetText(value); !ok {
 		return errors.New("set native clipboard text")
 	}

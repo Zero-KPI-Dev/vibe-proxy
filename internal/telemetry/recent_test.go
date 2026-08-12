@@ -10,8 +10,9 @@ import (
 func TestRecentStoreTracksActiveAndRecent(t *testing.T) {
 	s := NewRecentStore(2)
 	s.RequestStarted(Event{RequestID: "1", VirtualModel: "a"})
-	if len(s.Active()) != 1 {
-		t.Fatalf("expected active request")
+	s.RequestUpdated(Event{RequestID: "1", VirtualModel: "a", PrincipalName: "local-codex"}, RequestPhaseAuthenticated)
+	if active := s.Active(); len(active) != 1 || active[0].PrincipalName != "local-codex" {
+		t.Fatalf("expected enriched active request: %+v", active)
 	}
 	s.Token(Event{RequestID: "1", VirtualModel: "a", TTFTMillis: 10})
 	s.RequestFinished(Event{RequestID: "1", VirtualModel: "a", StatusCode: 200})
@@ -34,5 +35,15 @@ func TestTrackerRecordsTotalDuration(t *testing.T) {
 	event := tracker.Finish(200, types.Usage{}, "")
 	if event.CompletedAt == nil || event.DurationMillis < 20 {
 		t.Fatalf("total duration was not recorded: %+v", event)
+	}
+}
+
+func TestTrackerTPOTUsesReportedCompletionTokens(t *testing.T) {
+	tracker := NewTracker(Event{RequestID: "tpot", StartedAt: time.Now().Add(-time.Second)}, nil)
+	tracker.MarkToken("one transport delta containing many tokens")
+	time.Sleep(time.Millisecond)
+	event := tracker.Finish(200, types.Usage{CompletionTokens: 10, TotalTokens: 10}, "")
+	if event.TPOTMillis <= 0 {
+		t.Fatalf("TPOT should use 10 reported tokens rather than one delta: %+v", event)
 	}
 }

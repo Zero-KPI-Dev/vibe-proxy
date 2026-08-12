@@ -56,6 +56,10 @@ func (c *desktopController) SetCloseBehavior(behavior desktopbridge.CloseBehavio
 	return c.host.setCloseBehavior(behavior)
 }
 
+func (c *desktopController) CopyText(value string) error {
+	return c.host.system.CopyText(value)
+}
+
 func (c *desktopController) OpenDataDir() error {
 	return c.host.system.OpenDirectory(c.host.paths.DataDir)
 }

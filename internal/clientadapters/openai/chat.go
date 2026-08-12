@@ -269,7 +269,11 @@ func stringSlice(v any) []string {
 	}
 }
 func openAIUsage(u ir.Usage) map[string]any {
-	return map[string]any{"prompt_tokens": u.PromptTokens, "completion_tokens": u.CompletionTokens, "total_tokens": u.TotalTokens}
+	result := map[string]any{"prompt_tokens": u.PromptTokens, "completion_tokens": u.CompletionTokens, "total_tokens": u.TotalTokens}
+	if u.CacheMetricsReported {
+		result["prompt_tokens_details"] = map[string]any{"cached_tokens": u.CacheReadTokens}
+	}
+	return result
 }
 func mergeStreamUsage(a, b ir.Usage) ir.Usage {
 	if b.PromptTokens != 0 {
@@ -290,7 +294,10 @@ func mergeStreamUsage(a, b ir.Usage) ir.Usage {
 	if b.CacheWriteTokens != 0 {
 		a.CacheWriteTokens = b.CacheWriteTokens
 	}
-	if b.CacheHitRatio != 0 {
+	if b.CacheMetricsReported {
+		a.CacheMetricsReported = true
+	}
+	if b.CacheHitRatio != 0 || b.CacheMetricsReported {
 		a.CacheHitRatio = b.CacheHitRatio
 	}
 	if a.TotalTokens == 0 {

@@ -57,11 +57,14 @@ GET  /admin/desktop
 PUT  /admin/desktop/preferences
 POST /admin/desktop/open-data-dir
 POST /admin/desktop/import-config
+POST /admin/desktop/clipboard
 ```
 
 They expose the platform, close behavior, listen address and safe native
-actions. In CLI mode the snapshot reports desktop controls as unavailable and
-mutating routes return a conflict response.
+actions. The clipboard endpoint accepts `{ "text": "..." }`, copies through
+the native OS clipboard, and never returns the copied value. In CLI mode the
+snapshot reports desktop controls as unavailable and mutating routes return a
+conflict response.
 
 ## Validate Config
 
@@ -132,6 +135,36 @@ best-effort capability metadata from the local models.dev catalog:
 
 Unknown or ambiguous catalog matches remain explicit instead of guessing a capability.
 Provider credentials are used only for the probe and are never returned.
+
+## Client Keys
+
+```text
+GET    /admin/client-keys
+POST   /admin/client-keys
+GET    /admin/client-keys/{name}
+POST   /admin/client-keys/{name}/rotate
+PUT    /admin/client-keys/{name}
+DELETE /admin/client-keys/{name}
+```
+
+The collection response returns the safe prefix and a `recoverable` flag, but
+not the complete key. `POST` creates a key, persists its recoverable local value,
+and returns `raw_key`. An explicit authenticated `GET` for one key returns:
+
+```json
+{
+  "name": "local-agent",
+  "raw_key": "sk-0123456789abcdef"
+}
+```
+
+Create and reveal responses use `Cache-Control: no-store`. A key created by an
+older version without `raw_key` remains valid but the reveal endpoint returns
+HTTP `409` with code `client_key_not_recoverable`. The explicit `rotate` action
+replaces its hash, prefix, and recoverable value while preserving status, model
+policy, and RPM; the old value stops authenticating immediately. Client-key
+values never enter the list endpoint, runtime snapshot, request telemetry,
+Prometheus labels, or application logs.
 
 ## Model Capability Catalog
 
@@ -205,9 +238,24 @@ GET    /admin/observability/requests
 GET    /admin/observability/requests/{request_id}
 GET    /admin/observability/requests/{request_id}/diff
 DELETE /admin/observability/requests/{request_id}/content
+GET    /admin/observability/live
 GET    /admin/observability/sessions
 GET    /admin/observability/sessions/{session_id}
+GET    /admin/metrics/summary
+GET    /admin/metrics/history?range=1h|6h|24h|7d
 ```
+
+`/admin/observability/live` is an authenticated Server-Sent Events stream of
+bounded request lifecycle summaries. It supports `Last-Event-ID` replay and
+never includes captured request or response content. Event names are
+`request.started`, `request.updated`, `request.first_token`,
+`request.progress`, `request.finished`, and `request.failed`.
+
+Prometheus exposition is available separately at `GET /metrics`. It is mounted
+only on the loopback control-plane listener and intentionally does not use
+high-cardinality request, Agent, Session, project, or client-key labels. See
+[`prometheus-grafana.md`](prometheus-grafana.md) for the metric contract and
+Grafana integration.
 
 The trace envelope is created before authentication and parsing, so rejected or
 malformed requests can still receive a request and trace identity. A successful

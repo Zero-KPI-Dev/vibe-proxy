@@ -23,7 +23,23 @@ func (s Stats) TTFT() time.Duration {
 	return s.FirstTokenAt.Sub(s.StartedAt)
 }
 
+// TPOT returns the average generation time after the first output token. The
+// final provider usage is authoritative: stream delta count is a transport
+// detail and may not correspond one-to-one with model tokens.
+func (s Stats) TPOT() time.Duration {
+	if s.Usage.CompletionTokens <= 1 || s.FirstTokenAt.IsZero() || s.CompletedAt.IsZero() || s.CompletedAt.Before(s.FirstTokenAt) {
+		return 0
+	}
+	return s.CompletedAt.Sub(s.FirstTokenAt) / time.Duration(s.Usage.CompletionTokens-1)
+}
+
 func Track(ctx context.Context, in <-chan ir.StreamEvent, onStats func(Stats)) <-chan ir.StreamEvent {
+	return TrackWithProgress(ctx, in, nil, onStats)
+}
+
+// TrackWithProgress preserves Track's once-only completion callback while also
+// exposing live token/usage progress to non-durable telemetry sinks.
+func TrackWithProgress(ctx context.Context, in <-chan ir.StreamEvent, onProgress, onFinished func(Stats)) <-chan ir.StreamEvent {
 	out := make(chan ir.StreamEvent, 32)
 	go func() {
 		defer close(out)
@@ -35,8 +51,8 @@ func Track(ctx context.Context, in <-chan ir.StreamEvent, onStats func(Stats)) <
 			}
 			reported = true
 			stats.CompletedAt = time.Now()
-			if onStats != nil {
-				onStats(stats)
+			if onFinished != nil {
+				onFinished(stats)
 			}
 		}
 		for {
@@ -54,9 +70,15 @@ func Track(ctx context.Context, in <-chan ir.StreamEvent, onStats func(Stats)) <
 						stats.FirstTokenAt = time.Now()
 					}
 					stats.OutputTokenCount++
+					if onProgress != nil {
+						onProgress(stats)
+					}
 				}
 				if ev.Usage != nil {
 					stats.Usage = mergeUsage(stats.Usage, *ev.Usage)
+					if onProgress != nil && !stats.FirstTokenAt.IsZero() {
+						onProgress(stats)
+					}
 				}
 				if ev.Type == ir.EventMessageDone {
 					report()
@@ -143,7 +165,10 @@ func mergeUsage(a, b ir.Usage) ir.Usage {
 	if b.CacheWriteTokens != 0 {
 		a.CacheWriteTokens = b.CacheWriteTokens
 	}
-	if b.CacheHitRatio != 0 {
+	if b.CacheMetricsReported {
+		a.CacheMetricsReported = true
+	}
+	if b.CacheHitRatio != 0 || b.CacheMetricsReported {
 		a.CacheHitRatio = b.CacheHitRatio
 	}
 	if a.TotalTokens == 0 {

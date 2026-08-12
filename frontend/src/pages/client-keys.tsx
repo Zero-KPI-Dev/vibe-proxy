@@ -2,6 +2,8 @@ import { useState } from "react"
 import {
   useClientKeys,
   useCreateClientKey,
+  useRevealClientKey,
+  useRotateClientKey,
   useUpdateClientKey,
   useDeleteClientKey,
 } from "@/hooks/use-client-keys"
@@ -10,7 +12,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 import { Badge } from "@/components/ui/badge"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent } from "@/components/ui/card"
 import {
   Table,
   TableBody,
@@ -31,14 +33,17 @@ import {
 import { Skeleton } from "@/components/ui/skeleton"
 import { EmptyState } from "@/components/empty-state"
 import { toast } from "sonner"
-import { KeyRound, Plus, Trash2, Copy, Check, Pencil } from "lucide-react"
+import { KeyRound, Plus, Trash2, Copy, Check, Pencil, RotateCw } from "lucide-react"
 import type { ClientKey } from "@/lib/types"
+import { copyText } from "@/lib/clipboard"
 import { useTranslation } from "react-i18next"
 
 export function ClientKeysPage() {
   const { t } = useTranslation()
-  const { data, isLoading, refetch } = useClientKeys()
+  const { data, isLoading } = useClientKeys()
   const createKey = useCreateClientKey()
+  const revealKey = useRevealClientKey()
+  const rotateKey = useRotateClientKey()
   const updateKey = useUpdateClientKey()
   const deleteKey = useDeleteClientKey()
 
@@ -46,12 +51,11 @@ export function ClientKeysPage() {
   const [newName, setNewName] = useState("")
   const [newRpm, setNewRpm] = useState("60")
   const [newModels, setNewModels] = useState("")
-  const [createdRawKey, setCreatedRawKey] = useState<string | null>(null)
-  const [copied, setCopied] = useState(false)
+  const [revealedKey, setRevealedKey] = useState<{ name: string; rawKey: string } | null>(null)
+  const [copiedKeyName, setCopiedKeyName] = useState<string | null>(null)
   const [editingKey, setEditingKey] = useState<ClientKey | null>(null)
   const [editModels, setEditModels] = useState("")
   const [editRpm, setEditRpm] = useState("")
-
   const keys = data?.keys ?? []
 
   const handleCreate = async () => {
@@ -64,7 +68,8 @@ export function ClientKeysPage() {
           ? newModels.split(",").map((s) => s.trim()).filter(Boolean)
           : undefined,
       })
-      setCreatedRawKey(res.raw_key)
+      setRevealedKey({ name: res.key.name, rawKey: res.raw_key })
+      setShowCreate(false)
       setNewName("")
       setNewRpm("60")
       setNewModels("")
@@ -91,17 +96,61 @@ export function ClientKeysPage() {
   const handleDelete = async (name: string) => {
     try {
       await deleteKey.mutateAsync(name)
+      setRevealedKey((current) => current?.name === name ? null : current)
+      setCopiedKeyName((current) => current === name ? null : current)
       toast.success(t("clientKeys.deleted", { name }))
     } catch (e) {
       toast.error(t("clientKeys.deleteFailed"))
     }
   }
 
-  const handleCopyKey = () => {
-    if (createdRawKey) {
-      navigator.clipboard.writeText(createdRawKey)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
+  const loadClientKey = async (key: ClientKey) => {
+    if (!key.recoverable) {
+      toast.error(t("clientKeys.legacyUnavailable"))
+      return null
+    }
+    try {
+      const result = await revealKey.mutateAsync(key.name)
+      return result.raw_key
+    } catch (e) {
+      toast.error(t("clientKeys.revealFailed", {
+        error: e instanceof Error ? e.message : t("common.unknownError"),
+      }))
+      return null
+    }
+  }
+
+  const handleToggleKey = async (key: ClientKey) => {
+    if (revealedKey?.name === key.name) {
+      setRevealedKey(null)
+      return
+    }
+    const value = await loadClientKey(key)
+    if (value) setRevealedKey({ name: key.name, rawKey: value })
+  }
+
+  const handleCopyKey = async (key: ClientKey) => {
+    const value = await loadClientKey(key)
+    if (!value) return
+    if (!await copyText(value)) {
+      toast.error(t("clientKeys.copyFailed"))
+      return
+    }
+    setCopiedKeyName(key.name)
+    toast.success(t("clientKeys.copied"))
+    setTimeout(() => setCopiedKeyName((current) => current === key.name ? null : current), 2000)
+  }
+
+  const handleRotateKey = async (key: ClientKey) => {
+    if (!window.confirm(t("clientKeys.rotateConfirm", { name: key.name }))) return
+    try {
+      const result = await rotateKey.mutateAsync(key.name)
+      setRevealedKey({ name: result.key.name, rawKey: result.raw_key })
+      toast.success(t("clientKeys.rotated", { name: key.name }))
+    } catch (e) {
+      toast.error(t("clientKeys.rotateFailed", {
+        error: e instanceof Error ? e.message : t("common.unknownError"),
+      }))
     }
   }
 
@@ -137,7 +186,7 @@ export function ClientKeysPage() {
             {t("clientKeys.description")}
           </p>
         </div>
-        <Dialog open={showCreate && !createdRawKey} onOpenChange={(o) => { setShowCreate(o); if (!o) setCreatedRawKey(null) }}>
+        <Dialog open={showCreate} onOpenChange={setShowCreate}>
           <DialogTrigger asChild>
             <Button size="sm">
               <Plus className="h-4 w-4 mr-1" />
@@ -196,30 +245,6 @@ export function ClientKeysPage() {
         </Dialog>
       </div>
 
-      {createdRawKey && (
-        <Card className="border-yellow-500/30 bg-yellow-500/5">
-          <CardContent className="p-4">
-            <p className="text-sm font-medium mb-2 text-yellow-400">{t("clientKeys.saveWarning")}</p>
-            <div className="flex items-center gap-2">
-              <code className="flex-1 rounded bg-background px-3 py-2 text-sm font-mono border border-border break-all">
-                {createdRawKey}
-              </code>
-              <Button variant="outline" size="sm" onClick={handleCopyKey}>
-                {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-              </Button>
-            </div>
-            <Button
-              variant="default"
-              size="sm"
-              className="mt-3"
-              onClick={() => { setCreatedRawKey(null); setShowCreate(false) }}
-            >
-              {t("common.done")}
-            </Button>
-          </CardContent>
-        </Card>
-      )}
-
       <Card>
         <CardContent className="p-0">
           {isLoading ? (
@@ -241,23 +266,63 @@ export function ClientKeysPage() {
               }
             />
           ) : (
-            <Table>
+            <Table className="table-fixed">
+              <colgroup>
+                <col className="w-[12%]" />
+                <col className="w-[56%]" />
+                <col className="w-[7%]" />
+                <col className="w-[7%]" />
+                <col className="w-[7%]" />
+                <col className="w-[11%]" />
+              </colgroup>
               <TableHeader>
                 <TableRow>
                   <TableHead>{t("clientKeys.name")}</TableHead>
-                  <TableHead>{t("clientKeys.keyPrefix")}</TableHead>
+                  <TableHead>{t("clientKeys.key")}</TableHead>
                   <TableHead>{t("clientKeys.models")}</TableHead>
                   <TableHead>{t("clientKeys.status")}</TableHead>
                   <TableHead>RPM</TableHead>
-                  <TableHead className="w-24">{t("common.actions")}</TableHead>
+                  <TableHead>{t("common.actions")}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {keys.map((k) => (
                   <TableRow key={k.name}>
                     <TableCell className="font-medium">{k.name}</TableCell>
-                    <TableCell className="font-mono text-xs text-muted-foreground">
-                      {k.key_prefix ? `${k.key_prefix}...` : t("clientKeys.prefixUnavailable")}
+                    <TableCell>
+                      <div className="flex w-full min-w-0 items-center gap-1.5">
+                        <button
+                          type="button"
+                          className="min-w-0 flex-1 truncate whitespace-nowrap rounded-md px-1 py-1.5 text-left font-mono text-[11px] text-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                          disabled={revealKey.isPending || rotateKey.isPending}
+                          onClick={() => handleToggleKey(k)}
+                          title={revealedKey?.name === k.name ? revealedKey.rawKey : t("clientKeys.reveal")}
+                          aria-label={revealedKey?.name === k.name
+                            ? t("clientKeys.hideNamed", { name: k.name })
+                            : t("clientKeys.revealNamed", { name: k.name })}
+                        >
+                          <span className="break-all">
+                            {revealedKey?.name === k.name
+                              ? revealedKey.rawKey
+                              : k.key_prefix
+                                ? `${k.key_prefix.slice(0, 7)}**********`
+                                : t("clientKeys.prefixUnavailable")}
+                          </span>
+                        </button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7 shrink-0"
+                          disabled={!k.recoverable || revealKey.isPending || rotateKey.isPending}
+                          onClick={() => handleCopyKey(k)}
+                          title={t("clientKeys.copyKey")}
+                          aria-label={t("clientKeys.copyNamed", { name: k.name })}
+                        >
+                          {copiedKeyName === k.name
+                            ? <Check className="h-3.5 w-3.5 text-emerald-500" />
+                            : <Copy className="h-3.5 w-3.5" />}
+                        </Button>
+                      </div>
                     </TableCell>
                     <TableCell>
                       {k.allowed_models && k.allowed_models.length > 0 ? (
@@ -279,10 +344,35 @@ export function ClientKeysPage() {
                     <TableCell className="tabular-nums">{k.rpm}</TableCell>
                     <TableCell>
                       <div className="flex items-center gap-1">
-                        <Button variant="ghost" size="sm" onClick={() => openEdit(k)}>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7"
+                          disabled={rotateKey.isPending}
+                          onClick={() => handleRotateKey(k)}
+                          title={t("clientKeys.rotate")}
+                          aria-label={t("clientKeys.rotateNamed", { name: k.name })}
+                        >
+                          <RotateCw className="h-3.5 w-3.5" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7"
+                          onClick={() => openEdit(k)}
+                          title={t("common.edit")}
+                          aria-label={`${t("common.edit")} ${k.name}`}
+                        >
                           <Pencil className="h-3.5 w-3.5" />
                         </Button>
-                        <Button variant="ghost" size="sm" onClick={() => handleDelete(k.name)}>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7"
+                          onClick={() => handleDelete(k.name)}
+                          title={t("common.delete")}
+                          aria-label={`${t("common.delete")} ${k.name}`}
+                        >
                           <Trash2 className="h-3.5 w-3.5 text-destructive" />
                         </Button>
                       </div>

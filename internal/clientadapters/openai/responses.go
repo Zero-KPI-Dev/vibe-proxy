@@ -73,7 +73,11 @@ func (a ResponsesAdapter) EncodeUnary(ctx context.Context, w http.ResponseWriter
 		output = append(output, map[string]any{"id": "msg_" + uuid.NewString(), "type": "message", "status": "completed", "role": "assistant", "content": []any{map[string]any{"type": "output_text", "text": text, "annotations": []any{}}}})
 	}
 	output = append(output, toolCalls...)
-	out := map[string]any{"id": id, "object": "response", "created_at": time.Now().Unix(), "status": "completed", "model": resp.Model, "output": output, "usage": map[string]any{"input_tokens": resp.Usage.PromptTokens, "output_tokens": resp.Usage.CompletionTokens, "total_tokens": resp.Usage.TotalTokens}}
+	usage := map[string]any{"input_tokens": resp.Usage.PromptTokens, "output_tokens": resp.Usage.CompletionTokens, "total_tokens": resp.Usage.TotalTokens}
+	if resp.Usage.CacheMetricsReported {
+		usage["input_tokens_details"] = map[string]any{"cached_tokens": resp.Usage.CacheReadTokens}
+	}
+	out := map[string]any{"id": id, "object": "response", "created_at": time.Now().Unix(), "status": "completed", "model": resp.Model, "output": output, "usage": usage}
 	w.Header().Set("Content-Type", "application/json")
 	return json.NewEncoder(w).Encode(out)
 }
@@ -304,7 +308,11 @@ func writeResponsesEvent(w http.ResponseWriter, event string, payload any) {
 func writeResponsesDone(w http.ResponseWriter, id string, usage ir.Usage) {
 	response := map[string]any{"id": id, "status": "completed"}
 	if usage.TotalTokens > 0 || usage.PromptTokens > 0 || usage.CompletionTokens > 0 {
-		response["usage"] = map[string]any{"input_tokens": usage.PromptTokens, "output_tokens": usage.CompletionTokens, "total_tokens": usage.TotalTokens}
+		encodedUsage := map[string]any{"input_tokens": usage.PromptTokens, "output_tokens": usage.CompletionTokens, "total_tokens": usage.TotalTokens}
+		if usage.CacheMetricsReported {
+			encodedUsage["input_tokens_details"] = map[string]any{"cached_tokens": usage.CacheReadTokens}
+		}
+		response["usage"] = encodedUsage
 	}
 	writeResponsesEvent(w, "response.completed", map[string]any{"type": "response.completed", "response": response})
 	fmt.Fprint(w, "data: [DONE]\n\n")

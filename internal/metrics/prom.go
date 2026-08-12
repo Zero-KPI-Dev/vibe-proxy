@@ -11,26 +11,48 @@ import (
 )
 
 type Prometheus struct {
-	requests *prometheus.CounterVec
-	ttft     *prometheus.HistogramVec
-	tokens   *prometheus.CounterVec
-	tpot     *prometheus.HistogramVec
-	tps      *prometheus.HistogramVec
+	gatherer    prometheus.Gatherer
+	requests    *prometheus.CounterVec
+	ttft        *prometheus.HistogramVec
+	tokens      *prometheus.CounterVec
+	cache       *prometheus.CounterVec
+	cacheTokens *prometheus.CounterVec
+	tpot        *prometheus.HistogramVec
+	tps         *prometheus.HistogramVec
 }
 
 func New() *Prometheus {
-	p := &Prometheus{
-		requests: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "vibe_proxy_requests_total", Help: "Total gateway requests."}, []string{"model", "channel", "status"}),
-		ttft:     prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "vibe_proxy_ttft_seconds", Help: "Time to first token.", Buckets: []float64{0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10}}, []string{"model", "channel"}),
-		tokens:   prometheus.NewCounterVec(prometheus.CounterOpts{Name: "vibe_proxy_tokens_total", Help: "Token counts."}, []string{"model", "channel", "kind"}),
-		tpot:     prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "vibe_proxy_tpot_seconds", Help: "Average time per output token."}, []string{"model", "channel"}),
-		tps:      prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "vibe_proxy_tps", Help: "Output token throughput."}, []string{"model", "channel"}),
+	return newPrometheus(prometheus.DefaultRegisterer, prometheus.DefaultGatherer)
+}
+
+// NewWithRegistry creates an isolated metrics sink. Production uses New and
+// the default process registry; tests and embedders can avoid global collector
+// state by supplying their own registry.
+func NewWithRegistry(registry *prometheus.Registry) *Prometheus {
+	if registry == nil {
+		registry = prometheus.NewRegistry()
 	}
-	prometheus.MustRegister(p.requests, p.ttft, p.tokens, p.tpot, p.tps)
+	return newPrometheus(registry, registry)
+}
+
+func newPrometheus(registerer prometheus.Registerer, gatherer prometheus.Gatherer) *Prometheus {
+	p := &Prometheus{
+		gatherer:    gatherer,
+		requests:    prometheus.NewCounterVec(prometheus.CounterOpts{Name: "vibe_proxy_requests_total", Help: "Total gateway requests."}, []string{"model", "channel", "status"}),
+		ttft:        prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "vibe_proxy_ttft_seconds", Help: "Time to first token.", Buckets: []float64{0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10}}, []string{"model", "channel"}),
+		tokens:      prometheus.NewCounterVec(prometheus.CounterOpts{Name: "vibe_proxy_tokens_total", Help: "Token counts."}, []string{"model", "channel", "kind"}),
+		cache:       prometheus.NewCounterVec(prometheus.CounterOpts{Name: "vibe_proxy_prompt_cache_requests_total", Help: "Requests by prompt-cache telemetry state."}, []string{"model", "channel", "state"}),
+		cacheTokens: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "vibe_proxy_prompt_cache_tokens_total", Help: "Prompt-cache tokens for requests whose provider reported cache telemetry."}, []string{"model", "channel", "kind"}),
+		tpot:        prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "vibe_proxy_tpot_seconds", Help: "Average time per output token."}, []string{"model", "channel"}),
+		tps:         prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "vibe_proxy_tps", Help: "Output token throughput.", Buckets: []float64{0.5, 1, 2, 5, 10, 20, 40, 80, 160, 320, 640, 1280}}, []string{"model", "channel"}),
+	}
+	registerer.MustRegister(p.requests, p.ttft, p.tokens, p.cache, p.cacheTokens, p.tpot, p.tps)
 	return p
 }
 
-func (p *Prometheus) Handler() http.Handler            { return promhttp.Handler() }
+func (p *Prometheus) Handler() http.Handler {
+	return promhttp.HandlerFor(p.gatherer, promhttp.HandlerOpts{})
+}
 func (p *Prometheus) RequestStarted(e telemetry.Event) {}
 func (p *Prometheus) Token(e telemetry.Event)          {}
 
@@ -50,6 +72,17 @@ func (p *Prometheus) RequestFinished(e telemetry.Event) {
 	p.tokens.WithLabelValues(e.VirtualModel, e.ChannelID, "completion").Add(float64(e.Usage.CompletionTokens))
 	p.tokens.WithLabelValues(e.VirtualModel, e.ChannelID, "cache_read").Add(float64(e.Usage.CacheReadTokens))
 	p.tokens.WithLabelValues(e.VirtualModel, e.ChannelID, "cache_write").Add(float64(e.Usage.CacheWriteTokens))
+	if e.Usage.CacheMetricsReported {
+		p.cache.WithLabelValues(e.VirtualModel, e.ChannelID, "reported").Inc()
+		p.cacheTokens.WithLabelValues(e.VirtualModel, e.ChannelID, "eligible").Add(float64(e.Usage.PromptTokens))
+		p.cacheTokens.WithLabelValues(e.VirtualModel, e.ChannelID, "read").Add(float64(e.Usage.CacheReadTokens))
+		p.cacheTokens.WithLabelValues(e.VirtualModel, e.ChannelID, "write").Add(float64(e.Usage.CacheWriteTokens))
+		if e.Usage.CacheReadTokens > 0 {
+			p.cache.WithLabelValues(e.VirtualModel, e.ChannelID, "read").Inc()
+		}
+	} else {
+		p.cache.WithLabelValues(e.VirtualModel, e.ChannelID, "not_reported").Inc()
+	}
 }
 
 type MultiSink []telemetry.EventSink
@@ -74,6 +107,28 @@ func (m MultiSink) Token(e telemetry.Event) {
 			s.Token(e)
 		}
 	}
+}
+
+func (m MultiSink) RequestUpdated(e telemetry.Event, phase telemetry.RequestPhase) {
+	for _, sink := range m {
+		if updater, ok := sink.(telemetry.RequestUpdateSink); ok {
+			updater.RequestUpdated(e, phase)
+		}
+	}
+}
+
+func (m MultiSink) LiveEventSource() telemetry.LiveEventSource {
+	for _, sink := range m {
+		if source, ok := sink.(telemetry.LiveEventSource); ok {
+			return source
+		}
+		if provider, ok := sink.(telemetry.LiveEventSourceProvider); ok {
+			if source := provider.LiveEventSource(); source != nil {
+				return source
+			}
+		}
+	}
+	return nil
 }
 
 func (m MultiSink) RecordPayload(snapshot telemetry.PayloadSnapshot) error {

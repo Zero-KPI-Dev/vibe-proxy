@@ -378,6 +378,26 @@ func TestValidateRuntimeRejectsInvalidAndDuplicateClientKeys(t *testing.T) {
 	}
 }
 
+func TestValidateRuntimeRejectsInconsistentRecoverableClientKey(t *testing.T) {
+	rawKey := "sk-current-recoverable-value"
+	hash, err := hashKey(rawKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := CompileSimple(SimpleConfig{ClientKeys: []ClientKeyConfig{{
+		Name: "agent", KeyHash: hash, RawKey: "sk-wrong-value", KeyPrefix: "sk-wrong-pre", Enabled: true, AllowedModels: []string{"*"}, RPM: 60,
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	issues := ValidateRuntime(cfg)
+	for _, code := range []string{"client_key_raw_hash_mismatch", "client_key_prefix_mismatch"} {
+		if !hasIssueCode(issues, code) {
+			t.Fatalf("missing %s validation issue: %+v", code, issues)
+		}
+	}
+}
+
 func TestValidateRuntimeRejectsUnsafeAgentProfileDetectors(t *testing.T) {
 	cfg, err := CompileSimple(SimpleConfig{AgentProfiles: map[string]AgentProfileConfig{
 		"empty": {},

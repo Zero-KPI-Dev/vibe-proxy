@@ -19,6 +19,22 @@ export function useCreateClientKey() {
   })
 }
 
+export function useRevealClientKey() {
+  return useMutation({
+    mutationFn: (name: string) => clientKeyApi.reveal(name),
+  })
+}
+
+export function useRotateClientKey() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (name: string) => clientKeyApi.rotate(name),
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ["client-keys"] })
+    },
+  })
+}
+
 export function useUpdateClientKey() {
   const qc = useQueryClient()
   return useMutation({

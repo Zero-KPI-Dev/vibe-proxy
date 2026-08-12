@@ -1,5 +1,5 @@
 import type { ReactNode } from "react"
-import { ArrowLeft, Clock3, Database, Route, ShieldCheck, Trash2 } from "lucide-react"
+import { ArrowLeft, Clock3, Database, Gauge, Route, ShieldCheck, Trash2 } from "lucide-react"
 import { Link, useParams } from "react-router"
 import { useTranslation } from "react-i18next"
 import { CaptureStateBadge } from "@/components/capture-state-badge"
@@ -92,13 +92,21 @@ function RequestSummary({ request }: { request: RequestEvent }) {
     input_message_count: 0, input_block_count: 0, input_tool_count: 0, input_image_count: 0, input_text_chars: 0,
     output_message_count: 0, output_block_count: 0, output_tool_call_count: 0, output_reasoning_chars: 0, output_text_chars: 0,
   }
+  const sourceName = request.principal_type === "internal" && request.principal_name === "admin-playground"
+    ? t("observability.identity.playgroundSource")
+    : request.principal_name || request.client_name || "—"
+  const agentName = request.agent_id === "vibe-proxy-playground"
+    ? t("observability.identity.playgroundAgent")
+    : request.agent_name || request.agent_id || t("observability.unclassified")
+  const cacheRatio = Math.round((request.usage?.cache_hit_ratio ?? 0) * 100)
   return (
     <div className="space-y-4">
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <SummaryCard icon={<Clock3 />} label={t("observability.detail.duration")} value={`${request.duration_ms ?? 0} ms`} detail={`TTFT ${request.ttft_ms ?? 0} ms`} />
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+        <SummaryCard icon={<Clock3 />} label={t("observability.detail.duration")} value={`${request.duration_ms ?? 0} ms`} detail={`TTFT ${request.ttft_ms && request.ttft_ms > 0 ? `${request.ttft_ms} ms` : "—"} · TPOT ${request.tpot_ms && request.tpot_ms > 0 ? `${request.tpot_ms.toFixed(1)} ms` : "—"} · ${request.tps && request.tps > 0 ? `${request.tps.toFixed(1)} tok/s` : "—"}`} />
         <SummaryCard icon={<Route />} label={t("observability.detail.route")} value={`${request.channel_id || "—"} / ${request.upstream_model || "—"}`} detail={request.virtual_model || "—"} />
-        <SummaryCard icon={<ShieldCheck />} label={t("observability.detail.identity")} value={request.agent_name || request.agent_id || t("observability.unclassified")} detail={`${t("observability.columns.principal")}: ${request.principal_name || request.client_name || "—"}`} />
+        <SummaryCard icon={<ShieldCheck />} label={t("observability.detail.identity")} value={agentName} detail={`${t("observability.columns.principal")}: ${sourceName}${request.client_key_prefix ? ` · ${request.client_key_prefix}...` : ""}`} />
         <SummaryCard icon={<Database />} label={t("observability.columns.tokens")} value={(request.usage?.total_tokens ?? 0).toLocaleString(i18n.language)} detail={`${request.usage?.prompt_tokens ?? 0} → ${request.usage?.completion_tokens ?? 0}`} />
+        <SummaryCard icon={<Gauge />} label={t("observability.cache.title")} value={request.usage?.cache_metrics_reported ? `${cacheRatio}%` : t("observability.cache.notReported")} detail={request.usage?.cache_metrics_reported ? `${t("observability.cache.read")} ${(request.usage.cache_read_tokens ?? 0).toLocaleString(i18n.language)} · ${t("observability.cache.write")} ${(request.usage.cache_write_tokens ?? 0).toLocaleString(i18n.language)}` : t("observability.cache.notReportedHelp")} />
       </div>
       <Card>
         <CardHeader><CardTitle className="text-base">{t("observability.detail.shape")}</CardTitle></CardHeader>
@@ -156,7 +164,8 @@ function Metadata({ request, locale }: { request: RequestEvent; locale: string }
     ["session_id", request.session_id], ["session_name", request.session_name], ["session_kind", request.session_kind],
     ["session_path", request.session_path], ["project_id", request.project_id], ["agent_id", request.agent_id],
     ["agent_name", request.agent_name], ["agent_version", request.agent_version], ["agent_source", request.agent_source],
-    ["agent_confidence", request.agent_confidence], ["principal_name", request.principal_name || request.client_name],
+    ["agent_confidence", request.agent_confidence], ["principal_type", request.principal_type],
+    ["principal_name", request.principal_name || request.client_name], ["client_key_prefix", request.client_key_prefix],
     ["http", `${request.http_method || ""} ${request.http_path || ""}`.trim()], ["protocol", `${request.protocol_in || "—"} → ${request.protocol_out || "—"}`],
     ["started_at", new Date(request.started_at).toLocaleString(locale)], ["completed_at", request.completed_at ? new Date(request.completed_at).toLocaleString(locale) : ""],
     ["finish_reason", request.finish_reason], ["upstream_request_id", request.upstream_request_id], ["error_code", request.error_code],

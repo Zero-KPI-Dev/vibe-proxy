@@ -30,7 +30,7 @@ func TestBuildOpenAICompatibleRequest(t *testing.T) {
 }
 
 func TestParseOpenAICompatibleUnary(t *testing.T) {
-	resp := &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"id":"chatcmpl_1","model":"deepseek-chat","choices":[{"message":{"role":"assistant","content":"hi","reasoning_content":"think","tool_calls":[{"id":"call_1","type":"function","function":{"name":"lookup","arguments":"{\"q\":\"vibe\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":2,"completion_tokens":3,"total_tokens":5}}`))}
+	resp := &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"id":"chatcmpl_1","model":"deepseek-chat","choices":[{"message":{"role":"assistant","content":"hi","reasoning_content":"think","tool_calls":[{"id":"call_1","type":"function","function":{"name":"lookup","arguments":"{\"q\":\"vibe\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":10,"completion_tokens":3,"total_tokens":13,"prompt_tokens_details":{"cached_tokens":8}}}`))}
 	out, err := Provider{}.ParseUnary(context.Background(), resp)
 	if err != nil {
 		t.Fatal(err)
@@ -38,12 +38,23 @@ func TestParseOpenAICompatibleUnary(t *testing.T) {
 	if out.ID != "chatcmpl_1" || out.Messages[0].Content[0].Text != "think" || out.Messages[0].Content[1].Text != "hi" {
 		t.Fatalf("unexpected response: %+v", out)
 	}
-	if out.Usage.TotalTokens != 5 {
+	if out.Usage.TotalTokens != 13 || !out.Usage.CacheMetricsReported || out.Usage.CacheReadTokens != 8 || out.Usage.CacheHitRatio != 0.8 {
 		t.Fatalf("usage not parsed: %+v", out.Usage)
 	}
 	tool := out.Messages[0].Content[2].ToolCall
 	if tool == nil || tool.ID != "call_1" || tool.Name != "lookup" || string(tool.Arguments) != `{"q":"vibe"}` {
 		t.Fatalf("tool call not parsed: %+v", out.Messages[0].Content)
+	}
+}
+
+func TestParseOpenAICompatibleUnaryKeepsMissingCacheTelemetryUnknown(t *testing.T) {
+	resp := &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"id":"chatcmpl_1","model":"deepseek-chat","choices":[],"usage":{"prompt_tokens":2,"completion_tokens":3,"total_tokens":5}}`))}
+	out, err := Provider{}.ParseUnary(context.Background(), resp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Usage.CacheMetricsReported || out.Usage.CacheHitRatio != 0 {
+		t.Fatalf("missing cache telemetry was treated as a reported zero: %+v", out.Usage)
 	}
 }
 

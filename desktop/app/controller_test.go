@@ -107,3 +107,17 @@ func TestControllerSetCloseBehaviorRejectsUnrecognizedValue(t *testing.T) {
 		t.Fatalf("CloseBehavior after rejection = %q, want %q", got, desktopbridge.CloseAsk)
 	}
 }
+
+func TestControllerCopyTextUsesNativeSystem(t *testing.T) {
+	host, fakes := newCloseTestHost(t, desktopbridge.CloseAsk)
+	const value = "sk-native-clipboard-test"
+
+	if err := host.controller.CopyText(value); err != nil {
+		t.Fatalf("CopyText() error = %v", err)
+	}
+	fakes.system.mu.Lock()
+	defer fakes.system.mu.Unlock()
+	if len(fakes.system.copied) != 1 || fakes.system.copied[0] != value {
+		t.Fatalf("native clipboard values = %q, want [%q]", fakes.system.copied, value)
+	}
+}

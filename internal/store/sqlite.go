@@ -117,10 +117,10 @@ func (s *SQLite) RecordRequest(e telemetry.Event) error {
 	columns := []string{
 		"request_id", "client_name", "virtual_model", "upstream_model", "channel_id", "protocol_in", "protocol_out",
 		"started_at", "first_token_at", "completed_at", "ttft_ms", "tpot_ms", "tps", "status_code", "error_code",
-		"prompt_tokens", "completion_tokens", "total_tokens", "cache_read_tokens", "cache_write_tokens", "cache_hit_ratio",
+		"prompt_tokens", "completion_tokens", "total_tokens", "cache_read_tokens", "cache_write_tokens", "cache_metrics_reported", "cache_hit_ratio",
 		"input_labels_json", "output_labels_json", "transformation_json",
 		"trace_id", "span_id", "parent_span_id", "session_id", "session_name", "session_kind", "session_path",
-		"parent_request_id", "principal_name", "agent_id", "agent_name", "agent_version", "agent_source", "agent_confidence",
+		"parent_request_id", "principal_type", "principal_name", "client_key_prefix", "agent_id", "agent_name", "agent_version", "agent_source", "agent_confidence",
 		"project_id", "duration_ms", "initial_provider", "initial_model", "finish_reason", "upstream_request_id", "retry_count",
 		"input_message_count", "input_block_count", "input_tool_count", "input_image_count", "input_text_chars",
 		"output_message_count", "output_block_count", "output_tool_call_count", "output_reasoning_chars", "output_text_chars",
@@ -131,9 +131,9 @@ func (s *SQLite) RecordRequest(e telemetry.Event) error {
 		e.RequestID, e.ClientName, e.VirtualModel, e.UpstreamModel, e.ChannelID, e.ProtocolIn, e.ProtocolOut,
 		sqliteTime(e.StartedAt), first, completed, e.TTFTMillis, e.TPOTMillis, e.TPS, e.StatusCode, e.ErrorCode,
 		e.Usage.PromptTokens, e.Usage.CompletionTokens, e.Usage.TotalTokens, e.Usage.CacheReadTokens,
-		e.Usage.CacheWriteTokens, e.Usage.CacheHitRatio, e.InputLabelsJSON, e.OutputLabelsJSON, transformation,
+		e.Usage.CacheWriteTokens, e.Usage.CacheMetricsReported, e.Usage.CacheHitRatio, e.InputLabelsJSON, e.OutputLabelsJSON, transformation,
 		e.TraceID, e.SpanID, e.ParentSpanID, e.SessionID, e.SessionName, e.SessionKind, e.SessionPath,
-		e.ParentRequestID, e.PrincipalName, e.AgentID, e.AgentName, e.AgentVersion, e.AgentSource, e.AgentConfidence,
+		e.ParentRequestID, e.PrincipalType, e.PrincipalName, e.ClientKeyPrefix, e.AgentID, e.AgentName, e.AgentVersion, e.AgentSource, e.AgentConfidence,
 		e.ProjectID, e.DurationMillis, e.InitialProvider, e.InitialModel, e.FinishReason, e.UpstreamRequestID, e.RetryCount,
 		e.RequestShape.InputMessageCount, e.RequestShape.InputBlockCount, e.RequestShape.InputToolCount,
 		e.RequestShape.InputImageCount, e.RequestShape.InputTextChars, e.RequestShape.OutputMessageCount,
@@ -418,16 +418,32 @@ func (s *SQLite) MetricsSummary(todayStart time.Time) (telemetry.MetricsSummary,
 	err := s.db.QueryRow(`
 SELECT
 	COUNT(*),
+	COALESCE(SUM(CASE WHEN started_at >= ? THEN 1 ELSE 0 END), 0),
 	COALESCE(SUM(CASE WHEN started_at >= ? THEN prompt_tokens ELSE 0 END), 0),
 	COALESCE(SUM(CASE WHEN started_at >= ? THEN completion_tokens ELSE 0 END), 0),
-	COALESCE(SUM(CASE WHEN started_at >= ? THEN total_tokens ELSE 0 END), 0)
+	COALESCE(SUM(CASE WHEN started_at >= ? THEN total_tokens ELSE 0 END), 0),
+	COALESCE(SUM(CASE WHEN started_at >= ? AND cache_metrics_reported = 1 THEN cache_read_tokens ELSE 0 END), 0),
+	COALESCE(SUM(CASE WHEN started_at >= ? AND cache_metrics_reported = 1 THEN cache_write_tokens ELSE 0 END), 0),
+	COALESCE(SUM(CASE WHEN started_at >= ? AND cache_metrics_reported = 1 THEN 1 ELSE 0 END), 0),
+	COALESCE(SUM(CASE WHEN started_at >= ? AND cache_metrics_reported = 1 THEN prompt_tokens ELSE 0 END), 0)
 FROM request_logs
-`, todayStart, todayStart, todayStart).Scan(
+`, todayStart, todayStart, todayStart, todayStart, todayStart, todayStart, todayStart, todayStart).Scan(
 		&summary.TotalRequests,
+		&summary.TodayRequests,
 		&summary.TodayTokens.Prompt,
 		&summary.TodayTokens.Completion,
 		&summary.TodayTokens.Total,
+		&summary.TodayTokens.CacheRead,
+		&summary.TodayTokens.CacheWrite,
+		&summary.PromptCache.ReportedRequests,
+		&summary.PromptCache.EligiblePromptTokens,
 	)
+	if summary.PromptCache.EligiblePromptTokens > 0 {
+		summary.PromptCache.WeightedHitRatio = float64(summary.TodayTokens.CacheRead) / float64(summary.PromptCache.EligiblePromptTokens)
+	}
+	if summary.TodayRequests > 0 {
+		summary.PromptCache.ReportingCoverage = float64(summary.PromptCache.ReportedRequests) / float64(summary.TodayRequests)
+	}
 	return summary, err
 }
 
@@ -436,7 +452,8 @@ func (s *SQLite) MetricsHistory(since time.Time, bucket time.Duration) ([]teleme
 		bucket = 5 * time.Minute
 	}
 	rows, err := s.db.Query(`
-SELECT started_at, status_code, ttft_ms, tpot_ms, prompt_tokens, completion_tokens
+SELECT started_at, status_code, ttft_ms, tpot_ms, tps, prompt_tokens, completion_tokens,
+	cache_read_tokens, cache_write_tokens, cache_metrics_reported
 FROM request_logs
 WHERE started_at >= ?
 ORDER BY started_at ASC
@@ -447,28 +464,39 @@ ORDER BY started_at ASC
 	defer rows.Close()
 
 	type aggregate struct {
-		point telemetry.MetricPoint
-		ttft  []int64
-		tpot  []float64
+		point                 telemetry.MetricPoint
+		ttft                  []int64
+		tpot                  []float64
+		tps                   []float64
+		cachePromptTokens     int64
+		cacheReportedRequests int64
 	}
 	aggregates := map[int64]*aggregate{}
 	bucketNanos := bucket.Nanoseconds()
 	for rows.Next() {
 		var (
-			startedAt        time.Time
-			statusCode       int
-			ttftMillis       int64
-			tpotMillis       float64
-			promptTokens     int64
-			completionTokens int64
+			startedAt            time.Time
+			statusCode           int
+			ttftMillis           int64
+			tpotMillis           float64
+			tokensPerSecond      float64
+			promptTokens         int64
+			completionTokens     int64
+			cacheReadTokens      int64
+			cacheWriteTokens     int64
+			cacheMetricsReported bool
 		)
 		if err := rows.Scan(
 			&startedAt,
 			&statusCode,
 			&ttftMillis,
 			&tpotMillis,
+			&tokensPerSecond,
 			&promptTokens,
 			&completionTokens,
+			&cacheReadTokens,
+			&cacheWriteTokens,
+			&cacheMetricsReported,
 		); err != nil {
 			return nil, err
 		}
@@ -486,11 +514,20 @@ ORDER BY started_at ASC
 		}
 		current.point.TokensPrompt += promptTokens
 		current.point.TokensCompletion += completionTokens
+		if cacheMetricsReported {
+			current.point.TokensCacheRead += cacheReadTokens
+			current.point.TokensCacheWrite += cacheWriteTokens
+			current.cachePromptTokens += promptTokens
+			current.cacheReportedRequests++
+		}
 		if ttftMillis > 0 {
 			current.ttft = append(current.ttft, ttftMillis)
 		}
 		if tpotMillis > 0 {
 			current.tpot = append(current.tpot, tpotMillis)
+		}
+		if tokensPerSecond > 0 {
+			current.tps = append(current.tps, tokensPerSecond)
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -505,14 +542,47 @@ ORDER BY started_at ASC
 	points := make([]telemetry.MetricPoint, 0, len(keys))
 	for _, key := range keys {
 		current := aggregates[key]
+		current.point.TTFTAvg = averageInt64(current.ttft)
 		current.point.TTFTP50 = percentileInt64(current.ttft, 0.50)
 		current.point.TTFTP95 = percentileInt64(current.ttft, 0.95)
 		current.point.TTFTP99 = percentileInt64(current.ttft, 0.99)
+		current.point.TPOTAvg = averageFloat64(current.tpot)
 		current.point.TPOTP50 = percentileFloat64(current.tpot, 0.50)
 		current.point.TPOTP95 = percentileFloat64(current.tpot, 0.95)
+		current.point.TPSAvg = averageFloat64(current.tps)
+		current.point.TPSP50 = percentileFloat64(current.tps, 0.50)
+		current.point.TPSP95 = percentileFloat64(current.tps, 0.95)
+		if current.cachePromptTokens > 0 {
+			current.point.CacheHitRatio = float64(current.point.TokensCacheRead) / float64(current.cachePromptTokens)
+		}
+		if current.point.Requests > 0 {
+			current.point.CacheCoverage = float64(current.cacheReportedRequests) / float64(current.point.Requests)
+		}
 		points = append(points, current.point)
 	}
 	return points, nil
+}
+
+func averageInt64(values []int64) float64 {
+	if len(values) == 0 {
+		return 0
+	}
+	var total float64
+	for _, value := range values {
+		total += float64(value)
+	}
+	return total / float64(len(values))
+}
+
+func averageFloat64(values []float64) float64 {
+	if len(values) == 0 {
+		return 0
+	}
+	var total float64
+	for _, value := range values {
+		total += value
+	}
+	return total / float64(len(values))
 }
 
 func percentileInt64(values []int64, percentile float64) int64 {
@@ -545,24 +615,7 @@ func (s *SQLite) RecentFinished(limit int) ([]telemetry.Event, error) {
 	if limit <= 0 {
 		limit = 50
 	}
-	rows, err := s.db.Query(`
-SELECT
-	COALESCE(request_id, ''), COALESCE(client_name, ''), COALESCE(virtual_model, ''), COALESCE(upstream_model, ''),
-	COALESCE(channel_id, ''), COALESCE(protocol_in, ''), COALESCE(protocol_out, ''),
-	started_at, first_token_at, completed_at, ttft_ms, tpot_ms, tps, status_code, error_code,
-	prompt_tokens, completion_tokens, total_tokens, cache_read_tokens, cache_write_tokens,
-	cache_hit_ratio, COALESCE(input_labels_json, ''), COALESCE(output_labels_json, ''), transformation_json,
-	COALESCE(trace_id, ''), COALESCE(span_id, ''), COALESCE(parent_span_id, ''),
-	COALESCE(session_id, ''), COALESCE(session_name, ''), COALESCE(session_kind, ''), COALESCE(session_path, ''),
-	COALESCE(parent_request_id, ''), COALESCE(principal_name, ''), COALESCE(agent_id, ''),
-	COALESCE(agent_name, ''), COALESCE(agent_version, ''), COALESCE(agent_source, ''), COALESCE(agent_confidence, ''),
-	COALESCE(project_id, ''), COALESCE(duration_ms, 0), COALESCE(initial_provider, ''), COALESCE(initial_model, ''),
-	COALESCE(finish_reason, ''), COALESCE(upstream_request_id, ''), COALESCE(retry_count, 0),
-	COALESCE(input_message_count, 0), COALESCE(input_block_count, 0), COALESCE(input_tool_count, 0),
-	COALESCE(input_image_count, 0), COALESCE(input_text_chars, 0), COALESCE(output_message_count, 0),
-	COALESCE(output_block_count, 0), COALESCE(output_tool_call_count, 0), COALESCE(output_reasoning_chars, 0),
-	COALESCE(output_text_chars, 0), COALESCE(http_method, ''), COALESCE(http_path, ''),
-	COALESCE(capture_mode, ''), COALESCE(capture_status, ''), COALESCE(capture_truncated, 0), COALESCE(redaction_count, 0)
+	rows, err := s.db.Query(`SELECT `+requestEventColumns+`
 FROM request_logs
 ORDER BY started_at DESC
 LIMIT ?
@@ -574,90 +627,9 @@ LIMIT ?
 
 	events := make([]telemetry.Event, 0, limit)
 	for rows.Next() {
-		var (
-			event              telemetry.Event
-			firstTokenAt       sql.NullTime
-			completedAt        sql.NullTime
-			transformationJSON sql.NullString
-		)
-		if err := rows.Scan(
-			&event.RequestID,
-			&event.ClientName,
-			&event.VirtualModel,
-			&event.UpstreamModel,
-			&event.ChannelID,
-			&event.ProtocolIn,
-			&event.ProtocolOut,
-			&event.StartedAt,
-			&firstTokenAt,
-			&completedAt,
-			&event.TTFTMillis,
-			&event.TPOTMillis,
-			&event.TPS,
-			&event.StatusCode,
-			&event.ErrorCode,
-			&event.Usage.PromptTokens,
-			&event.Usage.CompletionTokens,
-			&event.Usage.TotalTokens,
-			&event.Usage.CacheReadTokens,
-			&event.Usage.CacheWriteTokens,
-			&event.Usage.CacheHitRatio,
-			&event.InputLabelsJSON,
-			&event.OutputLabelsJSON,
-			&transformationJSON,
-			&event.TraceID,
-			&event.SpanID,
-			&event.ParentSpanID,
-			&event.SessionID,
-			&event.SessionName,
-			&event.SessionKind,
-			&event.SessionPath,
-			&event.ParentRequestID,
-			&event.PrincipalName,
-			&event.AgentID,
-			&event.AgentName,
-			&event.AgentVersion,
-			&event.AgentSource,
-			&event.AgentConfidence,
-			&event.ProjectID,
-			&event.DurationMillis,
-			&event.InitialProvider,
-			&event.InitialModel,
-			&event.FinishReason,
-			&event.UpstreamRequestID,
-			&event.RetryCount,
-			&event.RequestShape.InputMessageCount,
-			&event.RequestShape.InputBlockCount,
-			&event.RequestShape.InputToolCount,
-			&event.RequestShape.InputImageCount,
-			&event.RequestShape.InputTextChars,
-			&event.RequestShape.OutputMessageCount,
-			&event.RequestShape.OutputBlockCount,
-			&event.RequestShape.OutputToolCallCount,
-			&event.RequestShape.OutputReasoningChars,
-			&event.RequestShape.OutputTextChars,
-			&event.HTTPMethod,
-			&event.HTTPPath,
-			&event.CaptureMode,
-			&event.CaptureStatus,
-			&event.CaptureTruncated,
-			&event.RedactionCount,
-		); err != nil {
+		event, err := scanRequestEvent(rows)
+		if err != nil {
 			return nil, err
-		}
-		if firstTokenAt.Valid {
-			first := firstTokenAt.Time
-			event.FirstTokenAt = &first
-		}
-		if completedAt.Valid {
-			completed := completedAt.Time
-			event.CompletedAt = &completed
-		}
-		if transformationJSON.Valid && transformationJSON.String != "" {
-			var transformation telemetry.TransformationSummary
-			if err := json.Unmarshal([]byte(transformationJSON.String), &transformation); err == nil {
-				event.Transformation = &transformation
-			}
 		}
 		events = append(events, event)
 	}

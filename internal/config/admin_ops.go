@@ -228,7 +228,8 @@ func UpsertClientKey(path string, input ClientKeyInput) (*RuntimeConfig, string,
 	cfg.ClientKeys = append(cfg.ClientKeys, ClientKeyConfig{
 		Name:          input.Name,
 		KeyHash:       hash,
-		KeyPrefix:     rawKey[:12],
+		RawKey:        rawKey,
+		KeyPrefix:     clientKeyPrefix(rawKey),
 		Enabled:       true,
 		AllowedModels: allowed,
 		RPM:           rpm,
@@ -285,6 +286,48 @@ func UpdateClientKey(path string, name string, update ClientKeyUpdate) (*Runtime
 		return nil, err
 	}
 	return compiled, nil
+}
+
+func RotateClientKey(path string, name string) (*RuntimeConfig, string, error) {
+	unlock := lockConfigMutation(path)
+	defer unlock()
+	cfg, err := readSimpleConfig(path)
+	if err != nil {
+		return nil, "", err
+	}
+	index := -1
+	for i, key := range cfg.ClientKeys {
+		if key.Name == name {
+			index = i
+			break
+		}
+	}
+	if index < 0 {
+		return nil, "", fmt.Errorf("client key %q not found", name)
+	}
+	rawKey, err := generateAPIKey()
+	if err != nil {
+		return nil, "", err
+	}
+	hash, err := hashKey(rawKey)
+	if err != nil {
+		return nil, "", err
+	}
+	cfg.ClientKeys[index].KeyHash = hash
+	cfg.ClientKeys[index].RawKey = rawKey
+	cfg.ClientKeys[index].KeyPrefix = clientKeyPrefix(rawKey)
+	compiled, err := compileValidated(cfg)
+	if err != nil {
+		return nil, "", err
+	}
+	out, err := yaml.Marshal(cfg)
+	if err != nil {
+		return nil, "", err
+	}
+	if err := writeConfigFile(path, out); err != nil {
+		return nil, "", err
+	}
+	return compiled, rawKey, nil
 }
 
 func DeleteClientKey(path string, name string) (*RuntimeConfig, error) {

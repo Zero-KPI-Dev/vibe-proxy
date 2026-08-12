@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -11,6 +12,7 @@ import (
 )
 
 const desktopBootstrapPrefix = "/desktop/bootstrap/"
+const maxDesktopClipboardBytes = 1 << 20
 
 func (s *Server) desktopBootstrap(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -96,6 +98,39 @@ func (s *Server) desktopPreferences(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, struct {
 		CloseBehavior desktopbridge.CloseBehavior `json:"close_behavior"`
 	}{CloseBehavior: input.CloseBehavior})
+}
+
+func (s *Server) desktopClipboard(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		s.writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if !s.adminAuthorize(w, r) {
+		return
+	}
+	if s.desktopController == nil {
+		s.writeJSONError(w, http.StatusConflict, "desktop controls are unavailable")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxDesktopClipboardBytes)
+	var input struct {
+		Text string `json:"text"`
+	}
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil || input.Text == "" {
+		s.writeJSONError(w, http.StatusBadRequest, "invalid clipboard text")
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		s.writeJSONError(w, http.StatusBadRequest, "invalid clipboard text")
+		return
+	}
+	if err := s.desktopController.CopyText(input.Text); err != nil {
+		s.writeJSONError(w, http.StatusInternalServerError, "desktop controller operation failed")
+		return
+	}
+	s.writeJSON(w, map[string]bool{"copied": true})
 }
 
 func (s *Server) desktopOpenDataDir(w http.ResponseWriter, r *http.Request) {

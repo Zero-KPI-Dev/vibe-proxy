@@ -15,12 +15,13 @@ import { useProviderHealth } from "@/hooks/use-metrics"
 import { useClientKeys } from "@/hooks/use-client-keys"
 import { cn } from "@/lib/utils"
 import { dataPlaneOrigin } from "@/lib/listener-url"
+import { copyText } from "@/lib/clipboard"
 import { useTranslation } from "react-i18next"
 
 function CopyBox({ label, value }: { label: string; value: string }) {
   const [copied, setCopied] = useState(false)
-  const handleCopy = () => {
-    navigator.clipboard.writeText(value)
+  const handleCopy = async () => {
+    if (!await copyText(value)) return
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
   }

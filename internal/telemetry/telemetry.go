@@ -24,7 +24,9 @@ type Event struct {
 	SessionKind       string                 `json:"session_kind,omitempty"`
 	SessionPath       string                 `json:"session_path,omitempty"`
 	ParentRequestID   string                 `json:"parent_request_id,omitempty"`
+	PrincipalType     string                 `json:"principal_type,omitempty"`
 	PrincipalName     string                 `json:"principal_name,omitempty"`
+	ClientKeyPrefix   string                 `json:"client_key_prefix,omitempty"`
 	ClientName        string                 `json:"client_name"`
 	AgentID           string                 `json:"agent_id"`
 	AgentName         string                 `json:"agent_name,omitempty"`
@@ -103,19 +105,17 @@ type TransformationSummary struct {
 }
 
 type Tracker struct {
-	mu             sync.Mutex
-	Event          Event
-	lastTokenAt    time.Time
-	outputTokens   int64
-	interTokenTime time.Duration
-	sink           EventSink
+	mu           sync.Mutex
+	Event        Event
+	outputTokens int64
+	sink         EventSink
 }
 
 func NewTracker(base Event, sink EventSink) *Tracker {
 	if base.StartedAt.IsZero() {
 		base.StartedAt = time.Now()
 	}
-	tr := &Tracker{Event: base, lastTokenAt: base.StartedAt, sink: sink}
+	tr := &Tracker{Event: base, sink: sink}
 	if sink != nil {
 		sink.RequestStarted(base)
 	}
@@ -131,15 +131,41 @@ func (t *Tracker) MarkToken(text string) {
 	if t.Event.FirstTokenAt == nil {
 		t.Event.FirstTokenAt = &now
 		t.Event.TTFTMillis = now.Sub(t.Event.StartedAt).Milliseconds()
-	} else {
-		t.interTokenTime += now.Sub(t.lastTokenAt)
 	}
-	t.lastTokenAt = now
 	t.outputTokens++
 	t.Event.Usage.CompletionTokens = t.outputTokens
 	t.mu.Unlock()
 	if t.sink != nil {
 		t.sink.Token(t.Snapshot())
+	}
+}
+
+func (t *Tracker) Checkpoint(phase RequestPhase) {
+	if t.sink == nil {
+		return
+	}
+	PublishRequestUpdate(t.sink, t.Snapshot(), phase)
+}
+
+// StreamProgress updates live request state from the protocol-neutral stream
+// engine without importing stream-engine types into telemetry.
+func (t *Tracker) StreamProgress(firstTokenAt time.Time, outputTokens int64, usage types.Usage) {
+	t.mu.Lock()
+	if !firstTokenAt.IsZero() {
+		first := firstTokenAt
+		t.Event.FirstTokenAt = &first
+		t.Event.TTFTMillis = first.Sub(t.Event.StartedAt).Milliseconds()
+	}
+	if usage.PromptTokens > 0 || usage.CompletionTokens > 0 || usage.TotalTokens > 0 {
+		t.Event.Usage = usage
+	}
+	if outputTokens > t.Event.Usage.CompletionTokens {
+		t.Event.Usage.CompletionTokens = outputTokens
+	}
+	event := t.Event
+	t.mu.Unlock()
+	if t.sink != nil && !firstTokenAt.IsZero() {
+		t.sink.Token(event)
 	}
 }
 
@@ -153,8 +179,8 @@ func (t *Tracker) Finish(status int, usage types.Usage, errCode string) Event {
 	if usage.TotalTokens > 0 || usage.PromptTokens > 0 || usage.CompletionTokens > 0 {
 		t.Event.Usage = usage
 	}
-	if t.outputTokens > 1 {
-		t.Event.TPOTMillis = float64(t.interTokenTime.Milliseconds()) / float64(t.outputTokens-1)
+	if t.Event.Usage.CompletionTokens > 1 && t.Event.FirstTokenAt != nil {
+		t.Event.TPOTMillis = float64(now.Sub(*t.Event.FirstTokenAt)) / float64(time.Millisecond) / float64(t.Event.Usage.CompletionTokens-1)
 	}
 	genDur := now.Sub(t.Event.StartedAt).Seconds()
 	if t.Event.FirstTokenAt != nil {

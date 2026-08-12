@@ -72,12 +72,23 @@ func TestParseAnthropicUnary(t *testing.T) {
 	if out.ID != "msg_1" || out.Messages[0].Content[0].Text != "think" || out.Messages[0].Content[1].Text != "hi" {
 		t.Fatalf("unexpected response: %+v", out)
 	}
-	if out.Usage.PromptTokens != 3 || out.Usage.CompletionTokens != 4 || out.Usage.CacheReadTokens != 1 || out.Usage.CacheWriteTokens != 2 {
+	if out.Usage.PromptTokens != 6 || out.Usage.CompletionTokens != 4 || out.Usage.TotalTokens != 10 || out.Usage.CacheReadTokens != 1 || out.Usage.CacheWriteTokens != 2 || !out.Usage.CacheMetricsReported || out.Usage.CacheHitRatio != float64(1)/6 {
 		t.Fatalf("usage not parsed: %+v", out.Usage)
 	}
 	tool := out.Messages[0].Content[2].ToolCall
 	if tool == nil || tool.ID != "toolu_1" || tool.Name != "lookup" || string(tool.Arguments) != `{"q":"vibe"}` {
 		t.Fatalf("tool use not parsed: %+v", out.Messages[0].Content)
+	}
+}
+
+func TestParseAnthropicUnaryKeepsMissingCacheTelemetryUnknown(t *testing.T) {
+	resp := &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"id":"msg_1","model":"claude-test","content":[],"usage":{"input_tokens":3,"output_tokens":4}}`))}
+	out, err := Provider{}.ParseUnary(context.Background(), resp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Usage.PromptTokens != 3 || out.Usage.CacheMetricsReported || out.Usage.CacheHitRatio != 0 {
+		t.Fatalf("missing cache telemetry was treated as a reported zero: %+v", out.Usage)
 	}
 }
 
