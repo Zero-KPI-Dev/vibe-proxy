@@ -1,4 +1,4 @@
-import { useRef, useState } from "react"
+import { useState } from "react"
 import {
   useClientKeys,
   useCreateClientKey,
@@ -56,8 +56,6 @@ export function ClientKeysPage() {
   const [editingKey, setEditingKey] = useState<ClientKey | null>(null)
   const [editModels, setEditModels] = useState("")
   const [editRpm, setEditRpm] = useState("")
-  const rawKeyCache = useRef(new Map<string, string>())
-
   const keys = data?.keys ?? []
 
   const handleCreate = async () => {
@@ -70,7 +68,6 @@ export function ClientKeysPage() {
           ? newModels.split(",").map((s) => s.trim()).filter(Boolean)
           : undefined,
       })
-      rawKeyCache.current.set(res.key.name, res.raw_key)
       setRevealedKey({ name: res.key.name, rawKey: res.raw_key })
       setShowCreate(false)
       setNewName("")
@@ -99,7 +96,6 @@ export function ClientKeysPage() {
   const handleDelete = async (name: string) => {
     try {
       await deleteKey.mutateAsync(name)
-      rawKeyCache.current.delete(name)
       setRevealedKey((current) => current?.name === name ? null : current)
       setCopiedKeyName((current) => current === name ? null : current)
       toast.success(t("clientKeys.deleted", { name }))
@@ -109,15 +105,12 @@ export function ClientKeysPage() {
   }
 
   const loadClientKey = async (key: ClientKey) => {
-    const cached = rawKeyCache.current.get(key.name)
-    if (cached) return cached
     if (!key.recoverable) {
       toast.error(t("clientKeys.legacyUnavailable"))
       return null
     }
     try {
       const result = await revealKey.mutateAsync(key.name)
-      rawKeyCache.current.set(result.name, result.raw_key)
       return result.raw_key
     } catch (e) {
       toast.error(t("clientKeys.revealFailed", {
@@ -152,7 +145,6 @@ export function ClientKeysPage() {
     if (!window.confirm(t("clientKeys.rotateConfirm", { name: key.name }))) return
     try {
       const result = await rotateKey.mutateAsync(key.name)
-      rawKeyCache.current.set(result.key.name, result.raw_key)
       setRevealedKey({ name: result.key.name, rawKey: result.raw_key })
       toast.success(t("clientKeys.rotated", { name: key.name }))
     } catch (e) {
@@ -352,19 +344,17 @@ export function ClientKeysPage() {
                     <TableCell className="tabular-nums">{k.rpm}</TableCell>
                     <TableCell>
                       <div className="flex items-center gap-1">
-                        {!k.recoverable && (
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-7 w-7"
-                            disabled={rotateKey.isPending}
-                            onClick={() => handleRotateKey(k)}
-                            title={t("clientKeys.rotate")}
-                            aria-label={t("clientKeys.rotateNamed", { name: k.name })}
-                          >
-                            <RotateCw className="h-3.5 w-3.5" />
-                          </Button>
-                        )}
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7"
+                          disabled={rotateKey.isPending}
+                          onClick={() => handleRotateKey(k)}
+                          title={t("clientKeys.rotate")}
+                          aria-label={t("clientKeys.rotateNamed", { name: k.name })}
+                        >
+                          <RotateCw className="h-3.5 w-3.5" />
+                        </Button>
                         <Button
                           variant="ghost"
                           size="icon"

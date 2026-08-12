@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useQueryClient } from "@tanstack/react-query"
 import { consumeLiveRequestStream } from "@/lib/live-stream"
-import type { LiveRequestEvent } from "@/lib/types"
+import type { LiveRequestEvent, LiveStreamMeta } from "@/lib/types"
 
 export type LiveConnectionState = "connecting" | "live" | "reconnecting" | "paused" | "error"
 
@@ -29,12 +29,29 @@ export function useLiveRequests() {
   const [paused, setPaused] = useState(false)
   const [pendingCount, setPendingCount] = useState(0)
   const lastEventId = useRef(0)
+  const streamEpoch = useRef("")
   const pausedRef = useRef(false)
   const pending = useRef<Map<string, LiveRequestEvent>>(new Map())
 
   useEffect(() => {
     const controller = new AbortController()
     let reconnectDelay = 500
+    const refreshDurableState = () => {
+      void queryClient.invalidateQueries({ queryKey: ["observability", "requests"] })
+      void queryClient.invalidateQueries({ queryKey: ["observability", "sessions"] })
+      void queryClient.invalidateQueries({ queryKey: ["metrics-summary"] })
+      void queryClient.invalidateQueries({ queryKey: ["metrics-history"] })
+    }
+    const resetLiveState = (meta: LiveStreamMeta) => {
+      const epochChanged = streamEpoch.current !== "" && streamEpoch.current !== meta.epoch
+      streamEpoch.current = meta.epoch
+      if (!epochChanged && !meta.replay_gap) return
+      lastEventId.current = 0
+      pending.current.clear()
+      setPendingCount(0)
+      setEvents(new Map())
+      refreshDurableState()
+    }
     const run = async () => {
       while (!controller.signal.aborted) {
         setTransportState(lastEventId.current > 0 ? "reconnecting" : "connecting")
@@ -42,10 +59,12 @@ export function useLiveRequests() {
           await consumeLiveRequestStream({
             signal: controller.signal,
             afterId: lastEventId.current,
+            epoch: streamEpoch.current,
             onOpen: () => {
               reconnectDelay = 500
               setTransportState("live")
             },
+            onMeta: resetLiveState,
             onEvent: (event) => {
               if (event.id <= lastEventId.current) return
               lastEventId.current = event.id
@@ -57,8 +76,7 @@ export function useLiveRequests() {
               setEvents((current) => mergeEvent(current, event))
               if (event.kind === "finished" || event.kind === "failed") {
                 window.setTimeout(() => {
-                  void queryClient.invalidateQueries({ queryKey: ["observability", "requests"] })
-                  void queryClient.invalidateQueries({ queryKey: ["metrics-summary"] })
+                  refreshDurableState()
                 }, 350)
               }
             },

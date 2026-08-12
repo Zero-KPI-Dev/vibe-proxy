@@ -105,19 +105,17 @@ type TransformationSummary struct {
 }
 
 type Tracker struct {
-	mu             sync.Mutex
-	Event          Event
-	lastTokenAt    time.Time
-	outputTokens   int64
-	interTokenTime time.Duration
-	sink           EventSink
+	mu           sync.Mutex
+	Event        Event
+	outputTokens int64
+	sink         EventSink
 }
 
 func NewTracker(base Event, sink EventSink) *Tracker {
 	if base.StartedAt.IsZero() {
 		base.StartedAt = time.Now()
 	}
-	tr := &Tracker{Event: base, lastTokenAt: base.StartedAt, sink: sink}
+	tr := &Tracker{Event: base, sink: sink}
 	if sink != nil {
 		sink.RequestStarted(base)
 	}
@@ -133,10 +131,7 @@ func (t *Tracker) MarkToken(text string) {
 	if t.Event.FirstTokenAt == nil {
 		t.Event.FirstTokenAt = &now
 		t.Event.TTFTMillis = now.Sub(t.Event.StartedAt).Milliseconds()
-	} else {
-		t.interTokenTime += now.Sub(t.lastTokenAt)
 	}
-	t.lastTokenAt = now
 	t.outputTokens++
 	t.Event.Usage.CompletionTokens = t.outputTokens
 	t.mu.Unlock()
@@ -184,8 +179,8 @@ func (t *Tracker) Finish(status int, usage types.Usage, errCode string) Event {
 	if usage.TotalTokens > 0 || usage.PromptTokens > 0 || usage.CompletionTokens > 0 {
 		t.Event.Usage = usage
 	}
-	if t.outputTokens > 1 {
-		t.Event.TPOTMillis = float64(t.interTokenTime.Milliseconds()) / float64(t.outputTokens-1)
+	if t.Event.Usage.CompletionTokens > 1 && t.Event.FirstTokenAt != nil {
+		t.Event.TPOTMillis = float64(now.Sub(*t.Event.FirstTokenAt)) / float64(time.Millisecond) / float64(t.Event.Usage.CompletionTokens-1)
 	}
 	genDur := now.Sub(t.Event.StartedAt).Seconds()
 	if t.Event.FirstTokenAt != nil {

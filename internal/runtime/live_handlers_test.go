@@ -56,6 +56,7 @@ func TestAdminObservabilityLiveStreamsReplayFrames(t *testing.T) {
 
 	scanner := bufio.NewScanner(response.Body)
 	var eventName string
+	var meta telemetry.LiveStreamMeta
 	var payload telemetry.LiveEvent
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -63,7 +64,14 @@ func TestAdminObservabilityLiveStreamsReplayFrames(t *testing.T) {
 			eventName = strings.TrimPrefix(line, "event: ")
 		}
 		if strings.HasPrefix(line, "data: ") {
-			if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &payload); err != nil {
+			data := []byte(strings.TrimPrefix(line, "data: "))
+			if eventName == "stream.meta" {
+				if err := json.Unmarshal(data, &meta); err != nil {
+					t.Fatal(err)
+				}
+				continue
+			}
+			if err := json.Unmarshal(data, &payload); err != nil {
 				t.Fatal(err)
 			}
 			break
@@ -71,6 +79,9 @@ func TestAdminObservabilityLiveStreamsReplayFrames(t *testing.T) {
 	}
 	if err := scanner.Err(); err != nil {
 		t.Fatal(err)
+	}
+	if meta.Epoch == "" || meta.LatestID != 2 || meta.ReplayGap {
+		t.Fatalf("unexpected stream metadata: %+v", meta)
 	}
 	if eventName != "request.updated" || payload.ID != 2 || payload.Phase != telemetry.RequestPhaseAuthenticated || payload.Request.PrincipalName != "local-codex" {
 		t.Fatalf("unexpected live frame: event=%q payload=%+v", eventName, payload)
@@ -91,7 +102,7 @@ func TestRequestPipelinePublishesBoundedLifecycleCheckpoints(t *testing.T) {
 		t.Fatalf("proxy request = %d: %s", response.Code, response.Body.String())
 	}
 
-	subscription := broker.Subscribe(0)
+	subscription := broker.Subscribe(telemetry.LiveCursor{})
 	defer subscription.Cancel()
 	seen := map[telemetry.RequestPhase]bool{}
 	for _, event := range subscription.Replay {

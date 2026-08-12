@@ -1,19 +1,26 @@
 import { AUTH_REQUIRED_EVENT } from "./auth-api"
 import { getToken } from "./api"
-import type { LiveRequestEvent } from "./types"
+import type { LiveRequestEvent, LiveStreamMeta } from "./types"
 
 interface LiveStreamOptions {
   signal: AbortSignal
   afterId?: number
+  epoch?: string
   onOpen: () => void
+  onMeta: (meta: LiveStreamMeta) => void
   onEvent: (event: LiveRequestEvent) => void
 }
 
-export async function consumeLiveRequestStream({ signal, afterId, onOpen, onEvent }: LiveStreamOptions) {
+type ParsedLiveFrame =
+  | { type: "meta"; value: LiveStreamMeta }
+  | { type: "request"; value: LiveRequestEvent }
+
+export async function consumeLiveRequestStream({ signal, afterId, epoch, onOpen, onMeta, onEvent }: LiveStreamOptions) {
   const headers: Record<string, string> = { Accept: "text/event-stream" }
   const token = getToken()
   if (token) headers.Authorization = `Bearer ${token}`
   if (afterId && afterId > 0) headers["Last-Event-ID"] = String(afterId)
+  if (epoch) headers["X-Vibe-Stream-Epoch"] = epoch
 
   const response = await fetch("/admin/observability/live", {
     credentials: "same-origin",
@@ -43,7 +50,8 @@ export async function consumeLiveRequestStream({ signal, afterId, onOpen, onEven
       buffer = frames.pop() ?? ""
       for (const frame of frames) {
         const event = parseLiveFrame(frame)
-        if (event) onEvent(event)
+        if (event?.type === "meta") onMeta(event.value)
+        if (event?.type === "request") onEvent(event.value)
       }
     }
   } finally {
@@ -51,7 +59,7 @@ export async function consumeLiveRequestStream({ signal, afterId, onOpen, onEven
   }
 }
 
-export function parseLiveFrame(frame: string): LiveRequestEvent | null {
+export function parseLiveFrame(frame: string): ParsedLiveFrame | null {
   let eventName = ""
   const data: string[] = []
   for (const line of frame.split(/\r?\n/)) {
@@ -59,10 +67,15 @@ export function parseLiveFrame(frame: string): LiveRequestEvent | null {
     if (line.startsWith("event:")) eventName = line.slice(6).trim()
     if (line.startsWith("data:")) data.push(line.slice(5).trimStart())
   }
-  if (!eventName.startsWith("request.") || data.length === 0) return null
+  if (data.length === 0) return null
   try {
+    if (eventName === "stream.meta") {
+      const parsed = JSON.parse(data.join("\n")) as LiveStreamMeta
+      return parsed?.epoch && Number.isFinite(parsed.latest_id) ? { type: "meta", value: parsed } : null
+    }
+    if (!eventName.startsWith("request.")) return null
     const parsed = JSON.parse(data.join("\n")) as LiveRequestEvent
-    return parsed?.request?.request_id && Number.isFinite(parsed.id) ? parsed : null
+    return parsed?.request?.request_id && Number.isFinite(parsed.id) ? { type: "request", value: parsed } : null
   } catch {
     return null
   }

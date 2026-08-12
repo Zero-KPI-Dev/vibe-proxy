@@ -413,6 +413,13 @@ export interface LiveRequestEvent {
   request: RequestEvent
 }
 
+export interface LiveStreamMeta {
+  epoch: string
+  oldest_id: number
+  latest_id: number
+  replay_gap: boolean
+}
+
 export interface MetricsHistoryResponse {
   range: string
   points: MetricPoint[]

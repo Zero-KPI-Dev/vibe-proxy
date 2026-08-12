@@ -77,6 +77,42 @@ func TestSaveRawConfigRejectsInvalidRuntimeWithoutReplacingFile(t *testing.T) {
 	}
 }
 
+func TestSaveRawConfigRejectsInconsistentRecoverableKeyWithoutReplacingFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	original := "version: vibeproxy.io/v1alpha1\nclient_keys: []\nproviders: {}\nmodels:\n  allow_raw: true\n  aliases: {}\n"
+	if err := os.WriteFile(path, []byte(original), 0600); err != nil {
+		t.Fatal(err)
+	}
+	hash, err := hashKey("sk-authenticated-value")
+	if err != nil {
+		t.Fatal(err)
+	}
+	invalid := `version: vibeproxy.io/v1alpha1
+client_keys:
+  - name: broken
+    key_hash: "` + hash + `"
+    raw_key: sk-different-value
+    key_prefix: sk-different
+    enabled: true
+    allowed_models: ["*"]
+    rpm: 60
+providers: {}
+models:
+  allow_raw: true
+  aliases: {}
+`
+	if _, err := SaveRawConfig(path, invalid); err == nil {
+		t.Fatal("expected inconsistent recoverable key to be rejected")
+	}
+	written, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(written) != original {
+		t.Fatalf("inconsistent recoverable key replaced active config:\n%s", written)
+	}
+}
+
 func TestSaveRawConfigPreservesLegacyRuntime(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	legacy := `server:

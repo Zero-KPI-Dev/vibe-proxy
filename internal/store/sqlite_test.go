@@ -124,7 +124,7 @@ func TestSQLiteMigrationsCreateTraceSchema(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = sqlite.Close() })
 
-	assertMigrationVersions(t, sqlite.db, []int{1, 2, 3, 4, 5})
+	assertMigrationVersions(t, sqlite.db, []int{1, 2, 3, 4, 5, 6})
 	assertTableColumns(t, sqlite.db, "request_logs", []string{
 		"transformation_json",
 		"trace_id",
@@ -168,7 +168,7 @@ func TestSQLiteMigrationsCreateTraceSchema(t *testing.T) {
 		t.Fatalf("reopening a migrated database must be idempotent: %v", err)
 	}
 	defer reopened.Close()
-	assertMigrationVersions(t, reopened.db, []int{1, 2, 3, 4, 5})
+	assertMigrationVersions(t, reopened.db, []int{1, 2, 3, 4, 5, 6})
 }
 
 func assertMigrationVersions(t *testing.T, db *sql.DB, want []int) {
@@ -569,6 +569,100 @@ func TestSQLiteProvidesPersistedObservability(t *testing.T) {
 	}
 }
 
+func TestSQLiteV6BackfillsOnlyDemonstrablyReportedCacheMetrics(t *testing.T) {
+	databasePath := filepath.Join(t.TempDir(), "pre-v6.db")
+	db, err := sql.Open("sqlite", databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at DATETIME NOT NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range sqliteMigrations {
+		if item.version >= 6 {
+			continue
+		}
+		tx, err := db.Begin()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := item.apply(tx); err != nil {
+			_ = tx.Rollback()
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(`INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)`, item.version, time.Now().UTC()); err != nil {
+			_ = tx.Rollback()
+			t.Fatal(err)
+		}
+		if err := tx.Commit(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	for _, row := range []struct {
+		id        string
+		prompt    int64
+		cacheRead int64
+	}{
+		{id: "legacy-reported", prompt: 100, cacheRead: 60},
+		{id: "legacy-unknown", prompt: 50, cacheRead: 0},
+	} {
+		if _, err := db.Exec(`INSERT INTO request_logs(request_id, started_at, prompt_tokens, cache_read_tokens, cache_write_tokens, cache_hit_ratio) VALUES (?, ?, ?, ?, 0, ?)`, row.id, now, row.prompt, row.cacheRead, float64(row.cacheRead)/float64(row.prompt)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := Open(databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	var reported, unknown int
+	if err := store.db.QueryRow(`SELECT cache_metrics_reported FROM request_logs WHERE request_id = 'legacy-reported'`).Scan(&reported); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.db.QueryRow(`SELECT cache_metrics_reported FROM request_logs WHERE request_id = 'legacy-unknown'`).Scan(&unknown); err != nil {
+		t.Fatal(err)
+	}
+	if reported != 1 || unknown != 0 {
+		t.Fatalf("unexpected v6 cache backfill: reported=%d unknown=%d", reported, unknown)
+	}
+	summary, err := store.MetricsSummary(now.Add(-time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.TodayTokens.CacheRead != 60 || summary.PromptCache.EligiblePromptTokens != 100 || summary.PromptCache.WeightedHitRatio != 0.6 || summary.PromptCache.ReportingCoverage != 0.5 {
+		t.Fatalf("legacy cache population was aggregated inconsistently: %+v", summary)
+	}
+}
+
+func TestSQLiteExcludesUnreportedCacheCountersFromRatios(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "cache-population.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	now := time.Now().UTC().Truncate(time.Second)
+	store.RequestFinished(telemetry.Event{RequestID: "reported", StartedAt: now, Usage: types.Usage{PromptTokens: 100, CacheReadTokens: 25, CacheMetricsReported: true}})
+	if _, err := store.db.Exec(`INSERT INTO request_logs(request_id, started_at, status_code, ttft_ms, tpot_ms, tps, prompt_tokens, completion_tokens, cache_read_tokens, cache_write_tokens, cache_metrics_reported) VALUES ('corrupt-legacy', ?, 200, 0, 0, 0, 1, 0, 1000, 0, 0)`, now); err != nil {
+		t.Fatal(err)
+	}
+	summary, err := store.MetricsSummary(now.Add(-time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.TodayTokens.CacheRead != 25 || summary.PromptCache.WeightedHitRatio != 0.25 {
+		t.Fatalf("unreported counters polluted cache ratio: %+v", summary)
+	}
+	points, err := store.MetricsHistory(now.Add(-time.Hour), 5*time.Minute)
+	if err != nil || len(points) != 1 || points[0].TokensCacheRead != 25 || points[0].CacheHitRatio != 0.25 {
+		t.Fatalf("history population mismatch: points=%+v err=%v", points, err)
+	}
+}
+
 func TestMetricAverageHelpers(t *testing.T) {
 	if got := averageInt64([]int64{100, 300}); got != 200 {
 		t.Fatalf("unexpected int64 average: %v", got)
@@ -828,7 +922,7 @@ func TestSQLiteQueryRequestsUsesStableCursorAndFilters(t *testing.T) {
 	for _, event := range []telemetry.Event{
 		{RequestID: "a", StartedAt: started, AgentID: "codex", PrincipalName: "alice", SessionID: "s1", ProjectID: "p1", VirtualModel: "vibe", ChannelID: "one", ProtocolIn: "openai_chat", StatusCode: 200, CaptureStatus: telemetry.CaptureStatusCaptured},
 		{RequestID: "b", StartedAt: started, AgentID: "codex", PrincipalName: "alice", SessionID: "s1", ProjectID: "p1", VirtualModel: "vibe", ChannelID: "one", ProtocolIn: "openai_chat", StatusCode: 500, CaptureStatus: telemetry.CaptureStatusDropped},
-		{RequestID: "c", StartedAt: started.Add(time.Second), AgentID: "other", PrincipalName: "bob", SessionID: "s2", ProjectID: "p2", VirtualModel: "other", ChannelID: "two", ProtocolIn: "anthropic_messages", StatusCode: 200, CaptureStatus: telemetry.CaptureStatusNotCaptured},
+		{RequestID: "c", TraceID: "trace-searchable", StartedAt: started.Add(time.Second), AgentID: "other", AgentName: "Claude Code", PrincipalName: "bob", ClientKeyPrefix: "sk-live-1234", SessionID: "s2", ProjectID: "p2", VirtualModel: "other", ChannelID: "two", ProtocolIn: "anthropic_messages", ProtocolOut: "openai_chat", StatusCode: 200, CaptureStatus: telemetry.CaptureStatusNotCaptured},
 	} {
 		database.RequestFinished(event)
 	}
@@ -854,6 +948,18 @@ func TestSQLiteQueryRequestsUsesStableCursorAndFilters(t *testing.T) {
 	})
 	if err != nil || len(filtered.Items) != 1 || filtered.Items[0].RequestID != "b" {
 		t.Fatalf("filtered query = %+v err=%v", filtered, err)
+	}
+	for _, query := range []telemetry.RequestQuery{
+		{Protocol: "openai_chat"},
+		{Query: "trace-searchable"},
+		{Query: "Claude Code"},
+		{Query: "sk-live-1234"},
+		{Query: "two"},
+	} {
+		matched, err := database.QueryRequests(query)
+		if err != nil || len(matched.Items) == 0 || matched.Items[0].RequestID != "c" {
+			t.Fatalf("durable filter contract mismatch for %+v: page=%+v err=%v", query, matched, err)
+		}
 	}
 	details, err := database.RequestDetails("a")
 	if err != nil || len(details.Payloads) != 9 {

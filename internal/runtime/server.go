@@ -685,8 +685,8 @@ func (s *Server) handleWithInvocation(w http.ResponseWriter, r *http.Request, tr
 			tracker.Event.FirstTokenAt = &firstTokenAt
 			tracker.Event.TTFTMillis = firstTokenAt.Sub(tracker.Event.StartedAt).Milliseconds()
 		}
-		if finalStreamStats.OutputTokenCount > 1 && !finalStreamStats.FirstTokenAt.IsZero() && !finalStreamStats.CompletedAt.IsZero() {
-			tracker.Event.TPOTMillis = float64(finalStreamStats.CompletedAt.Sub(finalStreamStats.FirstTokenAt).Milliseconds()) / float64(finalStreamStats.OutputTokenCount-1)
+		if tpot := finalStreamStats.TPOT(); tpot > 0 {
+			tracker.Event.TPOTMillis = float64(tpot) / float64(time.Millisecond)
 		}
 		finishUpstreamObservation("ok", "")
 		tracker.Finish(http.StatusOK, toTelemetryUsage(finalStreamStats.Usage), "")

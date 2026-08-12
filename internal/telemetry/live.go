@@ -3,6 +3,8 @@ package telemetry
 import (
 	"sync"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 const (
@@ -56,9 +58,24 @@ func PublishRequestUpdate(sink EventSink, event Event, phase RequestPhase) {
 }
 
 type LiveSubscription struct {
+	Meta   LiveStreamMeta
 	Replay []LiveEvent
 	Events <-chan LiveEvent
 	cancel func()
+}
+
+// LiveStreamMeta identifies one broker process and the replay window available
+// to a subscriber. Event IDs are only monotonic within an Epoch.
+type LiveStreamMeta struct {
+	Epoch     string `json:"epoch"`
+	OldestID  uint64 `json:"oldest_id"`
+	LatestID  uint64 `json:"latest_id"`
+	ReplayGap bool   `json:"replay_gap"`
+}
+
+type LiveCursor struct {
+	Epoch   string
+	AfterID uint64
 }
 
 func (s LiveSubscription) Cancel() {
@@ -68,7 +85,7 @@ func (s LiveSubscription) Cancel() {
 }
 
 type LiveEventSource interface {
-	Subscribe(afterID uint64) LiveSubscription
+	Subscribe(cursor LiveCursor) LiveSubscription
 	LatestID() uint64
 }
 
@@ -87,6 +104,7 @@ type LiveBrokerOptions struct {
 // connected control-plane clients.
 type LiveBroker struct {
 	mu                 sync.Mutex
+	epoch              string
 	nextID             uint64
 	nextSubscriberID   uint64
 	replayCapacity     int
@@ -112,6 +130,7 @@ func NewLiveBroker(options LiveBrokerOptions) *LiveBroker {
 		progressInterval = DefaultLiveProgressInterval
 	}
 	return &LiveBroker{
+		epoch:              uuid.NewString(),
 		replayCapacity:     replayCapacity,
 		subscriberCapacity: subscriberCapacity,
 		progressInterval:   progressInterval,
@@ -169,10 +188,23 @@ func (b *LiveBroker) LatestID() uint64 {
 	return b.nextID
 }
 
-func (b *LiveBroker) Subscribe(afterID uint64) LiveSubscription {
+func (b *LiveBroker) Subscribe(cursor LiveCursor) LiveSubscription {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
+	oldestID := uint64(0)
+	if len(b.replay) > 0 {
+		oldestID = b.replay[0].ID
+	}
+	epochMismatch := cursor.Epoch != "" && cursor.Epoch != b.epoch
+	replayGap := epochMismatch || cursor.AfterID > b.nextID
+	if cursor.AfterID > 0 && oldestID > 0 && cursor.AfterID < oldestID-1 {
+		replayGap = true
+	}
+	afterID := cursor.AfterID
+	if replayGap {
+		afterID = 0
+	}
 	replay := make([]LiveEvent, 0, len(b.replay))
 	for _, event := range b.replay {
 		if event.ID > afterID {
@@ -184,6 +216,12 @@ func (b *LiveBroker) Subscribe(afterID uint64) LiveSubscription {
 	stream := make(chan LiveEvent, b.subscriberCapacity)
 	b.subscribers[id] = stream
 	return LiveSubscription{
+		Meta: LiveStreamMeta{
+			Epoch:     b.epoch,
+			OldestID:  oldestID,
+			LatestID:  b.nextID,
+			ReplayGap: replayGap,
+		},
 		Replay: replay,
 		Events: stream,
 		cancel: func() {

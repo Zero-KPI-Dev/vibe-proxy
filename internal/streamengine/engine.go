@@ -23,6 +23,16 @@ func (s Stats) TTFT() time.Duration {
 	return s.FirstTokenAt.Sub(s.StartedAt)
 }
 
+// TPOT returns the average generation time after the first output token. The
+// final provider usage is authoritative: stream delta count is a transport
+// detail and may not correspond one-to-one with model tokens.
+func (s Stats) TPOT() time.Duration {
+	if s.Usage.CompletionTokens <= 1 || s.FirstTokenAt.IsZero() || s.CompletedAt.IsZero() || s.CompletedAt.Before(s.FirstTokenAt) {
+		return 0
+	}
+	return s.CompletedAt.Sub(s.FirstTokenAt) / time.Duration(s.Usage.CompletionTokens-1)
+}
+
 func Track(ctx context.Context, in <-chan ir.StreamEvent, onStats func(Stats)) <-chan ir.StreamEvent {
 	return TrackWithProgress(ctx, in, nil, onStats)
 }

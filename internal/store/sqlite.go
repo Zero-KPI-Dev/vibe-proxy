@@ -422,8 +422,8 @@ SELECT
 	COALESCE(SUM(CASE WHEN started_at >= ? THEN prompt_tokens ELSE 0 END), 0),
 	COALESCE(SUM(CASE WHEN started_at >= ? THEN completion_tokens ELSE 0 END), 0),
 	COALESCE(SUM(CASE WHEN started_at >= ? THEN total_tokens ELSE 0 END), 0),
-	COALESCE(SUM(CASE WHEN started_at >= ? THEN cache_read_tokens ELSE 0 END), 0),
-	COALESCE(SUM(CASE WHEN started_at >= ? THEN cache_write_tokens ELSE 0 END), 0),
+	COALESCE(SUM(CASE WHEN started_at >= ? AND cache_metrics_reported = 1 THEN cache_read_tokens ELSE 0 END), 0),
+	COALESCE(SUM(CASE WHEN started_at >= ? AND cache_metrics_reported = 1 THEN cache_write_tokens ELSE 0 END), 0),
 	COALESCE(SUM(CASE WHEN started_at >= ? AND cache_metrics_reported = 1 THEN 1 ELSE 0 END), 0),
 	COALESCE(SUM(CASE WHEN started_at >= ? AND cache_metrics_reported = 1 THEN prompt_tokens ELSE 0 END), 0)
 FROM request_logs
@@ -514,9 +514,9 @@ ORDER BY started_at ASC
 		}
 		current.point.TokensPrompt += promptTokens
 		current.point.TokensCompletion += completionTokens
-		current.point.TokensCacheRead += cacheReadTokens
-		current.point.TokensCacheWrite += cacheWriteTokens
 		if cacheMetricsReported {
+			current.point.TokensCacheRead += cacheReadTokens
+			current.point.TokensCacheWrite += cacheWriteTokens
 			current.cachePromptTokens += promptTokens
 			current.cacheReportedRequests++
 		}

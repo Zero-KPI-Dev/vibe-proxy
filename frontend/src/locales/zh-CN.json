@@ -444,6 +444,8 @@
       "missing_client_key_name": "必须填写客户端密钥名称。",
       "duplicate_client_key_name": "客户端密钥名称不能重复。",
       "missing_client_key_hash": "客户端密钥缺少哈希值。",
+      "client_key_raw_hash_mismatch": "可查看的客户端密钥与认证哈希不匹配。",
+      "client_key_prefix_mismatch": "客户端密钥前缀与可查看的密钥值不匹配。",
       "missing_allowed_models": "客户端密钥至少需要允许一个模型或通配符。",
       "invalid_client_key_rpm": "客户端密钥 RPM 必须大于零。",
       "unsupported_multimodal_strategy": "目前仅支持先 OCR、再回退 Vision 的多模态策略。",

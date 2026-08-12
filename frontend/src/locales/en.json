@@ -444,6 +444,8 @@
       "missing_client_key_name": "Client key name is required.",
       "duplicate_client_key_name": "Client key names must be unique.",
       "missing_client_key_hash": "Client key hash is required.",
+      "client_key_raw_hash_mismatch": "The recoverable client key does not match its authentication hash.",
+      "client_key_prefix_mismatch": "The client key prefix does not match its recoverable value.",
       "missing_allowed_models": "Client key must allow at least one model or wildcard.",
       "invalid_client_key_rpm": "Client key RPM must be greater than zero.",
       "unsupported_multimodal_strategy": "Only the OCR-then-Vision multimodal strategy is supported.",

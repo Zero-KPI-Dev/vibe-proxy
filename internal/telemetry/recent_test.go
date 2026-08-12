@@ -37,3 +37,13 @@ func TestTrackerRecordsTotalDuration(t *testing.T) {
 		t.Fatalf("total duration was not recorded: %+v", event)
 	}
 }
+
+func TestTrackerTPOTUsesReportedCompletionTokens(t *testing.T) {
+	tracker := NewTracker(Event{RequestID: "tpot", StartedAt: time.Now().Add(-time.Second)}, nil)
+	tracker.MarkToken("one transport delta containing many tokens")
+	time.Sleep(time.Millisecond)
+	event := tracker.Finish(200, types.Usage{CompletionTokens: 10, TotalTokens: 10}, "")
+	if event.TPOTMillis <= 0 {
+		t.Fatalf("TPOT should use 10 reported tokens rather than one delta: %+v", event)
+	}
+}

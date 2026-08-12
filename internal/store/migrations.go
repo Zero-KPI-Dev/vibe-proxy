@@ -18,6 +18,7 @@ var sqliteMigrations = []migration{
 	{version: 3, apply: addHTTPContextSchema},
 	{version: 4, apply: addPayloadCaptureMetadataSchema},
 	{version: 5, apply: addPrincipalAndCacheMetricSchema},
+	{version: 6, apply: backfillLegacyCacheMetrics},
 }
 
 func (s *SQLite) migrate() error {
@@ -282,6 +283,23 @@ func addPrincipalAndCacheMetricSchema(tx *sql.Tx) error {
 		if _, err := tx.Exec(`ALTER TABLE request_logs ADD COLUMN ` + column.name + ` ` + column.definition); err != nil {
 			return fmt.Errorf("add request_logs.%s: %w", column.name, err)
 		}
+	}
+	return nil
+}
+
+func backfillLegacyCacheMetrics(tx *sql.Tx) error {
+	// Legacy rows with non-zero cache counters (or a non-zero ratio) came from
+	// provider usage fields and can be identified as reported. A legacy zero is
+	// ambiguous, so it deliberately remains unknown rather than becoming a
+	// fabricated cache miss. Keep this repair separate from the v5 schema change
+	// so databases that already applied v5 from a prerelease build still receive
+	// the corrected classification.
+	if _, err := tx.Exec(`UPDATE request_logs
+		SET cache_metrics_reported = 1
+		WHERE COALESCE(cache_read_tokens, 0) > 0
+		   OR COALESCE(cache_write_tokens, 0) > 0
+		   OR COALESCE(cache_hit_ratio, 0) > 0`); err != nil {
+		return fmt.Errorf("backfill request_logs.cache_metrics_reported: %w", err)
 	}
 	return nil
 }

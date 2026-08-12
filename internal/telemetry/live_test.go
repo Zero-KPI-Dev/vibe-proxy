@@ -14,7 +14,7 @@ func TestLiveBrokerPublishesLifecycleAndReplaysAfterID(t *testing.T) {
 	started.StatusCode = 200
 	broker.RequestFinished(started)
 
-	subscription := broker.Subscribe(1)
+	subscription := broker.Subscribe(LiveCursor{AfterID: 1})
 	defer subscription.Cancel()
 	if len(subscription.Replay) != 2 {
 		t.Fatalf("expected two replay events after id 1, got %+v", subscription.Replay)
@@ -29,7 +29,7 @@ func TestLiveBrokerPublishesLifecycleAndReplaysAfterID(t *testing.T) {
 
 func TestLiveBrokerCoalescesProgressAndMarksFirstToken(t *testing.T) {
 	broker := NewLiveBroker(LiveBrokerOptions{ProgressInterval: time.Hour})
-	subscription := broker.Subscribe(0)
+	subscription := broker.Subscribe(LiveCursor{})
 	defer subscription.Cancel()
 
 	event := Event{RequestID: "request-1", FirstTokenAt: timePointer(time.Now().UTC()), TTFTMillis: 12}
@@ -50,7 +50,7 @@ func TestLiveBrokerCoalescesProgressAndMarksFirstToken(t *testing.T) {
 
 func TestLiveBrokerDisconnectsSlowSubscriberWithoutBlockingPublisher(t *testing.T) {
 	broker := NewLiveBroker(LiveBrokerOptions{SubscriberCapacity: 1})
-	subscription := broker.Subscribe(0)
+	subscription := broker.Subscribe(LiveCursor{})
 	broker.RequestStarted(Event{RequestID: "request-1"})
 	broker.RequestStarted(Event{RequestID: "request-2"})
 
@@ -69,10 +69,32 @@ func TestLiveBrokerReplayIsBounded(t *testing.T) {
 	for _, id := range []string{"one", "two", "three"} {
 		broker.RequestStarted(Event{RequestID: id})
 	}
-	subscription := broker.Subscribe(0)
+	subscription := broker.Subscribe(LiveCursor{})
 	defer subscription.Cancel()
 	if len(subscription.Replay) != 2 || subscription.Replay[0].Request.RequestID != "two" || subscription.Replay[1].Request.RequestID != "three" {
 		t.Fatalf("unexpected bounded replay: %+v", subscription.Replay)
+	}
+}
+
+func TestLiveBrokerDetectsEpochChangeAndReplayGap(t *testing.T) {
+	broker := NewLiveBroker(LiveBrokerOptions{ReplayCapacity: 2})
+	for _, id := range []string{"one", "two", "three"} {
+		broker.RequestStarted(Event{RequestID: id})
+	}
+
+	staleEpoch := broker.Subscribe(LiveCursor{Epoch: "previous-process", AfterID: 99})
+	defer staleEpoch.Cancel()
+	if !staleEpoch.Meta.ReplayGap || staleEpoch.Meta.Epoch == "" || len(staleEpoch.Replay) != 2 {
+		t.Fatalf("expected epoch mismatch to replay the retained window: meta=%+v replay=%+v", staleEpoch.Meta, staleEpoch.Replay)
+	}
+
+	oldCursor := broker.Subscribe(LiveCursor{Epoch: staleEpoch.Meta.Epoch, AfterID: 0})
+	defer oldCursor.Cancel()
+	if oldCursor.Meta.ReplayGap {
+		t.Fatalf("initial cursor must not be reported as a gap: %+v", oldCursor.Meta)
+	}
+	if oldCursor.Meta.OldestID != 2 || oldCursor.Meta.LatestID != 3 {
+		t.Fatalf("unexpected replay bounds: %+v", oldCursor.Meta)
 	}
 }
 

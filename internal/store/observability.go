@@ -104,8 +104,11 @@ func (s *SQLite) QueryRequests(query telemetry.RequestQuery) (telemetry.RequestP
 	addEqualFilter("session_id", query.SessionID)
 	addEqualFilter("project_id", query.ProjectID)
 	addEqualFilter("channel_id", query.Provider)
-	addEqualFilter("protocol_in", query.Protocol)
 	addEqualFilter("capture_status", query.CaptureStatus)
+	if protocol := strings.TrimSpace(query.Protocol); protocol != "" {
+		where = append(where, "(protocol_in = ? OR protocol_out = ?)")
+		args = append(args, protocol, protocol)
+	}
 	if query.Model != "" {
 		where = append(where, "(virtual_model = ? OR upstream_model = ?)")
 		args = append(args, query.Model, query.Model)
@@ -116,8 +119,8 @@ func (s *SQLite) QueryRequests(query telemetry.RequestQuery) (telemetry.RequestP
 	}
 	if trimmed := strings.TrimSpace(query.Query); trimmed != "" {
 		like := "%" + trimmed + "%"
-		where = append(where, `(request_id LIKE ? OR session_id LIKE ? OR agent_id LIKE ? OR principal_name LIKE ? OR virtual_model LIKE ? OR upstream_model LIKE ?)`)
-		args = append(args, like, like, like, like, like, like)
+		where = append(where, `(request_id LIKE ? OR trace_id LIKE ? OR session_id LIKE ? OR agent_id LIKE ? OR agent_name LIKE ? OR principal_name LIKE ? OR client_key_prefix LIKE ? OR virtual_model LIKE ? OR upstream_model LIKE ? OR channel_id LIKE ?)`)
+		args = append(args, like, like, like, like, like, like, like, like, like, like)
 	}
 	if query.From != nil {
 		where = append(where, "started_at >= ?")

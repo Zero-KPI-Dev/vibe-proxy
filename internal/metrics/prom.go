@@ -44,7 +44,7 @@ func newPrometheus(registerer prometheus.Registerer, gatherer prometheus.Gathere
 		cache:       prometheus.NewCounterVec(prometheus.CounterOpts{Name: "vibe_proxy_prompt_cache_requests_total", Help: "Requests by prompt-cache telemetry state."}, []string{"model", "channel", "state"}),
 		cacheTokens: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "vibe_proxy_prompt_cache_tokens_total", Help: "Prompt-cache tokens for requests whose provider reported cache telemetry."}, []string{"model", "channel", "kind"}),
 		tpot:        prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "vibe_proxy_tpot_seconds", Help: "Average time per output token."}, []string{"model", "channel"}),
-		tps:         prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "vibe_proxy_tps", Help: "Output token throughput."}, []string{"model", "channel"}),
+		tps:         prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "vibe_proxy_tps", Help: "Output token throughput.", Buckets: []float64{0.5, 1, 2, 5, 10, 20, 40, 80, 160, 320, 640, 1280}}, []string{"model", "channel"}),
 	}
 	registerer.MustRegister(p.requests, p.ttft, p.tokens, p.cache, p.cacheTokens, p.tpot, p.tps)
 	return p

@@ -229,7 +229,7 @@ func UpsertClientKey(path string, input ClientKeyInput) (*RuntimeConfig, string,
 		Name:          input.Name,
 		KeyHash:       hash,
 		RawKey:        rawKey,
-		KeyPrefix:     rawKey[:12],
+		KeyPrefix:     clientKeyPrefix(rawKey),
 		Enabled:       true,
 		AllowedModels: allowed,
 		RPM:           rpm,
@@ -315,7 +315,7 @@ func RotateClientKey(path string, name string) (*RuntimeConfig, string, error) {
 	}
 	cfg.ClientKeys[index].KeyHash = hash
 	cfg.ClientKeys[index].RawKey = rawKey
-	cfg.ClientKeys[index].KeyPrefix = rawKey[:12]
+	cfg.ClientKeys[index].KeyPrefix = clientKeyPrefix(rawKey)
 	compiled, err := compileValidated(cfg)
 	if err != nil {
 		return nil, "", err

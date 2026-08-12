@@ -65,6 +65,23 @@ func TestTrackWithProgressReportsFirstTokenBeforeCompletion(t *testing.T) {
 	}
 }
 
+func TestStatsTPOTUsesCompletionTokensInsteadOfDeltaCount(t *testing.T) {
+	first := time.Date(2026, time.August, 11, 12, 0, 0, 0, time.UTC)
+	stats := Stats{
+		FirstTokenAt:     first,
+		CompletedAt:      first.Add(900 * time.Millisecond),
+		OutputTokenCount: 2,
+		Usage:            ir.Usage{CompletionTokens: 10},
+	}
+	if got := stats.TPOT(); got != 100*time.Millisecond {
+		t.Fatalf("TPOT = %v, want 100ms from 10 completion tokens", got)
+	}
+	stats.Usage.CompletionTokens = 0
+	if got := stats.TPOT(); got != 0 {
+		t.Fatalf("TPOT without authoritative usage = %v, want unavailable", got)
+	}
+}
+
 func TestAccumulateStreamToUnary(t *testing.T) {
 	in := make(chan ir.StreamEvent, 4)
 	in <- ir.StreamEvent{Type: ir.EventContentDelta, Delta: ir.ContentBlock{Type: ir.ContentText, Text: "he"}}

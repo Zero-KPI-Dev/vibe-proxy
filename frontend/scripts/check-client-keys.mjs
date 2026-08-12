@@ -39,8 +39,13 @@ assert.match(page, /flex-1 truncate whitespace-nowrap/,
   "revealing a long key must keep the table row on a single line")
 assert.doesNotMatch(page, /<Dialog open=\{!!revealedKey\}/,
   "revealing a client key must not open a separate dialog")
-assert.match(page, /!k\.recoverable[\s\S]*?handleRotateKey\(k\)/,
-  "legacy hash-only keys must offer rotation instead of a misleading reveal")
+assert.doesNotMatch(page, /rawKeyCache/,
+  "explicit reveal and copy actions must fetch the current server value instead of caching plaintext by name")
+assert.match(page, /handleRotateKey\(k\)/,
+  "all client keys must expose rotation, including recoverable keys")
+const actionsCell = page.match(/<TableCell>\s*<div className="flex items-center gap-1">[\s\S]*?<\/TableCell>/)?.[0] ?? ""
+assert.doesNotMatch(actionsCell, /!k\.recoverable/,
+  "recoverability must not hide the rotation action")
 assert.match(page, /copyText\(value\)/,
   "client-key copy must use the WebView-compatible clipboard helper")
 assert.match(clipboard, /navigator\.clipboard\?\.writeText/,

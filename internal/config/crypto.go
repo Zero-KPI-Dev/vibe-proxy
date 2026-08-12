@@ -23,3 +23,11 @@ func hashKey(key string) (string, error) {
 	}
 	return string(h), nil
 }
+
+func clientKeyPrefix(key string) string {
+	const prefixLength = 12
+	if len(key) <= prefixLength {
+		return key
+	}
+	return key[:prefixLength]
+}

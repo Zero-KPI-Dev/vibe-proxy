@@ -52,6 +52,8 @@ func TestPrometheusExportsGenerationAndPromptCacheMetrics(t *testing.T) {
 		`vibe_proxy_prompt_cache_tokens_total{channel="local",kind="write",model="vibe-chat"} 10`,
 		`vibe_proxy_ttft_seconds_sum{channel="local",model="vibe-chat"} 0.25`,
 		`vibe_proxy_tpot_seconds_sum{channel="local",model="vibe-chat"} 0.02`,
+		`vibe_proxy_tps_bucket{channel="local",model="vibe-chat",le="40"} 0`,
+		`vibe_proxy_tps_bucket{channel="local",model="vibe-chat",le="80"} 1`,
 		`vibe_proxy_tps_sum{channel="local",model="vibe-chat"} 50`,
 	} {
 		if !strings.Contains(body, expected) {
