@@ -92,6 +92,7 @@ func (a ChatAdapter) EncodeStream(ctx context.Context, w http.ResponseWriter, ev
 	created := time.Now().Unix()
 	model := ""
 	sawToolCall := false
+	toolIndexes := map[int]int{}
 	var usage ir.Usage
 	for {
 		if err := writer.Err(); err != nil {
@@ -130,8 +131,16 @@ func (a ChatAdapter) EncodeStream(ctx context.Context, w http.ResponseWriter, ev
 					flusher.Flush()
 				}
 			case ir.EventToolCallStart, ir.EventToolCallDelta:
+				if ev.ToolCall == nil {
+					continue
+				}
 				sawToolCall = sawToolCall || ev.ToolCall != nil
-				writeSSE(w, toolChunk(id, created, model, ev.ToolCall))
+				index, exists := toolIndexes[ev.Index]
+				if !exists {
+					index = len(toolIndexes)
+					toolIndexes[ev.Index] = index
+				}
+				writeSSE(w, toolChunk(id, created, model, index, ev.ToolCall))
 				if flusher != nil {
 					flusher.Flush()
 				}
@@ -364,10 +373,18 @@ func reasoningStreamChunk(id string, created int64, model, text string) map[stri
 		"choices": []any{map[string]any{"index": 0, "delta": map[string]any{"reasoning_content": text}, "finish_reason": nil}},
 	}
 }
-func toolChunk(id string, created int64, model string, tc *ir.ToolCall) map[string]any {
+func toolChunk(id string, created int64, model string, index int, tc *ir.ToolCall) map[string]any {
 	delta := map[string]any{}
 	if tc != nil {
-		delta["tool_calls"] = []any{map[string]any{"index": 0, "id": tc.ID, "type": "function", "function": map[string]any{"name": tc.Name, "arguments": string(tc.Arguments)}}}
+		function := map[string]any{"arguments": string(tc.Arguments)}
+		if tc.Name != "" {
+			function["name"] = tc.Name
+		}
+		call := map[string]any{"index": index, "function": function}
+		if tc.ID != "" {
+			call["id"], call["type"] = tc.ID, "function"
+		}
+		delta["tool_calls"] = []any{call}
 	}
 	return map[string]any{"id": id, "object": "chat.completion.chunk", "created": created, "model": model, "choices": []any{map[string]any{"index": 0, "delta": delta, "finish_reason": nil}}}
 }

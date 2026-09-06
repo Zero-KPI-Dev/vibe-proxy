@@ -108,6 +108,13 @@ jobs:
         run: |
           ./scripts/release/test-windows-desktop-startup.ps1 `
             -Installer "desktop/bin/vibe-proxy-desktop-amd64-setup.exe"
+      - name: Upload Windows test installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: vibe-proxy-windows-${{ matrix.goarch }}-pr-${{ github.event.pull_request.number || github.run_number }}
+          path: ${{ runner.temp }}/packages/*-setup.exe
+          if-no-files-found: error
+          retention-days: 7
   macos:
     needs: test
     strategy:
@@ -131,3 +138,10 @@ jobs:
           desktop/bin/Vibe\ Proxy.app/Contents/MacOS/vibe-proxy-desktop --version
           scripts/release/package-desktop-dmg.sh v0.0.0-ci "${{ matrix.goarch }}" \
             "desktop/bin/Vibe Proxy.app" "$RUNNER_TEMP/packages"
+      - name: Upload macOS test installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: vibe-proxy-macos-${{ matrix.goarch }}-pr-${{ github.event.pull_request.number || github.run_number }}
+          path: ${{ runner.temp }}/packages/*.dmg
+          if-no-files-found: error
+          retention-days: 7

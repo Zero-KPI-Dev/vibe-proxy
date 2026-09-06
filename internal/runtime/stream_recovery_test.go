@@ -25,6 +25,56 @@ import (
 
 const healthyStream = "data: {\"choices\":[{\"delta\":{\"content\":\"recovered\"}}]}\n\ndata: [DONE]\n\n"
 
+type countingStreamBody struct {
+	io.ReadCloser
+	reading chan struct{}
+	once    sync.Once
+	closes  atomic.Int32
+}
+
+func (b *countingStreamBody) Read(p []byte) (int, error) {
+	b.once.Do(func() { close(b.reading) })
+	return b.ReadCloser.Read(p)
+}
+
+func (b *countingStreamBody) Close() error {
+	b.closes.Add(1)
+	return b.ReadCloser.Close()
+}
+
+func TestProviderStreamCancellationClosesBodyOnce(t *testing.T) {
+	for _, adapter := range []protocol.ProviderAdapter{provideropenai.Provider{}, provideranthropic.Provider{}} {
+		t.Run(adapter.Name(), func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			reader, writer := io.Pipe()
+			defer writer.Close()
+			body := &countingStreamBody{ReadCloser: reader, reading: make(chan struct{})}
+			events, err := adapter.ParseStream(ctx, &http.Response{StatusCode: 200, Body: body})
+			if err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-body.reading:
+			case <-time.After(time.Second):
+				t.Fatal("parser did not begin reading")
+			}
+			cancel()
+			select {
+			case _, open := <-events:
+				if open {
+					t.Fatal("unexpected event after cancelling an empty stream")
+				}
+			case <-time.After(time.Second):
+				t.Fatal("cancelled parser did not finish cleanup")
+			}
+			if closes := body.closes.Load(); closes != 1 {
+				t.Fatalf("cancellation and parser cleanup closed the body %d times", closes)
+			}
+		})
+	}
+}
+
 func configureRecoveryServer(t *testing.T, upstream *httptest.Server, total, first, idle time.Duration) (*Server, *telemetry.RecentStore) {
 	t.Helper()
 	s := newTestServer(t, nil)

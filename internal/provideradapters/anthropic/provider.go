@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/a448582655/vibe-proxy/internal/ir"
@@ -84,12 +85,15 @@ func (p Provider) ParseStream(ctx context.Context, resp *http.Response) (<-chan 
 		resp.Body.Close()
 		return nil, ir.GatewayError{StatusCode: 502, Kind: "upstream_error", Code: "invalid_upstream_stream", Message: "Upstream did not return an event stream."}
 	}
-	stopRead := context.AfterFunc(ctx, func() { _ = resp.Body.Close() })
+	closeBody := sync.OnceFunc(func() { _ = resp.Body.Close() })
+	stopRead := context.AfterFunc(ctx, closeBody)
 	out := make(chan ir.StreamEvent, 32)
 	go func() {
 		defer close(out)
-		defer stopRead()
-		defer resp.Body.Close()
+		defer func() {
+			stopRead()
+			closeBody()
+		}()
 		reader := bufio.NewScanner(resp.Body)
 		reader.Buffer(make([]byte, 64<<10), 1<<20)
 		var eventName string
@@ -167,7 +171,9 @@ func (p Provider) ParseStream(ctx context.Context, resp *http.Response) (<-chan 
 				}
 				if delta.PartialJSON != "" {
 					call := toolCalls[index]
-					fragment := ir.ToolCall{ID: call.ID, Name: call.Name, Arguments: json.RawMessage(delta.PartialJSON)}
+					// Identity belongs to the start event; OpenAI clients append
+					// delta fields and would concatenate a repeated ID/name.
+					fragment := ir.ToolCall{Arguments: json.RawMessage(delta.PartialJSON)}
 					call.Arguments = append(call.Arguments, delta.PartialJSON...)
 					toolCalls[index] = call
 					if !emitStreamEvent(ctx, out, ir.StreamEvent{Type: ir.EventToolCallDelta, Time: time.Now(), Index: index, ToolCall: &fragment, Raw: []byte(data)}) {
