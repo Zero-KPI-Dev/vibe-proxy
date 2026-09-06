@@ -72,11 +72,18 @@ func (p Provider) ParseStream(ctx context.Context, resp *http.Response) (<-chan 
 	if resp.StatusCode >= 400 {
 		return nil, p.NormalizeError(ctx, resp)
 	}
+	if contentType := resp.Header.Get("Content-Type"); contentType != "" && !strings.HasPrefix(strings.ToLower(contentType), "text/event-stream") {
+		resp.Body.Close()
+		return nil, ir.GatewayError{StatusCode: 502, Kind: "upstream_error", Code: "invalid_upstream_stream", Message: "Upstream did not return an event stream."}
+	}
+	stopRead := context.AfterFunc(ctx, func() { _ = resp.Body.Close() })
 	out := make(chan ir.StreamEvent, 32)
 	go func() {
 		defer close(out)
+		defer stopRead()
 		defer resp.Body.Close()
-		reader := bufio.NewReader(resp.Body)
+		reader := bufio.NewScanner(resp.Body)
+		reader.Buffer(make([]byte, 64<<10), 1<<20)
 		finished := false
 		for {
 			select {
@@ -84,9 +91,8 @@ func (p Provider) ParseStream(ctx context.Context, resp *http.Response) (<-chan 
 				return
 			default:
 			}
-			line, err := reader.ReadString('\n')
-			if err != nil {
-				if err == io.EOF && finished {
+			if !reader.Scan() {
+				if reader.Err() == nil && finished {
 					emitStreamEvent(ctx, out, ir.StreamEvent{Type: ir.EventMessageDone, Time: time.Now()})
 					return
 				}
@@ -95,7 +101,7 @@ func (p Provider) ParseStream(ctx context.Context, resp *http.Response) (<-chan 
 				}
 				return
 			}
-			line = strings.TrimSpace(line)
+			line := strings.TrimSpace(reader.Text())
 			if !strings.HasPrefix(line, "data:") {
 				continue
 			}
@@ -109,7 +115,12 @@ func (p Provider) ParseStream(ctx context.Context, resp *http.Response) (<-chan 
 			}
 			var chunk streamChunk
 			if json.Unmarshal([]byte(data), &chunk) != nil {
-				continue
+				emitStreamEvent(ctx, out, ir.StreamEvent{Type: ir.EventError, Error: &ir.GatewayError{StatusCode: 502, Kind: "upstream_error", Code: "invalid_upstream_stream", Message: "Upstream returned a malformed stream frame."}})
+				return
+			}
+			if len(chunk.Error) > 0 && string(chunk.Error) != "null" {
+				emitStreamEvent(ctx, out, ir.StreamEvent{Type: ir.EventError, Error: &ir.GatewayError{StatusCode: 502, Kind: "upstream_error", Code: "upstream_stream_error", Message: "Upstream reported an error while streaming."}})
+				return
 			}
 			if !finished {
 				for _, ch := range chunk.Choices {
@@ -295,6 +306,7 @@ type chatResponse struct {
 	Usage usage `json:"usage"`
 }
 type streamChunk struct {
+	Error   json.RawMessage `json:"error"`
 	Choices []struct {
 		Delta struct {
 			Content          string         `json:"content"`

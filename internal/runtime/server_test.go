@@ -699,7 +699,9 @@ func TestRuntimeOCRFallbackForAllClientProtocolsAndCache(t *testing.T) {
 		}
 		if strings.Contains(string(body), `"stream":true`) {
 			time.Sleep(2 * time.Millisecond)
-			return jsonResponse(200, "data: {\"id\":\"chatcmpl_ocr_stream\",\"choices\":[{\"delta\":{\"content\":\"ocr stream\"},\"finish_reason\":\"\"}]}\n\ndata: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"), nil
+			response := jsonResponse(200, "data: {\"id\":\"chatcmpl_ocr_stream\",\"choices\":[{\"delta\":{\"content\":\"ocr stream\"},\"finish_reason\":\"\"}]}\n\ndata: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n")
+			response.Header.Set("Content-Type", "text/event-stream")
+			return response, nil
 		}
 		return jsonResponse(200, `{"id":"chatcmpl_ocr","model":"raw-chat","choices":[{"message":{"role":"assistant","content":"ocr ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}}`), nil
 	})})

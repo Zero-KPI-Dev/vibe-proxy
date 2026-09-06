@@ -40,6 +40,8 @@ func TestBuildLocalProviderPreservesCapabilityOverrides(t *testing.T) {
 		Auth:                upstreamauth.Profile{Type: "custom_headers", Headers: map[string]upstreamauth.SecretRef{"X-Tenant": "literal:team-a"}},
 		Priority:            7,
 		Timeout:             Duration{Duration: 45 * time.Second},
+		FirstTokenTimeout:   Duration{Duration: 20 * time.Second},
+		StreamIdleTimeout:   Duration{Duration: 15 * time.Second},
 		MaxConcurrency:      11,
 		DefaultCapabilities: modelcapability.ModelCapabilities{ImageInput: modelcapability.SupportUnsupported},
 		ModelCapabilities: map[string]modelcapability.ModelCapabilities{
@@ -55,6 +57,9 @@ func TestBuildLocalProviderPreservesCapabilityOverrides(t *testing.T) {
 	}
 	if provider.Priority != 7 || provider.Timeout.Duration != 45*time.Second || provider.MaxConcurrency != 11 || provider.Auth.Headers["X-Tenant"] != "literal:team-a" {
 		t.Fatalf("advanced provider settings were lost: %+v", provider)
+	}
+	if provider.FirstTokenTimeout.Duration != 20*time.Second || provider.StreamIdleTimeout.Duration != 15*time.Second {
+		t.Fatalf("stream timeout settings were lost: %+v", provider)
 	}
 }
 

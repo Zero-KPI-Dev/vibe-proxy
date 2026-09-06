@@ -11,7 +11,9 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/a448582655/vibe-proxy/internal/httpstream"
 	"github.com/a448582655/vibe-proxy/internal/ir"
+	"github.com/a448582655/vibe-proxy/internal/protocol"
 )
 
 type ChatAdapter struct{}
@@ -78,6 +80,10 @@ func (a ChatAdapter) EncodeUnary(ctx context.Context, w http.ResponseWriter, res
 }
 
 func (a ChatAdapter) EncodeStream(ctx context.Context, w http.ResponseWriter, events <-chan ir.StreamEvent) error {
+	writer := httpstream.NewWriter(ctx, w, 0)
+	defer writer.Close()
+	w = writer
+
 	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -88,16 +94,15 @@ func (a ChatAdapter) EncodeStream(ctx context.Context, w http.ResponseWriter, ev
 	sawToolCall := false
 	var usage ir.Usage
 	for {
+		if err := writer.Err(); err != nil {
+			return err
+		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case ev, ok := <-events:
 			if !ok {
-				writeRawSSE(w, "[DONE]")
-				if flusher != nil {
-					flusher.Flush()
-				}
-				return nil
+				return protocol.UnexpectedStreamEnd(ctx)
 			}
 			if ev.Error != nil {
 				return *ev.Error
@@ -147,7 +152,7 @@ func (a ChatAdapter) EncodeStream(ctx context.Context, w http.ResponseWriter, ev
 				if flusher != nil {
 					flusher.Flush()
 				}
-				return nil
+				return writer.Err()
 			}
 		}
 	}

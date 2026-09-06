@@ -11,7 +11,9 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/a448582655/vibe-proxy/internal/httpstream"
 	"github.com/a448582655/vibe-proxy/internal/ir"
+	"github.com/a448582655/vibe-proxy/internal/protocol"
 )
 
 type ResponsesAdapter struct{}
@@ -83,6 +85,10 @@ func (a ResponsesAdapter) EncodeUnary(ctx context.Context, w http.ResponseWriter
 }
 
 func (a ResponsesAdapter) EncodeStream(ctx context.Context, w http.ResponseWriter, events <-chan ir.StreamEvent) error {
+	writer := httpstream.NewWriter(ctx, w, 0)
+	defer writer.Close()
+	w = writer
+
 	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
 	flusher, _ := w.(http.Flusher)
@@ -108,14 +114,15 @@ func (a ResponsesAdapter) EncodeStream(ctx context.Context, w http.ResponseWrite
 	functionItems := map[string]*functionItem{}
 	functionOrder := []*functionItem{}
 	for {
+		if err := writer.Err(); err != nil {
+			return err
+		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case ev, ok := <-events:
 			if !ok {
-				writeResponsesDone(w, responseID, usage)
-				flushOpenAI(flusher)
-				return nil
+				return protocol.UnexpectedStreamEnd(ctx)
 			}
 			if ev.Error != nil {
 				return *ev.Error
@@ -212,7 +219,7 @@ func (a ResponsesAdapter) EncodeStream(ctx context.Context, w http.ResponseWrite
 				}
 				writeResponsesDone(w, responseID, usage)
 				flushOpenAI(flusher)
-				return nil
+				return writer.Err()
 			}
 		}
 	}

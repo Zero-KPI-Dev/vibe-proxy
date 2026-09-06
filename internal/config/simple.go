@@ -46,6 +46,8 @@ type ProviderConfig struct {
 	Models              []string                                     `yaml:"models"`
 	Priority            int                                          `yaml:"priority"`
 	Timeout             Duration                                     `yaml:"timeout"`
+	FirstTokenTimeout   Duration                                     `yaml:"first_token_timeout,omitempty"`
+	StreamIdleTimeout   Duration                                     `yaml:"stream_idle_timeout,omitempty"`
 	MaxConcurrency      int                                          `yaml:"max_concurrency"`
 }
 
