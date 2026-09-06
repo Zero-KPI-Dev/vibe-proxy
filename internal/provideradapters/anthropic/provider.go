@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/a448582655/vibe-proxy/internal/ir"
@@ -80,11 +81,21 @@ func (p Provider) ParseStream(ctx context.Context, resp *http.Response) (<-chan 
 	if resp.StatusCode >= 400 {
 		return nil, p.NormalizeError(ctx, resp)
 	}
+	if contentType := resp.Header.Get("Content-Type"); contentType != "" && !strings.HasPrefix(strings.ToLower(contentType), "text/event-stream") {
+		resp.Body.Close()
+		return nil, ir.GatewayError{StatusCode: 502, Kind: "upstream_error", Code: "invalid_upstream_stream", Message: "Upstream did not return an event stream."}
+	}
+	closeBody := sync.OnceFunc(func() { _ = resp.Body.Close() })
+	stopRead := context.AfterFunc(ctx, closeBody)
 	out := make(chan ir.StreamEvent, 32)
 	go func() {
 		defer close(out)
-		defer resp.Body.Close()
-		reader := bufio.NewReader(resp.Body)
+		defer func() {
+			stopRead()
+			closeBody()
+		}()
+		reader := bufio.NewScanner(resp.Body)
+		reader.Buffer(make([]byte, 64<<10), 1<<20)
 		var eventName string
 		toolCalls := map[int]ir.ToolCall{}
 		for {
@@ -93,14 +104,13 @@ func (p Provider) ParseStream(ctx context.Context, resp *http.Response) (<-chan 
 				return
 			default:
 			}
-			line, err := reader.ReadString('\n')
-			if err != nil {
+			if !reader.Scan() {
 				if ctx.Err() == nil {
 					emitStreamEvent(ctx, out, ir.StreamEvent{Type: ir.EventError, Time: time.Now(), Error: &ir.GatewayError{StatusCode: 502, Kind: "upstream_error", Code: "stream_interrupted", Message: "Upstream stream interrupted."}})
 				}
 				return
 			}
-			line = strings.TrimRight(line, "\r\n")
+			line := strings.TrimRight(reader.Text(), "\r\n")
 			if strings.HasPrefix(line, "event:") {
 				eventName = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
 				continue
@@ -114,7 +124,12 @@ func (p Provider) ParseStream(ctx context.Context, resp *http.Response) (<-chan 
 			}
 			var frame map[string]json.RawMessage
 			if json.Unmarshal([]byte(data), &frame) != nil {
-				continue
+				emitStreamEvent(ctx, out, ir.StreamEvent{Type: ir.EventError, Error: &ir.GatewayError{StatusCode: 502, Kind: "upstream_error", Code: "invalid_upstream_stream", Message: "Upstream returned a malformed stream frame."}})
+				return
+			}
+			if eventName == "error" || (len(frame["error"]) > 0 && string(frame["error"]) != "null") {
+				emitStreamEvent(ctx, out, ir.StreamEvent{Type: ir.EventError, Error: &ir.GatewayError{StatusCode: 502, Kind: "upstream_error", Code: "upstream_stream_error", Message: "Upstream reported an error while streaming."}})
+				return
 			}
 			switch eventName {
 			case "message_start":
@@ -156,7 +171,9 @@ func (p Provider) ParseStream(ctx context.Context, resp *http.Response) (<-chan 
 				}
 				if delta.PartialJSON != "" {
 					call := toolCalls[index]
-					fragment := ir.ToolCall{ID: call.ID, Name: call.Name, Arguments: json.RawMessage(delta.PartialJSON)}
+					// Identity belongs to the start event; OpenAI clients append
+					// delta fields and would concatenate a repeated ID/name.
+					fragment := ir.ToolCall{Arguments: json.RawMessage(delta.PartialJSON)}
 					call.Arguments = append(call.Arguments, delta.PartialJSON...)
 					toolCalls[index] = call
 					if !emitStreamEvent(ctx, out, ir.StreamEvent{Type: ir.EventToolCallDelta, Time: time.Now(), Index: index, ToolCall: &fragment, Raw: []byte(data)}) {

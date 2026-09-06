@@ -103,6 +103,8 @@ func BuildLocalProvider(input LocalProviderInput, existing *ProviderConfig) (Pro
 		provider.ModelCapabilities = existing.ModelCapabilities
 		provider.Priority = existing.Priority
 		provider.Timeout = existing.Timeout
+		provider.FirstTokenTimeout = existing.FirstTokenTimeout
+		provider.StreamIdleTimeout = existing.StreamIdleTimeout
 		if input.MaxConcurrency <= 0 {
 			provider.MaxConcurrency = existing.MaxConcurrency
 		}

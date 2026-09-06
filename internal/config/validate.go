@@ -95,6 +95,11 @@ func ValidateRuntime(cfg *RuntimeConfig) []ValidationIssue {
 		default:
 			issues = append(issues, issue("error", path+".auth.type", "unsupported_auth_type", fmt.Sprintf("Provider auth type %q is not supported.", p.Auth.Type)))
 		}
+		for field, duration := range map[string]time.Duration{"timeout": p.Timeout.Duration, "first_token_timeout": p.FirstTokenTimeout.Duration, "stream_idle_timeout": p.StreamIdleTimeout.Duration} {
+			if duration < 0 {
+				issues = append(issues, issue("error", path+"."+field, "invalid_provider_timeout", "Provider timeouts must not be negative; omit them to use defaults."))
+			}
+		}
 		if !p.DefaultCapabilities.ImageInput.Valid() {
 			issues = append(issues, issue("error", path+".default_capabilities.image_input", "invalid_image_input_capability", "image_input must be unknown, supported, or unsupported."))
 		}

@@ -92,6 +92,9 @@ func TrackWithProgress(ctx context.Context, in <-chan ir.StreamEvent, onProgress
 					report()
 					return
 				}
+				if ev.Type == ir.EventMessageDone || ev.Error != nil {
+					return
+				}
 			}
 		}
 	}()
@@ -140,8 +143,8 @@ func countsAsToken(ev ir.StreamEvent) bool {
 	if ev.Type == ir.EventContentDelta || ev.Type == ir.EventReasoningDelta {
 		return ev.Delta.Text != ""
 	}
-	if ev.Type == ir.EventToolCallDelta && ev.ToolCall != nil {
-		return len(ev.ToolCall.Arguments) > 0
+	if (ev.Type == ir.EventToolCallStart || ev.Type == ir.EventToolCallDelta) && ev.ToolCall != nil {
+		return len(ev.ToolCall.Arguments) > 0 || ev.ToolCall.Name != "" || ev.ToolCall.ID != ""
 	}
 	return false
 }

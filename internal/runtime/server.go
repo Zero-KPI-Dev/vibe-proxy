@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"sort"
@@ -20,6 +22,7 @@ import (
 	clientopenai "github.com/a448582655/vibe-proxy/internal/clientadapters/openai"
 	"github.com/a448582655/vibe-proxy/internal/config"
 	"github.com/a448582655/vibe-proxy/internal/desktopbridge"
+	"github.com/a448582655/vibe-proxy/internal/httpstream"
 	"github.com/a448582655/vibe-proxy/internal/ir"
 	"github.com/a448582655/vibe-proxy/internal/metrics"
 	"github.com/a448582655/vibe-proxy/internal/modelcatalog"
@@ -47,11 +50,15 @@ type Snapshot struct {
 	AdminToken       string
 }
 
+type dataPlaneAuthenticator interface {
+	AuthenticateDataPlane(*http.Request, []config.ClientKeyConfig) (auth.Client, *types.GatewayError)
+}
+
 type Server struct {
 	cfgPath            string
 	startedAt          time.Time
 	snapshot           atomic.Value
-	authenticator      *auth.Authenticator
+	authenticator      dataPlaneAuthenticator
 	httpClient         *http.Client
 	ocrHTTPClient      *http.Client
 	builtinOCR         ocr.Provider
@@ -339,9 +346,7 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	}
 	snap := s.current()
 	if _, gerr := s.authenticator.AuthenticateDataPlane(r, snap.Config.ClientKeys); gerr != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(gerr.StatusCode)
-		json.NewEncoder(w).Encode(map[string]any{"error": map[string]any{"message": gerr.Message, "type": gerr.Type, "code": gerr.Code}})
+		_ = (clientopenai.ChatAdapter{}).EncodeError(r.Context(), w, toIRError(*gerr))
 		return
 	}
 	now := time.Now().Unix()
@@ -397,6 +402,13 @@ type trustedInvocation struct {
 
 func (s *Server) handleWithInvocation(w http.ResponseWriter, r *http.Request, trusted *trustedInvocation) {
 	snap := s.current()
+	// Per-write idle deadlines must not extend an explicitly configured total
+	// server write budget. Carry that budget through upstream and downstream I/O.
+	if timeout := snap.Config.Server.WriteTimeout.Duration; timeout > 0 {
+		ctx, cancel := context.WithTimeout(r.Context(), timeout)
+		defer cancel()
+		r = r.WithContext(ctx)
+	}
 	clientAdapter := s.detectClientAdapter(r)
 	if clientAdapter == nil {
 		http.NotFound(w, r)
@@ -605,6 +617,11 @@ func (s *Server) handleWithInvocation(w http.ResponseWriter, r *http.Request, tr
 	defer s.release(target.ProviderID)
 	ctx, cancel := context.WithTimeout(r.Context(), providerCfg.Timeout.Duration)
 	defer cancel()
+	var watchdog *streamengine.Watchdog
+	if creq.Stream {
+		ctx, watchdog = streamengine.NewWatchdog(ctx, providerCfg.FirstTokenTimeout.Duration, providerCfg.StreamIdleTimeout.Duration)
+		defer watchdog.Close()
+	}
 	upReq, err := providerAdapter.BuildRequest(ctx, creq, target)
 	if err != nil {
 		ge := errorToIR(err)
@@ -637,15 +654,22 @@ func (s *Server) handleWithInvocation(w http.ResponseWriter, r *http.Request, tr
 	resp, err := s.httpClient.Do(upReq)
 	if err != nil {
 		ge := ir.GatewayError{StatusCode: 502, Kind: "upstream_error", Code: "upstream_connection_failed", Message: "Could not connect to upstream provider."}
+		if cause := context.Cause(ctx); cause != nil {
+			ge = errorToIR(cause)
+		}
 		finishUpstreamObservation("error", ge.Code)
 		tracker.Finish(ge.StatusCode, types.Usage{}, ge.Code)
 		_ = clientAdapter.EncodeError(ctx, w, ge)
 		return
 	}
+	defer resp.Body.Close()
 	if creq.Stream {
 		events, err := providerAdapter.ParseStream(ctx, resp)
 		if err != nil {
 			ge := errorToIR(err)
+			if cause := context.Cause(ctx); cause != nil {
+				ge = errorToIR(cause)
+			}
 			finishUpstreamObservation("error", ge.Code)
 			tracker.Finish(ge.StatusCode, types.Usage{}, ge.Code)
 			_ = clientAdapter.EncodeError(ctx, w, ge)
@@ -653,23 +677,45 @@ func (s *Server) handleWithInvocation(w http.ResponseWriter, r *http.Request, tr
 		}
 		var streamStats streamengine.Stats
 		var streamStatsMu sync.Mutex
+		statsFinished := make(chan struct{})
 		updateStreamStats := func(stats streamengine.Stats) {
 			streamStatsMu.Lock()
 			streamStats = stats
 			streamStatsMu.Unlock()
 		}
+		var lastProgress int64
 		tracked := streamengine.TrackWithProgress(ctx, events, func(stats streamengine.Stats) {
+			if stats.OutputTokenCount > lastProgress {
+				lastProgress = stats.OutputTokenCount
+				watchdog.Progress()
+			}
 			updateStreamStats(stats)
 			tracker.StreamProgress(stats.FirstTokenAt, stats.OutputTokenCount, toTelemetryUsage(stats.Usage))
-		}, updateStreamStats)
+		}, func(stats streamengine.Stats) {
+			updateStreamStats(stats)
+			close(statsFinished)
+		})
 		streamAccumulator := telemetry.NewStreamAccumulator(target.Model, snap.CapturePolicy.CaptureReasoning)
 		canonicalEvents := streamAccumulator.Wrap(ctx, tracked)
-		if err := clientAdapter.EncodeStream(ctx, w, canonicalEvents); err != nil {
-			ge := errorToIR(err)
+		encodeErr := clientAdapter.EncodeStream(ctx, w, canonicalEvents)
+		var failure ir.GatewayError
+		if encodeErr != nil {
+			failure = streamFailure(ctx, encodeErr)
+		}
+		// Stop producers before reading or updating the final tracker state.
+		// In particular, a disconnected client must release its upstream slot.
+		cancel()
+		<-statsFinished
+		if encodeErr != nil {
+			ge := failure
 			finishUpstreamObservation("error", ge.Code)
 			tracker.Finish(ge.StatusCode, types.Usage{}, ge.Code)
 			if !headersWritten(w) {
-				_ = clientAdapter.EncodeError(ctx, w, ge)
+				_ = clientAdapter.EncodeError(r.Context(), w, ge)
+			} else if ge.Kind == "upstream_error" {
+				if encoder, ok := clientAdapter.(protocol.StreamErrorEncoder); ok {
+					_ = encoder.EncodeStreamError(r.Context(), w, ge)
+				}
 			}
 			return
 		}
@@ -695,6 +741,9 @@ func (s *Server) handleWithInvocation(w http.ResponseWriter, r *http.Request, tr
 	out, err := providerAdapter.ParseUnary(ctx, resp)
 	if err != nil {
 		ge := errorToIR(err)
+		if cause := context.Cause(ctx); cause != nil {
+			ge = errorToIR(cause)
+		}
 		finishUpstreamObservation("error", ge.Code)
 		tracker.Finish(ge.StatusCode, types.Usage{}, ge.Code)
 		_ = clientAdapter.EncodeError(ctx, w, ge)
@@ -707,8 +756,10 @@ func (s *Server) handleWithInvocation(w http.ResponseWriter, r *http.Request, tr
 	tracker.Event.FinishReason = out.StopReason
 	tracker.Event.RequestShape = telemetry.MergeResponseShape(tracker.Event.RequestShape, telemetry.SummarizeResponseShape(out))
 	recordCanonicalResponse(out)
-	if err := clientAdapter.EncodeUnary(ctx, w, out); err != nil {
-		ge := errorToIR(err)
+	writer := httpstream.NewWriter(ctx, w, 0)
+	defer writer.Close()
+	if err := clientAdapter.EncodeUnary(ctx, writer, out); err != nil {
+		ge := streamFailure(ctx, err)
 		finishUpstreamObservation("error", ge.Code)
 		tracker.Finish(ge.StatusCode, types.Usage{}, ge.Code)
 		return
@@ -802,23 +853,33 @@ func (s *Server) detectClientAdapter(r *http.Request) protocol.ClientAdapter {
 	return nil
 }
 func (s *Server) current() *Snapshot { return s.snapshot.Load().(*Snapshot) }
+
+type providerConcurrency struct {
+	mu     sync.Mutex
+	active int
+}
+
 func (s *Server) acquire(id string, max int) bool {
 	if max <= 0 {
 		max = 32
 	}
-	v, _ := s.semaphore.LoadOrStore(id, make(chan struct{}, max))
-	select {
-	case v.(chan struct{}) <- struct{}{}:
-		return true
-	default:
+	v, _ := s.semaphore.LoadOrStore(id, &providerConcurrency{})
+	limiter := v.(*providerConcurrency)
+	limiter.mu.Lock()
+	defer limiter.mu.Unlock()
+	if limiter.active >= max {
 		return false
 	}
+	limiter.active++
+	return true
 }
 func (s *Server) release(id string) {
 	if v, ok := s.semaphore.Load(id); ok {
-		select {
-		case <-v.(chan struct{}):
-		default:
+		limiter := v.(*providerConcurrency)
+		limiter.mu.Lock()
+		defer limiter.mu.Unlock()
+		if limiter.active > 0 {
+			limiter.active--
 		}
 	}
 }
@@ -1171,18 +1232,27 @@ func (r *recorder) Write(b []byte) (int, error) {
 	return r.ResponseWriter.Write(b)
 }
 func (r *recorder) Flush() {
-	if f, ok := r.ResponseWriter.(http.Flusher); ok {
-		f.Flush()
-	}
+	_ = r.FlushError()
 }
+func (r *recorder) FlushError() error {
+	r.written = true
+	return http.NewResponseController(r.ResponseWriter).Flush()
+}
+func (r *recorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }
 func recordResponse(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { next.ServeHTTP(&recorder{ResponseWriter: w}, r) })
 }
 func headersWritten(w http.ResponseWriter) bool {
-	if rr, ok := w.(*recorder); ok {
-		return rr.written
+	for {
+		if rr, ok := w.(*recorder); ok {
+			return rr.written
+		}
+		if wrapper, ok := w.(interface{ Unwrap() http.ResponseWriter }); ok {
+			w = wrapper.Unwrap()
+			continue
+		}
+		return false
 	}
-	return false
 }
 func limitBody(next http.Handler, max int64) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1192,13 +1262,40 @@ func limitBody(next http.Handler, max int64) http.Handler {
 }
 
 func errorToIR(err error) ir.GatewayError {
-	if e, ok := err.(ir.GatewayError); ok {
+	var e ir.GatewayError
+	if errors.As(err, &e) {
 		return e
 	}
-	if e, ok := err.(*ir.GatewayError); ok {
-		return *e
+	var pointer *ir.GatewayError
+	if errors.As(err, &pointer) {
+		return *pointer
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return ir.GatewayError{StatusCode: 504, Kind: "upstream_error", Code: "upstream_timeout", Message: "Upstream request exceeded its total time limit."}
+	}
+	if errors.Is(err, context.Canceled) {
+		return ir.GatewayError{StatusCode: 499, Kind: "client_error", Code: "client_cancelled", Message: "Client cancelled the request."}
 	}
 	return ir.GatewayError{StatusCode: 500, Kind: "server_error", Code: "internal_error", Message: "Internal server error."}
+}
+
+func streamFailure(ctx context.Context, err error) ir.GatewayError {
+	if cause := context.Cause(ctx); cause != nil {
+		return errorToIR(cause)
+	}
+	var gatewayError ir.GatewayError
+	if errors.As(err, &gatewayError) {
+		return gatewayError
+	}
+	var pointer *ir.GatewayError
+	if errors.As(err, &pointer) {
+		return *pointer
+	}
+	var networkError net.Error
+	if errors.As(err, &networkError) && networkError.Timeout() {
+		return ir.GatewayError{StatusCode: 504, Kind: "client_error", Code: "client_write_timeout", Message: "Client did not read the response within the write time limit."}
+	}
+	return ir.GatewayError{StatusCode: 499, Kind: "client_error", Code: "client_write_failed", Message: "Could not write the response to the client."}
 }
 func toIRError(e types.GatewayError) ir.GatewayError {
 	return ir.GatewayError{StatusCode: e.StatusCode, Kind: e.Type, Code: e.Code, Message: e.Message, RetryAfter: e.RetryAfter}

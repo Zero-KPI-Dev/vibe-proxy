@@ -2,6 +2,7 @@ package auth
 
 import (
 	"crypto/subtle"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -10,7 +11,6 @@ import (
 
 	"github.com/a448582655/vibe-proxy/internal/config"
 	"github.com/a448582655/vibe-proxy/internal/types"
-	"golang.org/x/crypto/bcrypt"
 )
 
 type Client struct {
@@ -60,9 +60,10 @@ func (l *Limiter) Allow() bool {
 
 type Authenticator struct {
 	limiters sync.Map
+	verifier *keyVerifier
 }
 
-func NewAuthenticator() *Authenticator { return &Authenticator{} }
+func NewAuthenticator() *Authenticator { return &Authenticator{verifier: newKeyVerifier()} }
 
 func BearerToken(r *http.Request) string {
 	h := r.Header.Get("Authorization")
@@ -77,22 +78,25 @@ func (a *Authenticator) AuthenticateDataPlane(r *http.Request, keys []config.Cli
 	if token == "" {
 		return Client{}, &types.GatewayError{StatusCode: http.StatusUnauthorized, Type: "authentication_error", Code: "missing_api_key", Message: "Missing bearer token."}
 	}
-	for _, k := range keys {
-		if !k.Enabled {
-			continue
+	index, err := a.verifier.verify(r.Context(), token, keys)
+	if err != nil {
+		if errors.Is(err, errVerificationBusy) {
+			return Client{}, &types.GatewayError{StatusCode: 503, Type: "server_error", Code: "authentication_busy", Message: "Authentication is busy. Please retry shortly.", RetryAfter: "1"}
 		}
-		if bcrypt.CompareHashAndPassword([]byte(k.KeyHash), []byte(token)) == nil {
-			// Include the key material and configured limit so deleting,
-			// recreating, or editing a same-named key cannot accidentally
-			// reuse a stale limiter.
-			limiterID := k.Name + "\x00" + k.KeyHash + "\x00" + strconv.Itoa(k.RPM)
-			limAny, _ := a.limiters.LoadOrStore(limiterID, NewLimiter(k.RPM))
-			lim := limAny.(*Limiter)
-			if !lim.Allow() {
-				return Client{}, &types.GatewayError{StatusCode: http.StatusTooManyRequests, Type: "rate_limit_error", Code: "rate_limit_exceeded", Message: "Rate limit exceeded.", RetryAfter: "60"}
-			}
-			return Client{PrincipalType: PrincipalTypeClientKey, Name: k.Name, KeyPrefix: k.KeyPrefix, AllowedModels: k.AllowedModels, RPM: k.RPM}, nil
+		return Client{}, &types.GatewayError{StatusCode: 499, Type: "client_error", Code: "client_cancelled", Message: "Client cancelled the request."}
+	}
+	if index >= 0 {
+		k := keys[index]
+		// Include the key material and configured limit so deleting,
+		// recreating, or editing a same-named key cannot accidentally
+		// reuse a stale limiter.
+		limiterID := k.Name + "\x00" + k.KeyHash + "\x00" + strconv.Itoa(k.RPM)
+		limAny, _ := a.limiters.LoadOrStore(limiterID, NewLimiter(k.RPM))
+		lim := limAny.(*Limiter)
+		if !lim.Allow() {
+			return Client{}, &types.GatewayError{StatusCode: http.StatusTooManyRequests, Type: "rate_limit_error", Code: "rate_limit_exceeded", Message: "Rate limit exceeded.", RetryAfter: "60"}
 		}
+		return Client{PrincipalType: PrincipalTypeClientKey, Name: k.Name, KeyPrefix: k.KeyPrefix, AllowedModels: k.AllowedModels, RPM: k.RPM}, nil
 	}
 	return Client{}, &types.GatewayError{StatusCode: http.StatusUnauthorized, Type: "authentication_error", Code: "invalid_api_key", Message: "Invalid API key."}
 }

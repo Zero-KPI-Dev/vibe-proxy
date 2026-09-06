@@ -10,7 +10,9 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/a448582655/vibe-proxy/internal/httpstream"
 	"github.com/a448582655/vibe-proxy/internal/ir"
+	"github.com/a448582655/vibe-proxy/internal/protocol"
 )
 
 type MessagesAdapter struct{}
@@ -61,6 +63,10 @@ func (a MessagesAdapter) EncodeUnary(ctx context.Context, w http.ResponseWriter,
 }
 
 func (a MessagesAdapter) EncodeStream(ctx context.Context, w http.ResponseWriter, events <-chan ir.StreamEvent) error {
+	writer := httpstream.NewWriter(ctx, w, 0)
+	defer writer.Close()
+	w = writer
+
 	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
 	flusher, _ := w.(http.Flusher)
@@ -80,15 +86,15 @@ func (a MessagesAdapter) EncodeStream(ctx context.Context, w http.ResponseWriter
 		activeBlockType = ""
 	}
 	for {
+		if err := writer.Err(); err != nil {
+			return err
+		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case ev, ok := <-events:
 			if !ok {
-				closeActiveBlock()
-				writeEvent(w, "message_stop", map[string]any{"type": "message_stop"})
-				flush(flusher)
-				return nil
+				return protocol.UnexpectedStreamEnd(ctx)
 			}
 			if ev.Error != nil {
 				return *ev.Error
@@ -156,7 +162,7 @@ func (a MessagesAdapter) EncodeStream(ctx context.Context, w http.ResponseWriter
 				writeEvent(w, "message_delta", map[string]any{"type": "message_delta", "delta": map[string]any{"stop_reason": stop}})
 				writeEvent(w, "message_stop", map[string]any{"type": "message_stop"})
 				flush(flusher)
-				return nil
+				return writer.Err()
 			}
 		}
 	}
@@ -171,7 +177,7 @@ func (a MessagesAdapter) EncodeError(ctx context.Context, w http.ResponseWriter,
 		w.Header().Set("Retry-After", err.RetryAfter)
 	}
 	w.WriteHeader(err.StatusCode)
-	return json.NewEncoder(w).Encode(map[string]any{"type": "error", "error": map[string]any{"type": anthropicErrorType(err), "message": err.Message}})
+	return json.NewEncoder(w).Encode(map[string]any{"type": "error", "error": map[string]any{"type": anthropicErrorType(err), "message": err.Message, "code": err.Code}})
 }
 
 func fromAnthropicMessage(m message) ir.Message {
