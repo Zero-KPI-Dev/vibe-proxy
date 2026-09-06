@@ -118,6 +118,37 @@ func TestVerificationCacheIsBoundedAndFailuresAreNotCached(t *testing.T) {
 	}
 }
 
+func TestAuthenticationBusyIncludesRetryAfter(t *testing.T) {
+	a := NewAuthenticator()
+	keys := []config.ClientKeyConfig{{KeyHash: "test-only-hash", Enabled: true}}
+	entered, release := make(chan struct{}, 4), make(chan struct{})
+	var requests sync.WaitGroup
+	defer func() { close(release); requests.Wait() }()
+	a.verifier.compare = func(_, _ []byte) error {
+		entered <- struct{}{}
+		<-release
+		return bcrypt.ErrMismatchedHashAndPassword
+	}
+	for i := 0; i < 4; i++ {
+		requests.Add(1)
+		go func(i int) {
+			defer requests.Done()
+			req, _ := http.NewRequest(http.MethodGet, "http://localhost/v1/models", nil)
+			req.Header.Set("Authorization", fmt.Sprintf("Bearer cold-key-%d", i))
+			_, _ = a.AuthenticateDataPlane(req, keys)
+		}(i)
+	}
+	for i := 0; i < 4; i++ {
+		<-entered
+	}
+	req, _ := http.NewRequest(http.MethodGet, "http://localhost/v1/models", nil)
+	req.Header.Set("Authorization", "Bearer overloaded-key")
+	_, failure := a.AuthenticateDataPlane(req, keys)
+	if failure == nil || failure.StatusCode != http.StatusServiceUnavailable || failure.Code != "authentication_busy" || failure.RetryAfter != "1" {
+		t.Fatalf("missing authentication overload retry hint: %+v", failure)
+	}
+}
+
 func BenchmarkAuthentication(b *testing.B) {
 	const token = "benchmark-only-client-key"
 	hash, _ := bcrypt.GenerateFromPassword([]byte(token), bcrypt.DefaultCost)

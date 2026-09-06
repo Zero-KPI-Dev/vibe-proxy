@@ -50,11 +50,15 @@ type Snapshot struct {
 	AdminToken       string
 }
 
+type dataPlaneAuthenticator interface {
+	AuthenticateDataPlane(*http.Request, []config.ClientKeyConfig) (auth.Client, *types.GatewayError)
+}
+
 type Server struct {
 	cfgPath            string
 	startedAt          time.Time
 	snapshot           atomic.Value
-	authenticator      *auth.Authenticator
+	authenticator      dataPlaneAuthenticator
 	httpClient         *http.Client
 	ocrHTTPClient      *http.Client
 	builtinOCR         ocr.Provider
@@ -342,9 +346,7 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	}
 	snap := s.current()
 	if _, gerr := s.authenticator.AuthenticateDataPlane(r, snap.Config.ClientKeys); gerr != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(gerr.StatusCode)
-		json.NewEncoder(w).Encode(map[string]any{"error": map[string]any{"message": gerr.Message, "type": gerr.Type, "code": gerr.Code}})
+		_ = (clientopenai.ChatAdapter{}).EncodeError(r.Context(), w, toIRError(*gerr))
 		return
 	}
 	now := time.Now().Unix()
